@@ -1,0 +1,312 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Web.Script.Serialization;
+
+// Only controller metadata is written here. Recorded audio and notes are never opened.
+internal sealed class SessionRecord {
+    public string DirectoryPath, Label, State, Message, NotePath, AudioPath, Fingerprint;
+    public bool CanRetry, NeedsAttention, WorkerAlive;
+    public int WorkerPid;
+    public DateTime WorkerStartUtc;
+
+    public Process TryOpenWorker() {
+        if (WorkerPid <= 0 || WorkerStartUtc == DateTime.MinValue) return null;
+        Process process = null;
+        try {
+            process = Process.GetProcessById(WorkerPid);
+            if (!process.HasExited && process.StartTime.ToUniversalTime() == WorkerStartUtc.ToUniversalTime()) return process;
+        } catch (ArgumentException) { } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+        if (process != null) process.Dispose();
+        return null;
+    }
+}
+
+internal sealed class SessionCatalog {
+    readonly string home, work, artifactRoot;
+    readonly JavaScriptSerializer json = new JavaScriptSerializer();
+
+    public SessionCatalog(string home, string artifactRoot) {
+        this.home = Path.GetFullPath(home);
+        work = Path.Combine(this.home, "work");
+        this.artifactRoot = string.IsNullOrWhiteSpace(artifactRoot) ? "" : Path.GetFullPath(artifactRoot);
+        CheckOrdinary(this.home);
+        CheckOrdinary(work);
+        if (this.artifactRoot.Length != 0) CheckOrdinary(this.artifactRoot);
+    }
+
+    public List<SessionRecord> Snapshot() {
+        var result = new List<SessionRecord>();
+        CheckOrdinary(work);
+        if (!Directory.Exists(work)) return result;
+        var legacy = ReadLegacy();
+        foreach (string folder in Directory.GetDirectories(work)) {
+            // Non-meeting scratch folders do not appear in the tray. Reparse points
+            // are checked before looking inside, so a junction is never traversed.
+            try {
+                string session = CheckSession(folder);
+                if (!File.Exists(Path.Combine(session, "session.json"))) continue;
+                result.Add(ReadRecord(session, legacy));
+            } catch (Exception error) {
+                result.Add(InvalidRecord(folder, error));
+            }
+        }
+        result.Sort(delegate(SessionRecord left, SessionRecord right) {
+            return StringComparer.OrdinalIgnoreCase.Compare(right.DirectoryPath, left.DirectoryPath);
+        });
+        return result;
+    }
+
+    public SessionRecord Get(string session) {
+        string path = CheckSession(session);
+        try { return ReadRecord(path, ReadLegacy()); }
+        catch (Exception error) { return InvalidRecord(path, error); }
+    }
+
+    public void SaveWorker(string session, Process process) {
+        session = CheckSession(session);
+        string controllerPath = Path.Combine(session, "controller.json");
+        var controller = ReadJson(controllerPath, true);
+        controller["schema_version"] = 1;
+        controller["worker_pid"] = process == null ? 0 : process.Id;
+        string started = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o");
+        controller["worker_start_time_utc"] = started;
+        controller["launch_time_utc"] = started;
+        // A new attempt must be able to report its own final outcome.
+        controller.Remove("notified_fingerprint");
+        WriteJson(controllerPath, controller);
+    }
+
+    public void MarkNotified(SessionRecord record) {
+        if (record == null || string.IsNullOrEmpty(record.Fingerprint)) return;
+        string session = CheckSession(record.DirectoryPath);
+        string path = Path.Combine(session, "controller.json");
+        var controller = ReadJson(path, true);
+        controller["schema_version"] = 1;
+        // Preserve a legacy last-session identity when adopting its notification.
+        // Otherwise the newly created controller would hide that identity and
+        // change the final fingerprint again on the next launch.
+        int controllerPid;
+        if (record.WorkerPid > 0 && (!int.TryParse(Text(controller, "worker_pid", "0"), out controllerPid) || controllerPid <= 0)) {
+            controller["worker_pid"] = record.WorkerPid;
+            controller["worker_start_time_utc"] = record.WorkerStartUtc.ToString("o");
+            controller["launch_time_utc"] = record.WorkerStartUtc.ToString("o");
+        }
+        controller["notified_fingerprint"] = record.Fingerprint;
+        WriteJson(path, controller);
+    }
+
+    SessionRecord ReadRecord(string session, Dictionary<string, object> legacy) {
+        var metadata = ReadJson(Path.Combine(session, "session.json"), false);
+        string supplied = Text(metadata, "session_dir", "");
+        if (supplied.Length != 0 && !Same(CheckSession(supplied), session))
+            throw new IOException("会议元数据指向其他目录");
+        string controllerPath = Path.Combine(session, "controller.json");
+        bool hasController = File.Exists(controllerPath);
+        var controller = ReadJson(controllerPath, true);
+        var identity = controller;
+        // Older releases only saved the last meeting's worker identity.
+        // A preflight controller with PID 0 can also use the fallback identity
+        // saved after the worker started but its controller update failed.
+        int controllerPid;
+        bool hasIdentity = int.TryParse(Text(controller, "worker_pid", "0"), out controllerPid) && controllerPid > 0;
+        if ((!hasController || !hasIdentity) && Same(Text(legacy, "session_dir", ""), session)) identity = legacy;
+        var record = new SessionRecord {
+            DirectoryPath = session, Label = Label(session, metadata), NotePath = "", AudioPath = "",
+            Message = "", WorkerStartUtc = DateTime.MinValue
+        };
+        int pid;
+        DateTime started;
+        if (int.TryParse(Text(identity, "worker_pid", "0"), out pid) && pid > 0 &&
+            DateTime.TryParse(Text(identity, "worker_start_time_utc", ""), CultureInfo.InvariantCulture,
+                              DateTimeStyles.RoundtripKind, out started)) {
+            record.WorkerPid = pid;
+            record.WorkerStartUtc = started.ToUniversalTime();
+            using (var process = record.TryOpenWorker()) record.WorkerAlive = process != null;
+        }
+        string statusPath = Path.Combine(session, "status.json");
+        CheckOrdinary(statusPath);
+        Dictionary<string, object> status;
+        try { status = ReadJson(statusPath, true); }
+        catch {
+            if (!record.WorkerAlive) throw;
+            // A live identity proves the job is still running even if a status
+            // update is temporarily unreadable. Never offer a duplicate retry.
+            status = new Dictionary<string, object>();
+        }
+        record.Message = Text(status, "message", "");
+        string metadataState = Text(metadata, "state", "");
+        string statusState = Text(status, "state", Text(status, "status", ""));
+        bool fresh = record.WorkerPid <= 0 || (File.Exists(statusPath) && File.GetLastWriteTimeUtc(statusPath) >= record.WorkerStartUtc);
+        if (record.WorkerAlive) {
+            record.State = fresh && statusState == "queued" ? "queued" : "processing";
+            if (!fresh || record.Message.Length == 0) record.Message = "录音已保存，后台转写中";
+        } else if (metadataState == "recording") {
+            record.State = "interrupted";
+            record.Message = "上次录音中断，发现保留资料；请先检查，不能保证音频完整";
+        } else if (fresh && (statusState == "completed" || statusState == "done" || statusState == "success")) {
+            record.NotePath = ArtifactPath(Text(status, "note_path", ""), session, ".md");
+            string audio = Text(status, "published_audio_path", Text(status, "audio_path", ""));
+            object mergedValue;
+            if (audio.Length == 0 && status.TryGetValue("merged_audio", out mergedValue)) {
+                var merged = mergedValue as Dictionary<string, object>;
+                if (merged != null) audio = Text(merged, "published_path", Text(merged, "path", ""));
+            }
+            record.AudioPath = ArtifactPath(audio, session, ".wav");
+            bool hasArtifacts = record.NotePath.Length != 0 && record.AudioPath.Length != 0 &&
+                File.Exists(record.NotePath) && File.Exists(record.AudioPath) &&
+                Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
+            record.State = hasArtifacts ? "completed" : "missing";
+            if (!hasArtifacts) record.Message = "会议录音或转录成品需要检查；保留资料不会自动重新转写";
+            else if (record.Message.Length == 0) record.Message = "录音和转录笔记已保存";
+            if (hasArtifacts && Text(status, "cleanup_error", "").Length != 0)
+                record.Message += "；临时资料清理未完成，已保留";
+        } else if (fresh && (statusState == "failed" || statusState == "error")) {
+            record.State = "failed";
+            record.CanRetry = true;
+            if (record.Message.Length == 0) record.Message = "转写失败，保留资料可重试";
+        } else if (record.WorkerPid > 0) {
+            record.State = "failed";
+            record.CanRetry = true;
+            record.Message = "转写进程已退出，未发现本次完成结果；保留资料可重试";
+        } else if (metadataState == "recorded" || metadataState == "recorded_with_error") {
+            record.State = "retry";
+            record.CanRetry = true;
+            record.Message = "录音已保存，转写未启动或已中断；可重试对应会议";
+        } else {
+            throw new IOException("会议状态无法识别，请检查保留资料");
+        }
+        if (record.CanRetry) {
+            record.NotePath = ArtifactPath(Text(status, "note_path", ""), session, ".md");
+            record.CanRetry = HasOriginalAudio(session);
+            if (!record.CanRetry) record.Message = "未发现可重试的原始录音，请检查保留资料；不会自动重新转写";
+        }
+        record.Fingerprint = Fingerprint(record, status);
+        record.NeedsAttention = !record.WorkerAlive && Text(controller, "notified_fingerprint", "") != record.Fingerprint;
+        return record;
+    }
+
+    public static string DisplayTitle(Dictionary<string, object> status) {
+        string state = Text(status, "state", Text(status, "status", ""));
+        if (state == "queued") return "排队中";
+        if (state == "completed" || state == "done" || state == "success") return "转写完成";
+        if (state == "error" || state == "failed") return "转写失败";
+        string stage = Text(status, "stage", "");
+        if (stage == "merge") return "合并录音";
+        if (stage == "prepare" || stage == "speakers" || stage == "diarization") return "分析说话人";
+        if (stage == "asr") {
+            int done, total;
+            if (int.TryParse(Text(status, "completed", ""), out done) && done >= 0 &&
+                int.TryParse(Text(status, "total", ""), out total) && total > 0 && done <= total)
+                return "转写 " + done.ToString(CultureInfo.InvariantCulture) + "/" + total.ToString(CultureInfo.InvariantCulture) + " 段";
+            return "转写中";
+        }
+        return "录音已保存 · 处理中";
+    }
+
+    string ArtifactPath(string path, string session, string extension) {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+        if (!Path.IsPathRooted(path)) throw new IOException("会议成品路径必须为完整路径");
+        path = Path.GetFullPath(path);
+        if (!string.Equals(Path.GetExtension(path), extension, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("会议成品文件类型错误");
+        // A configured vault may include work, but another meeting's private files
+        // must still never be treated as this meeting's output.
+        if (Within(path, work) && !Within(path, session)) throw new IOException("会议成品指向其他会议资料");
+        if (!Within(path, session) && (artifactRoot.Length == 0 || !Within(path, artifactRoot)))
+            throw new IOException("会议成品不在保存目录内");
+        CheckOrdinary(path);
+        return path;
+    }
+
+    string CheckSession(string path) {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path)) throw new IOException("会议路径必须为完整路径");
+        path = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!Same(Path.GetDirectoryName(path), work)) throw new IOException("会议路径不在 work 直属目录内");
+        CheckOrdinary(path);
+        if (!Directory.Exists(path)) throw new IOException("会议资料目录不存在");
+        return path;
+    }
+
+    static bool HasOriginalAudio(string session) {
+        bool found = false;
+        foreach (string name in new[] { "mic.wav", "system.wav" }) {
+            string path = Path.Combine(session, name);
+            CheckOrdinary(path);
+            if (File.Exists(path)) found = true;
+        }
+        return found;
+    }
+
+    Dictionary<string, object> ReadLegacy() {
+        try {
+            var legacy = ReadJson(Path.Combine(home, "last-session.json"), true);
+            string path = Text(legacy, "session_dir", "");
+            if (path.Length != 0) CheckSession(path);
+            return legacy;
+        } catch { return new Dictionary<string, object>(); }
+    }
+
+    Dictionary<string, object> ReadJson(string path, bool optional) {
+        CheckOrdinary(path);
+        if (optional && !File.Exists(path)) return new Dictionary<string, object>();
+        var data = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+        if (data == null) throw new IOException("会议状态 JSON 顶层必须为对象");
+        return data;
+    }
+
+    void WriteJson(string path, Dictionary<string, object> value) {
+        CheckOrdinary(path);
+        string temporary = path + ".tmp";
+        CheckOrdinary(temporary);
+        File.WriteAllText(temporary, json.Serialize(value), new UTF8Encoding(false));
+        if (File.Exists(path)) File.Replace(temporary, path, null);
+        else File.Move(temporary, path);
+    }
+
+    static void CheckOrdinary(string path) {
+        string cursor = Path.GetFullPath(path);
+        while (!string.IsNullOrEmpty(cursor)) {
+            try {
+                if ((File.GetAttributes(cursor) & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("会议路径包含链接或重解析点，已拒绝访问");
+            } catch (FileNotFoundException) { } catch (DirectoryNotFoundException) { }
+            string parent = Path.GetDirectoryName(cursor);
+            if (Same(parent, cursor)) break;
+            cursor = parent;
+        }
+    }
+
+    static bool Within(string path, string root) {
+        string prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+    static bool Same(string left, string right) {
+        return string.Equals((left ?? "").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            (right ?? "").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+    }
+    static string Text(Dictionary<string, object> data, string key, string fallback) {
+        object value;
+        return data != null && data.TryGetValue(key, out value) && value != null ? Convert.ToString(value, CultureInfo.InvariantCulture) : fallback;
+    }
+    static string Label(string session, Dictionary<string, object> metadata) {
+        DateTimeOffset time;
+        if (DateTimeOffset.TryParse(Text(metadata, "start_time", ""), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out time))
+            return time.ToLocalTime().ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        return Path.GetFileName(session);
+    }
+    static string Fingerprint(SessionRecord record, Dictionary<string, object> status) {
+        string text = record.State + "\n" + Text(status, "updated_at", "") + "\n" + record.NotePath + "\n" + record.AudioPath +
+            "\n" + record.WorkerPid.ToString(CultureInfo.InvariantCulture) + "\n" + record.WorkerStartUtc.ToString("o") + "\n" + record.Message;
+        using (var hash = SHA256.Create()) return Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(text)));
+    }
+    static SessionRecord InvalidRecord(string session, Exception error) {
+        return new SessionRecord { DirectoryPath = session, Label = Path.GetFileName(session), State = "invalid",
+            Message = "这场会议的状态或路径需要检查；其他会议不受影响", NotePath = "", AudioPath = "",
+            CanRetry = false, NeedsAttention = true, Fingerprint = "" };
+    }
+}

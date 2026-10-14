@@ -17,6 +17,11 @@
 !/test_api_asr.py
 !/test_tingji_config.py
 !/ObsidianMeeting.cs
+!/SessionCatalog.cs
+!/TestSessionCatalog.cs
+!/TestRecorderPanel.cs
+!/TestMeetingExperience.cs
+!/Test.ps1
 !/meeting_worker.py
 !/asr_engine.py
 !/prepare_audio.py
@@ -54,6 +59,7 @@
 **/last-session.json
 **/session.json
 **/status.json
+**/controller.json
 **/.venv/
 **/models/
 **/runtime-wheels/

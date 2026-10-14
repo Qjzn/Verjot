@@ -20,6 +20,36 @@ class ConfigurationTests(unittest.TestCase):
         example = json.loads(Path(__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
         self.assertFalse(validate_config(example, check_directory=False)["open_in_obsidian"])
 
+    def test_legacy_config_enables_lightweight_feedback_defaults(self):
+        config = self.validate()
+        for field in ("show_processing_window", "notify_device_changes", "auto_open_completed_note"):
+            with self.subTest(field=field):
+                self.assertIs(config[field], True)
+
+    def test_feedback_can_be_disabled_without_changing_storage_or_recording(self):
+        changes = {field: False for field in
+                   ("show_processing_window", "notify_device_changes", "auto_open_completed_note")}
+        config = self.validate(**changes)
+        self.assertTrue(config["open_in_obsidian"])
+        self.assertEqual(config["hotkey"], "Ctrl+Alt+L")
+        self.assertEqual(config["meeting_folder"], "会议记录")
+        for field in changes:
+            with self.subTest(field=field):
+                self.assertIs(config[field], False)
+
+    def test_feedback_fields_require_json_booleans(self):
+        for field in ("show_processing_window", "notify_device_changes", "auto_open_completed_note"):
+            for value in ("true", "false", 0, 1, None, []):
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    self.validate(**{field: value})
+
+    def test_new_example_enables_all_three_feedback_options(self):
+        example = json.loads(Path(__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
+        for field in ("show_processing_window", "notify_device_changes", "auto_open_completed_note"):
+            with self.subTest(field=field):
+                self.assertIs(example[field], True)
+        validate_config(example, check_directory=False)
+
     def test_unknown_keys_and_wrong_types_fail_early(self):
         for changes in ({"api_key": "do-not-save-secrets"}, {"open_in_obsidian": "false"},
                         {"asr_context": None}, {"api_timeout_seconds": True}):

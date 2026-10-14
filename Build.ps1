@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 # Build the desktop controller only. Python packages and models are installed separately.
 $taskRoot = $PSScriptRoot
 $taskSource = Join-Path $taskRoot 'ObsidianMeeting.cs'
+$taskCatalog = Join-Path $taskRoot 'SessionCatalog.cs'
 $taskLibrary = Join-Path $taskRoot 'lib\NAudio.dll'
 $taskIdleIcon = Join-Path $taskRoot 'assets\tingji.ico'
 $taskRecordingIcon = Join-Path $taskRoot 'assets\tingji-recording.ico'
@@ -17,7 +18,7 @@ if (-not $taskCompiler) { throw '.NET Framework 4.x C# compiler was not found.' 
 if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf)) {
     throw 'NAudio 1.10.0 is missing. Download the official NAudio 1.10.0 NuGet package and extract lib/net35/NAudio.dll to this project''s lib/NAudio.dll; see README.md.'
 }
-foreach ($taskInput in @($taskSource, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
+foreach ($taskInput in @($taskSource, $taskCatalog, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
     if (-not (Test-Path -LiteralPath $taskInput -PathType Leaf)) { throw "Required build input is missing: $taskInput" }
 }
 if (-not [IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $taskRoot $OutputPath }
@@ -33,7 +34,7 @@ $taskArguments = @(
     "/win32icon:$taskIdleIcon",
     "/resource:$taskIdleIcon,Tingji.Idle.ico",
     "/resource:$taskRecordingIcon,Tingji.Recording.ico",
-    $taskSource
+    $taskSource, $taskCatalog
 )
 & $taskCompiler @taskArguments
 if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE." }

@@ -399,6 +399,10 @@ internal sealed class RecordingSession : IDisposable {
     readonly MMDeviceEnumerator devices = new MMDeviceEnumerator();
     MMDevice microphone;
     MMDevice output;
+    bool followsDefaultMicrophone;
+    bool followsDefaultOutput;
+    string observedMicrophoneId;
+    string observedOutputId;
     CaptureTrack mic;
     CaptureTrack system;
     volatile bool stopping;
@@ -450,8 +454,12 @@ internal sealed class RecordingSession : IDisposable {
         try {
             string micId = MeetingFiles.Text(config, "mic_device_id", "");
             string outputId = MeetingFiles.Text(config, "system_device_id", "");
+            followsDefaultMicrophone = string.IsNullOrWhiteSpace(micId);
+            followsDefaultOutput = string.IsNullOrWhiteSpace(outputId);
             microphone = string.IsNullOrWhiteSpace(micId) ? devices.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console) : devices.GetDevice(micId);
             output = string.IsNullOrWhiteSpace(outputId) ? devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia) : devices.GetDevice(outputId);
+            observedMicrophoneId = microphone.ID;
+            observedOutputId = output.ID;
             mic = new CaptureTrack(new WasapiCapture(microphone), microphone.FriendlyName, Path.Combine(DirectoryPath, "mic.wav"), clock, SignalFailure);
             system = new CaptureTrack(new WasapiLoopbackCapture(output), output.FriendlyName, Path.Combine(DirectoryPath, "system.wav"), clock, SignalFailure);
             metadata["device_names"] = new Dictionary<string, object> { { "mic", mic.DeviceName }, { "system", system.DeviceName } };
@@ -469,6 +477,35 @@ internal sealed class RecordingSession : IDisposable {
             Dispose();
             throw;
         }
+    }
+    public string CheckDefaultDeviceChanges() {
+        if (stopping) return null;
+        var changes = new List<string>();
+        if (followsDefaultMicrophone) {
+            string change = CheckDefaultDevice(DataFlow.Capture, Role.Console, ref observedMicrophoneId, "麦克风");
+            if (change != null) changes.Add(change);
+        }
+        if (followsDefaultOutput) {
+            string change = CheckDefaultDevice(DataFlow.Render, Role.Multimedia, ref observedOutputId, "电脑声音设备");
+            if (change != null) changes.Add(change);
+        }
+        if (changes.Count == 0) return null;
+        return string.Join("；", changes.ToArray()) + "。本场仍捕获麦克风：" + MicrophoneName + "；电脑声音：" + SystemDeviceName + "。下一场将重新选择默认设备。";
+    }
+    string CheckDefaultDevice(DataFlow flow, Role role, ref string observedId, string label) {
+        string currentId, currentName;
+        try {
+            using (MMDevice current = devices.GetDefaultAudioEndpoint(flow, role)) {
+                currentId = current.ID;
+                currentName = current.FriendlyName;
+            }
+        } catch (COMException) {
+            currentId = "";
+            currentName = "暂不可用";
+        }
+        if (string.Equals(observedId, currentId, StringComparison.Ordinal)) return null;
+        observedId = currentId;
+        return "默认" + label + "已变化：" + currentName;
     }
     void SignalFailure(Exception error) {
         if (stopping || Interlocked.Exchange(ref failureSignalled, 1) != 0) return;
@@ -550,6 +587,9 @@ internal sealed class RecordingSession : IDisposable {
 internal sealed class RecorderActionButton : Button {
     public bool EndsRecording;
     public bool MicrophoneDisabled;
+    public bool RecordingPaused;
+    public bool InputActive;
+    float inputLevel;
     public bool CollapsesWindow;
     bool hovering;
     public RecorderActionButton() {
@@ -562,6 +602,11 @@ internal sealed class RecorderActionButton : Button {
     protected override void OnMouseEnter(EventArgs e) { hovering = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { hovering = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnEnabledChanged(EventArgs e) { Cursor = Enabled ? Cursors.Hand : Cursors.Default; Invalidate(); base.OnEnabledChanged(e); }
+    public void SetInputLevel(float value) {
+        inputLevel = !Enabled || MicrophoneDisabled || RecordingPaused ? 0 : Math.Max(0, Math.Min(1, value));
+        InputActive = inputLevel > .003f;
+        Invalidate();
+    }
     protected override void OnPaint(PaintEventArgs e) {
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -579,10 +624,10 @@ internal sealed class RecorderActionButton : Button {
         float unit = Math.Min(Width, Height) / 36f;
         g.TranslateTransform((Width - 36 * unit) / 2, (Height - 36 * unit) / 2);
         g.ScaleTransform(unit, unit);
-        Color fill = !Enabled ? Color.FromArgb(239, 241, 244) : EndsRecording
+        Color fill = !Enabled || (RecordingPaused && !EndsRecording) ? Color.FromArgb(239, 241, 244) : EndsRecording
             ? (hovering ? Color.FromArgb(191, 42, 54) : Color.FromArgb(216, 57, 69))
-            : MicrophoneDisabled ? Color.FromArgb(250, 243, 232) : (hovering ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
-        Color ink = !Enabled ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : Color.FromArgb(40, 104, 168);
+            : MicrophoneDisabled ? Color.FromArgb(250, 243, 232) : (hovering || InputActive ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
+        Color ink = !Enabled || (RecordingPaused && !EndsRecording) ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : InputActive ? Color.FromArgb(31, 126, 220) : Color.FromArgb(40, 104, 168);
         using (var brush = new SolidBrush(fill)) {
             if (EndsRecording) using (var block = new System.Drawing.Drawing2D.GraphicsPath()) {
                 block.AddArc(3, 3, 8, 8, 180, 90);
@@ -594,8 +639,13 @@ internal sealed class RecorderActionButton : Button {
             }
             else g.FillEllipse(brush, 1, 1, 34, 34);
         }
-        if (!EndsRecording) using (var border = new Pen(!Enabled ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : Color.FromArgb(188, 215, 243), 1.1f))
+        if (!EndsRecording) using (var border = new Pen(!Enabled || RecordingPaused ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : InputActive ? Color.FromArgb(78, 159, 235) : Color.FromArgb(188, 215, 243), InputActive ? 1.6f : 1.1f))
             g.DrawEllipse(border, 1.6f, 1.6f, 32.8f, 32.8f);
+        if (!EndsRecording && InputActive) {
+            float height = 3 + 7 * (float)Math.Min(1, (Math.Log10(inputLevel) + 2.7) / 2.2);
+            using (var brush = new SolidBrush(Color.FromArgb(139, 196, 248)))
+                g.FillRectangle(brush, 16, 20 - height, 4, height);
+        }
         if (!EndsRecording) using (var pen = new Pen(ink, 1.8f)) {
             pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
             using (var capsule = new System.Drawing.Drawing2D.GraphicsPath()) {
@@ -630,19 +680,20 @@ internal sealed class RecordingLevelIndicator : Control {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
         animation.Tick += delegate { level *= .78; if (level < .01) level = 0; Invalidate(); };
         TabStop = false;
-        AccessibleName = Text = "音频输入：暂无明显声音";
+        AccessibleName = Text = "电脑声音：暂无明显声音";
     }
     public void SetRecording(bool value) {
         recording = value;
         if (!value) level = 0;
+        if (!value) AccessibleName = Text = "电脑声音：已暂停";
         animation.Enabled = value && Visible;
         Invalidate();
     }
     public void SetLevels(float microphone, float system) {
-        double peak = Math.Max(microphone, system);
+        double peak = recording ? system : 0;
         double next = peak <= .002 ? 0 : Math.Min(1, (Math.Log10(peak) + 2.7) / 2.2);
         level = Math.Max(level, next);
-        AccessibleName = Text = peak > .003 ? "音频输入：有声音" : "音频输入：暂无明显声音";
+        AccessibleName = Text = !recording ? "电脑声音：已暂停" : peak > .003 ? "电脑声音：有声音" : "电脑声音：暂无明显声音";
     }
     protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); animation.Enabled = recording && Visible; }
     protected override void OnPaint(PaintEventArgs e) {
@@ -673,12 +724,17 @@ internal sealed class RecorderPanel : Form {
     public readonly ToolTip DevicesTip = new ToolTip();
     readonly Font timeNormal = new Font("Segoe UI Semibold", 11);
     readonly Font timeLong = new Font("Segoe UI Semibold", 8);
+    readonly Font recordingHeadingFont = new Font("Microsoft YaHei UI", 7.5f);
+    readonly Font processingHeadingFont = new Font("Microsoft YaHei UI", 9);
     public bool AllowClose;
     bool showingRecording;
     bool microphonePaused;
     bool recordingPaused;
     string micName = "";
     string systemName = "";
+    string deviceWarning = "";
+    float microphoneLevel;
+    float systemLevel;
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
     public RecorderPanel() {
@@ -704,11 +760,15 @@ internal sealed class RecorderPanel : Form {
         Time.ForeColor = Color.FromArgb(36, 59, 83);
         Time.TextAlign = ContentAlignment.MiddleLeft;
         Heading.SetBounds(82, 53, 50, 13);
-        Heading.Font = new Font("Microsoft YaHei UI", 7.5f);
+        Heading.Font = recordingHeadingFont;
         Heading.ForeColor = Color.FromArgb(72, 103, 135);
         Heading.AutoEllipsis = true;
         Heading.TextAlign = ContentAlignment.MiddleCenter;
         Detail.Visible = false;
+        Detail.Font = new Font("Microsoft YaHei UI", 8);
+        Detail.ForeColor = Color.FromArgb(100, 116, 135);
+        Detail.AutoEllipsis = true;
+        Detail.TextAlign = ContentAlignment.MiddleCenter;
         AudioLevel.SetBounds(66, 26, 18, 18);
         MicrophoneButton.SetBounds(91, 19, 32, 32);
         StopButton.SetBounds(148, 21, 28, 28);
@@ -718,9 +778,9 @@ internal sealed class RecorderPanel : Form {
         CollapseButton.AccessibleName = CollapseButton.Text = "收起录音浮窗";
         DevicesTip.SetToolTip(StopButton, "结束整个记录 · Ctrl+Alt+L");
         DevicesTip.SetToolTip(Time, "本场会议时长；拖动可移动浮窗");
-        DevicesTip.SetToolTip(AudioLevel, "麦克风与电脑声的实际输入音量");
+        DevicesTip.SetToolTip(AudioLevel, "电脑声音的实际输入音量");
         DevicesTip.SetToolTip(CollapseButton, "收起浮窗，继续录音；从托盘可恢复");
-        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, MicrophoneButton, StopButton, CollapseButton });
+        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, MicrophoneButton, StopButton, CollapseButton });
         CollapseButton.Click += delegate { Hide(); };
         MouseDown += Drag;
         Time.MouseDown += Drag;
@@ -740,6 +800,11 @@ internal sealed class RecorderPanel : Form {
         recordingPaused = false;
         micName = microphone;
         systemName = system;
+        deviceWarning = "";
+        microphoneLevel = systemLevel = 0;
+        Time.Visible = AudioLevel.Visible = MicrophoneButton.Visible = StopButton.Visible = true;
+        Detail.Visible = false;
+        Heading.Font = recordingHeadingFont;
         SetElapsed(TimeSpan.Zero);
         Detail.Text = systemName;
         Detail.AccessibleName = "电脑声音：" + systemName;
@@ -750,23 +815,48 @@ internal sealed class RecorderPanel : Form {
         SetMicPaused(false);
         Invalidate();
     }
+    public void SetInputLevels(float microphone, float system) {
+        if (!showingRecording) return;
+        microphoneLevel = microphone;
+        systemLevel = system;
+        RefreshInputFeedback();
+    }
+    public void SetDeviceWarning(string warning) {
+        deviceWarning = warning ?? "";
+        if (showingRecording) RefreshInputFeedback();
+    }
+    void RefreshInputFeedback() {
+        float mic = !showingRecording || recordingPaused || microphonePaused ? 0 : microphoneLevel;
+        float system = !showingRecording || recordingPaused ? 0 : systemLevel;
+        MicrophoneButton.RecordingPaused = recordingPaused;
+        MicrophoneButton.SetInputLevel(mic);
+        AudioLevel.SetLevels(0, system);
+        string micState = recordingPaused ? "整场已暂停" : microphonePaused ? "已关闭" : mic > .003f ? "有声音" : "暂无明显声音";
+        string systemState = recordingPaused ? "整场已暂停" : system > .003f ? "有声音" : "暂无明显声音";
+        string devices = "麦克风：" + micName + "\n麦克风输入：" + micState + "\n电脑声音：" + systemName + "\n电脑声音输入：" + systemState;
+        if (!string.IsNullOrEmpty(deviceWarning)) devices += "\n" + deviceWarning;
+        string action = recordingPaused ? "点击切换麦克风；恢复整场后生效" : microphonePaused ? "点击开启麦克风" : "点击关闭麦克风，电脑声音继续录制";
+        DevicesTip.SetToolTip(MicrophoneButton, devices + "\n" + action);
+        DevicesTip.SetToolTip(AudioLevel, devices);
+        DevicesTip.SetToolTip(Heading, devices);
+        MicrophoneButton.AccessibleName = MicrophoneButton.Text = "麦克风输入：" + micState + "；" + (microphonePaused ? "开启麦克风" : "关闭麦克风");
+    }
     public void SetMicPaused(bool paused) {
         microphonePaused = paused;
         MicrophoneButton.MicrophoneDisabled = paused;
-        MicrophoneButton.AccessibleName = MicrophoneButton.Text = paused ? "开启麦克风" : "关闭麦克风";
-        DevicesTip.SetToolTip(MicrophoneButton, "麦克风：" + micName + "\n电脑声音：" + systemName + "\n" + (paused ? "点击开启麦克风" : "点击关闭麦克风，电脑声音继续录制"));
         if (showingRecording) {
             Heading.Text = recordingPaused ? "已暂停" : paused ? "已关闭" : "录音中";
             Heading.AccessibleName = recordingPaused ? "整场录音已暂停" : "麦克风：" + micName + (paused ? "，已关闭" : "，录制中");
             Heading.ForeColor = recordingPaused || paused ? Color.FromArgb(139, 90, 31) : Color.FromArgb(72, 103, 135);
-            DevicesTip.SetToolTip(Heading, recordingPaused ? "麦克风和电脑声音均已暂停" : "麦克风：" + micName + (paused ? "（已关闭，电脑声音仍在录制）" : "（录制中）"));
         }
+        RefreshInputFeedback();
         MicrophoneButton.Invalidate();
         Invalidate();
     }
     public void SetRecordingPaused(bool paused) {
         recordingPaused = paused;
-        AudioLevel.SetRecording(!paused);
+        if (paused) microphoneLevel = systemLevel = 0;
+        AudioLevel.SetRecording(showingRecording && !paused);
         SetMicPaused(microphonePaused);
     }
     public void SetElapsed(TimeSpan elapsed) {
@@ -774,9 +864,17 @@ internal sealed class RecorderPanel : Form {
         Time.Text = (elapsed.TotalHours >= 1 ? ((int)elapsed.TotalHours).ToString("00") + ":" : "") + elapsed.Minutes.ToString("00") + ":" + elapsed.Seconds.ToString("00");
     }
     public void ShowStatus(string title, string detail) {
+        ShowProcessing(title, detail);
+    }
+    public void ShowProcessing(string title, string detail) {
         showingRecording = false;
         AudioLevel.SetRecording(false);
-        Heading.SetBounds((int)(4 * ClientSize.Width / 186f), (int)(53 * ClientSize.Height / 68f), (int)(178 * ClientSize.Width / 186f), (int)(13 * ClientSize.Height / 68f));
+        MicrophoneButton.SetInputLevel(0);
+        Time.Visible = AudioLevel.Visible = MicrophoneButton.Visible = StopButton.Visible = false;
+        Detail.Visible = true;
+        Heading.Font = processingHeadingFont;
+        Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(22 * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(18 * ClientSize.Height / 68f));
+        Detail.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(43 * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(16 * ClientSize.Height / 68f));
         Heading.ForeColor = Color.FromArgb(38, 49, 68);
         Heading.Text = title;
         Detail.Text = detail;
@@ -784,6 +882,7 @@ internal sealed class RecorderPanel : Form {
         Detail.AccessibleName = detail;
         MicrophoneButton.Enabled = StopButton.Enabled = false;
         DevicesTip.SetToolTip(Heading, title + "\n" + detail);
+        DevicesTip.SetToolTip(Detail, title + "\n" + detail);
         Invalidate();
     }
     static System.Drawing.Drawing2D.GraphicsPath Rounded(RectangleF bounds, float radius) {
@@ -823,7 +922,7 @@ internal sealed class RecorderPanel : Form {
     }
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override void Dispose(bool disposing) {
-        if (disposing) { DevicesTip.Dispose(); timeNormal.Dispose(); timeLong.Dispose(); }
+        if (disposing) { DevicesTip.Dispose(); timeNormal.Dispose(); timeLong.Dispose(); recordingHeadingFont.Dispose(); processingHeadingFont.Dispose(); }
         base.Dispose(disposing);
     }
 }
@@ -873,6 +972,7 @@ internal sealed class TranscriptionJob {
     public string LastMessage;
     public bool Reported;
     public DateTime PreviousStatusWriteUtc = DateTime.MinValue;
+    public DateTime WorkerStartedUtc = DateTime.MinValue;
 }
 
 internal sealed class MeetingContext : ApplicationContext {
@@ -883,26 +983,42 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly System.Windows.Forms.Timer timer;
     readonly RecorderPanel panel = new RecorderPanel();
     readonly List<TranscriptionJob> jobs = new List<TranscriptionJob>();
-    readonly ToolStripMenuItem toggle = new ToolStripMenuItem("开始录音 · Ctrl+Alt+L");
+    readonly ToolStripMenuItem toggle = new ToolStripMenuItem("开始录音");
     readonly ToolStripMenuItem pauseRecording = new ToolStripMenuItem("暂停整场录音");
     readonly ToolStripMenuItem pauseMicrophone = new ToolStripMenuItem("关闭麦克风");
+    readonly ToolStripMenuItem summary = new ToolStripMenuItem("听记已就绪") { Enabled = false };
+    readonly ToolStripMenuItem recent = new ToolStripMenuItem("最近会议");
+    readonly SessionCatalog catalog;
+    readonly Func<string, Process> workerLauncher;
+    readonly Action<string, bool> noteOpener;
     RecordingSession recording;
     string lastSession;
+    string focusedSession;
+    SessionRecord focusedRecord;
     bool exiting;
+    int deviceCheckTicks;
     string StartHotkey { get { return (string)config["hotkey"]; } }
     string PauseHotkey { get { return (string)config["pause_hotkey"]; } }
 
-    public MeetingContext() {
-        config = MeetingConfig.Load();
+    public MeetingContext() : this(MeetingConfig.Load(), null, null) { }
+    // The two optional operations also allow isolated native regressions without
+    // capturing audio, loading a model, or opening the user's applications.
+    internal MeetingContext(Dictionary<string, object> settings, Func<string, Process> launcher, Action<string, bool> opener) {
+        config = MeetingConfig.Validate(settings);
+        workerLauncher = launcher;
+        noteOpener = opener;
+        catalog = new SessionCatalog(MeetingFiles.Home, MeetingFiles.VaultRoot(config));
         IntPtr dispatchHandle = dispatch.Handle;
         hotkey = new MeetingHotkey(StartHotkey, PauseHotkey);
         hotkey.Pressed += Toggle;
         hotkey.PausePressed += ToggleRecordingPause;
         hotkey.ExitRequested += RequestExit;
         var menu = new ContextMenuStrip();
+        menu.Items.Add(summary);
+        menu.Items.Add(new ToolStripSeparator());
         toggle.Click += delegate { Toggle(); };
-        menu.Items.Add(toggle);
         toggle.Text = "开始录音 · " + StartHotkey;
+        menu.Items.Add(toggle);
         pauseRecording.Text = "暂停整场录音 · " + PauseHotkey;
         pauseRecording.Enabled = false;
         pauseRecording.Click += delegate { ToggleRecordingPause(); };
@@ -910,17 +1026,22 @@ internal sealed class MeetingContext : ApplicationContext {
         pauseMicrophone.Click += delegate { ToggleMicrophone(); };
         pauseMicrophone.Enabled = false;
         menu.Items.Add(pauseMicrophone);
-        menu.Items.Add("显示录音浮窗", null, delegate { panel.Show(); panel.Activate(); });
-        menu.Items.Add("重试最近一场转写", null, delegate { RetryLastSession(); });
-        menu.Items.Add("打开会议记录", null, delegate {
+        menu.Items.Add("显示浮窗", null, delegate { RefreshFeedback(); panel.Show(); panel.Activate(); });
+        // WinForms does not expose an expansion affordance for an empty child
+        // menu. Populate it before the parent opens, then refresh on expansion.
+        menu.Opening += delegate { RefreshRecentMenu(); };
+        recent.DropDownOpening += delegate { RefreshRecentMenu(); };
+        menu.Items.Add(recent);
+        menu.Items.Add("打开会议记录文件夹", null, delegate {
             string path = Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"));
+            MeetingConfig.CheckOrdinaryPath(path);
             Directory.CreateDirectory(path);
-            Process.Start(new ProcessStartInfo("explorer.exe", Quote(path)) { UseShellExecute = true });
+            OpenFolder(path);
         });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, delegate { RequestExit(); });
         tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "听记 · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
-        tray.DoubleClick += delegate { panel.Show(); panel.Activate(); };
+        tray.DoubleClick += delegate { RefreshFeedback(); panel.Show(); panel.Activate(); };
         panel.StopButton.Click += delegate { Stop(); };
         panel.MicrophoneButton.Click += delegate { ToggleMicrophone(); };
         panel.Time.Text = "00:00";
@@ -928,49 +1049,51 @@ internal sealed class MeetingContext : ApplicationContext {
         panel.ShowStatus("听记已就绪", StartHotkey + " 开始录制");
         timer = new System.Windows.Forms.Timer { Interval = 500 };
         timer.Tick += delegate { Tick(); };
-        RestoreLastSession();
+        RestoreSessions();
         timer.Start();
     }
     void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "听记 · " + title, message, icon); }
     void OnUi(Action action) { if (!dispatch.IsDisposed) try { dispatch.BeginInvoke(action); } catch (InvalidOperationException) { } }
     void Toggle() {
         if (exiting) return;
-        if (recording == null) Start();
-        else Stop();
+        if (recording == null) Start(); else Stop();
     }
     void Start() {
         try {
             hotkey.EnablePause(true);
             recording = new RecordingSession(config, delegate(Exception error) {
-                OnUi(delegate { Notice("音频设备异常", error.Message + " 已录内容会保留。", ToolTipIcon.Warning); Stop(); });
+                OnUi(delegate { panel.SetDeviceWarning("音频设备异常，正在保存已录内容"); Notice("音频设备异常", error.Message + " 已录内容会保留。", ToolTipIcon.Warning); Stop(); });
             });
+            catalog.SaveWorker(recording.DirectoryPath, null);
             SaveLastSession(recording.DirectoryPath, null);
+            focusedSession = recording.DirectoryPath;
+            focusedRecord = null;
             toggle.Text = "结束录音 · " + StartHotkey;
             pauseRecording.Text = "暂停整场录音 · " + PauseHotkey;
             pauseRecording.Enabled = true;
             pauseMicrophone.Text = "关闭麦克风";
             pauseMicrophone.Enabled = true;
+            deviceCheckTicks = 0;
             panel.ShowRecording(recording.MicrophoneName, recording.SystemDeviceName);
             panel.Show();
             tray.Icon = MeetingBrand.RecordingIcon;
-            tray.Text = "听记录音中 · " + StartHotkey + " 结束";
+            RefreshFeedback();
             Notice("会议录音已开始", "正在录制麦克风和电脑声音；" + StartHotkey + " 结束，" + PauseHotkey + " 暂停。", ToolTipIcon.Info);
         } catch (Exception error) {
             hotkey.EnablePause(false);
             MeetingFiles.Log(error);
-            recording = null;
+            // If persistence failed after capture started, close the capture
+            // through the ordinary save path rather than orphaning a recorder.
+            if (recording != null) { Stop(); return; }
             Notice("无法开始录音", error.Message, ToolTipIcon.Error);
             MessageBox.Show(error.Message, MeetingBrand.Name, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
     void ToggleMicrophone() {
         if (recording == null || recording.Stopping) return;
-        try {
-            recording.SetMicrophonePaused(!recording.MicrophonePaused);
-        } catch (Exception error) { MeetingFiles.Log(error); Notice("麦克风状态保存异常", error.Message, ToolTipIcon.Error); }
-        finally {
-            UpdateRecordingState();
-        }
+        try { recording.SetMicrophonePaused(!recording.MicrophonePaused); }
+        catch (Exception error) { MeetingFiles.Log(error); Notice("麦克风状态保存异常", error.Message, ToolTipIcon.Error); }
+        finally { UpdateRecordingState(); }
     }
     void ToggleRecordingPause() {
         if (recording == null || recording.Stopping) return;
@@ -983,8 +1106,7 @@ internal sealed class MeetingContext : ApplicationContext {
         panel.SetRecordingPaused(recording.RecordingPaused);
         pauseMicrophone.Text = recording.MicrophonePaused ? "开启麦克风" : "关闭麦克风";
         pauseRecording.Text = (recording.RecordingPaused ? "继续整场录音 · " : "暂停整场录音 · ") + PauseHotkey;
-        tray.Text = recording.RecordingPaused ? "听记 · 整场已暂停 · " + PauseHotkey + " 继续" :
-            recording.MicrophonePaused ? "听记 · 麦克风已关闭，电脑声音录制中" : "听记录音中 · " + StartHotkey + " 结束";
+        RefreshFeedback();
     }
     void Stop() {
         if (recording == null || recording.Stopping) return;
@@ -992,159 +1114,328 @@ internal sealed class MeetingContext : ApplicationContext {
         hotkey.EnablePause(false);
         pauseRecording.Enabled = false;
         pauseMicrophone.Enabled = false;
-        panel.ShowStatus("正在保存录音…", "");
+        panel.ShowStatus("正在保存录音", "正在关闭两路录音文件");
         ended.StopAsync(delegate(Exception error) {
             OnUi(delegate {
                 recording = null;
                 toggle.Text = "开始录音 · " + StartHotkey;
                 tray.Icon = MeetingBrand.IdleIcon;
-                tray.Text = "听记 · " + StartHotkey;
-                if (error != null) Notice("录音保存异常", error.Message + " 原始文件已保留。", ToolTipIcon.Error);
-                LaunchWorker(ended.DirectoryPath);
-                panel.Hide();
+                focusedSession = ended.DirectoryPath;
+                if (error != null) {
+                    RecordLaunchFailure(ended.DirectoryPath, "录音保存异常，请检查原始资料：" + error.Message);
+                    Notice("录音保存异常", "已保留原始文件，请从最近会议检查这场资料。", ToolTipIcon.Error);
+                } else LaunchWorker(ended.DirectoryPath);
+                RefreshFeedback();
+                if ((bool)config["show_processing_window"] && !exiting) panel.Show();
+                else panel.Hide();
                 if (exiting) ExitThread();
             });
         });
     }
     static string Quote(string text) { return "\"" + text.Replace("\"", "\\\"") + "\""; }
+    static void OpenFolder(string path) {
+        MeetingConfig.CheckOrdinaryPath(path);
+        Process.Start(new ProcessStartInfo("explorer.exe", Quote(path)) { UseShellExecute = true });
+    }
     void SaveLastSession(string session, Process process) {
+        // Retrying an older meeting must not move the latest-meeting pointer.
+        if (!string.IsNullOrEmpty(lastSession) && string.Compare(Path.GetFileName(session), Path.GetFileName(lastSession), StringComparison.OrdinalIgnoreCase) < 0) return;
         lastSession = session;
         try {
             MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home, "last-session.json"), new {
-                session_dir = session,
-                worker_pid = process == null ? 0 : process.Id,
+                session_dir = session, worker_pid = process == null ? 0 : process.Id,
                 worker_start_time_utc = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o")
             });
         } catch (Exception error) { MeetingFiles.Log(error); }
     }
-    void RestoreLastSession() {
+    void RestoreSessions() {
         try {
-            var saved = MeetingFiles.ReadJson(Path.Combine(MeetingFiles.Home, "last-session.json"));
-            lastSession = MeetingFiles.Text(saved, "session_dir", "");
-            if (string.IsNullOrEmpty(lastSession) || !Directory.Exists(lastSession)) return;
-            int pid;
-            DateTime started;
-            if (!int.TryParse(MeetingFiles.Text(saved, "worker_pid", "0"), out pid) || pid <= 0 ||
-                !DateTime.TryParse(MeetingFiles.Text(saved, "worker_start_time_utc", ""), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out started)) return;
-            var process = Process.GetProcessById(pid);
-            if (!process.HasExited && process.StartTime.ToUniversalTime() == started.ToUniversalTime())
-                jobs.Add(new TranscriptionJob { Session = lastSession, Process = process });
-            else process.Dispose();
-        } catch (ArgumentException) { } catch (Exception error) { MeetingFiles.Log(error); }
-    }
-    void RetryLastSession() {
-        if (exiting) return;
-        if (string.IsNullOrEmpty(lastSession) || !File.Exists(Path.Combine(lastSession, "session.json"))) {
-            Notice("暂无可重试录音", "先按 " + StartHotkey + " 完成一场录音。", ToolTipIcon.Info);
-            return;
-        }
-        if (recording != null && string.Equals(recording.DirectoryPath, lastSession, StringComparison.OrdinalIgnoreCase)) {
-            panel.Show();
-            Notice("会议正在录音", "请先结束录音，再进行转写。", ToolTipIcon.Info);
-            return;
-        }
-        var savedStatus = MeetingFiles.ReadJson(Path.Combine(lastSession, "status.json"));
-        if (string.Equals(MeetingFiles.Text(savedStatus, "artifacts_compacted", "false"), "true", StringComparison.OrdinalIgnoreCase)) {
-            string note = MeetingFiles.Text(savedStatus, "note_path", "");
-            if (File.Exists(note)) {
-                OpenNote(note);
-                Notice("会议笔记已完成", (bool)config["open_in_obsidian"] ? "已打开保存的转录笔记。" : "转录笔记已保存，可从托盘打开会议记录文件夹。", ToolTipIcon.Info);
-            } else Notice("会议笔记未找到", "转录笔记已被移动或删除，请检查会议记录文件夹。", ToolTipIcon.Warning);
-            return;
-        }
-        LaunchWorker(lastSession);
-        panel.Show();
-    }
-    void LaunchWorker(string session) {
-        try {
-            foreach (var existing in jobs) {
-                if (string.Equals(existing.Session, session, StringComparison.OrdinalIgnoreCase) && !existing.Process.HasExited) {
-                    if (recording == null) {
-                        panel.ShowStatus("这场会议正在转写", string.IsNullOrEmpty(existing.LastMessage) ? "后台处理尚未结束" : existing.LastMessage);
-                    }
-                    Notice("转写仍在进行", "已显示当前状态，请等待完成。", ToolTipIcon.Info);
-                    return;
+            var records = catalog.Snapshot();
+            SessionRecord attention = null;
+            int attentionCount = 0;
+            foreach (var record in records) {
+                if (lastSession == null) lastSession = record.DirectoryPath;
+                if (record.WorkerAlive) {
+                    Process process = record.TryOpenWorker();
+                    if (process != null) jobs.Add(new TranscriptionJob { Session = record.DirectoryPath, Process = process, LastMessage = record.Message, WorkerStartedUtc = record.WorkerStartUtc });
+                }
+                if (record.NeedsAttention) {
+                    attentionCount++;
+                    if (attention == null) attention = record;
+                    MarkNotifiedSafely(record);
                 }
             }
-            string python = Path.Combine(MeetingFiles.Home, ".venv", "Scripts", "python.exe");
-            string worker = Path.Combine(MeetingFiles.Home, "meeting_worker.py");
-            if (!File.Exists(python) || !File.Exists(worker)) throw new FileNotFoundException("转写程序未安装完整；录音已保留：" + session);
-            DateTime previousStatus = File.GetLastWriteTimeUtc(Path.Combine(session, "status.json"));
-            var process = Process.Start(new ProcessStartInfo {
-                FileName = python, Arguments = Quote(worker) + " --session " + Quote(session),
-                WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true
-            });
-            jobs.Add(new TranscriptionJob { Session = session, Process = process, PreviousStatusWriteUtc = previousStatus });
-            SaveLastSession(session, process);
-            if (recording == null) {
-                panel.ShowStatus("录音已保存 · 转写中", StartHotkey + " 可开始下一场");
+            focusedRecord = attention ?? (records.Count == 0 ? null : records[0]);
+            focusedSession = focusedRecord == null ? null : focusedRecord.DirectoryPath;
+            RefreshFeedback();
+            if (attention != null) {
+                Notice("上次会议 · " + attention.Label, attention.Message + "；托盘 → 最近会议可查看" + (attentionCount > 1 ? "，另有 " + (attentionCount - 1) + " 场待查看。" : "。"),
+                    attention.State == "completed" ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                if ((bool)config["show_processing_window"]) panel.Show();
+            } else if (jobs.Count > 0 && (bool)config["show_processing_window"]) panel.Show();
+        } catch (Exception error) { MeetingFiles.Log(error); Notice("恢复状态需要检查", "请查看程序 work 中的会议资料；原始内容未修改。", ToolTipIcon.Warning); }
+    }
+    bool ActiveJob(string session) {
+        foreach (var job in jobs) if (string.Equals(job.Session, session, StringComparison.OrdinalIgnoreCase) && !job.Reported && !job.Process.HasExited) return true;
+        return false;
+    }
+    void MarkNotifiedSafely(SessionRecord record) {
+        try { if (record != null) catalog.MarkNotified(record); }
+        catch (Exception error) { MeetingFiles.Log(error); }
+    }
+    void RetrySession(string session) {
+        if (exiting) return;
+        try {
+            if (recording != null && string.Equals(recording.DirectoryPath, session, StringComparison.OrdinalIgnoreCase)) {
+                Notice("会议正在录音", "请先结束这场录音。", ToolTipIcon.Info); return;
             }
-            Notice("录音已保存", ((string)config["transcription_mode"] == "api" ? "后台转写中，讲话片段将提交配置的 API。" : "后台本地转写中。") +
-                ((bool)config["open_in_obsidian"] ? "完成后打开 Obsidian 笔记。" : "完成后保存 Markdown 笔记。"), ToolTipIcon.Info);
+            var record = catalog.Get(session);
+            if (record == null) throw new IOException("会议资料不存在。");
+            if (ActiveJob(session)) { FocusSession(session, true); return; }
+            if (!record.CanRetry) {
+                FocusSession(session, true);
+                Notice("请检查这场资料 · " + record.Label, record.Message, ToolTipIcon.Info); return;
+            }
+            LaunchWorker(session);
+            if (recording == null) FocusSession(session, true);
+        } catch (Exception error) { MeetingFiles.Log(error); Notice("无法重试这场会议", error.Message, ToolTipIcon.Error); }
+    }
+    void FocusSession(string session, bool show) {
+        focusedSession = session;
+        try { focusedRecord = catalog.Get(session); }
+        catch (Exception error) { MeetingFiles.Log(error); focusedRecord = null; }
+        RefreshFeedback();
+        if (show) { panel.Show(); panel.Activate(); }
+    }
+    void RecordLaunchFailure(string session, string detail) {
+        try {
+            catalog.SaveWorker(session, null);
+            var status = MeetingFiles.ReadJson(Path.Combine(session, "status.json"));
+            status["state"] = "error"; status["stage"] = "launch";
+            status["message"] = "转写未启动，原始资料已保留"; status["error"] = detail;
+            status["updated_at"] = DateTimeOffset.Now.ToString("o");
+            MeetingFiles.WriteJson(Path.Combine(session, "status.json"), status);
+            if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
+        } catch (Exception error) { MeetingFiles.Log(error); }
+    }
+    void LaunchWorker(string session) {
+        Process startedProcess = null;
+        try {
+            var record = catalog.Get(session);
+            if (record == null) throw new IOException("会议资料不在当前程序的 work 中。");
+            if (ActiveJob(session)) return;
+            if (!record.CanRetry) throw new IOException(record.Message);
+            DateTime previousStatus = File.GetLastWriteTimeUtc(Path.Combine(session, "status.json"));
+            // Check metadata persistence before any potentially uploading worker
+            // starts. A running worker must never be overwritten as launch-failed.
+            catalog.SaveWorker(session, null);
+            DateTime attemptStarted = DateTime.UtcNow;
+            Process process;
+            if (workerLauncher != null) process = workerLauncher(session);
+            else {
+                string python = Path.Combine(MeetingFiles.Home, ".venv", "Scripts", "python.exe");
+                string worker = Path.Combine(MeetingFiles.Home, "meeting_worker.py");
+                if (!File.Exists(python) || !File.Exists(worker)) throw new FileNotFoundException("转写程序未安装完整；录音已保留。");
+                process = Process.Start(new ProcessStartInfo {
+                    FileName = python, Arguments = Quote(worker) + " --session " + Quote(session),
+                    WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true
+                });
+            }
+            if (process == null) throw new IOException("未能启动转写进程。");
+            startedProcess = process;
+            jobs.Add(new TranscriptionJob { Session = session, Process = process, PreviousStatusWriteUtc = previousStatus, WorkerStartedUtc = attemptStarted });
+            try { catalog.SaveWorker(session, process); }
+            catch (Exception persistenceError) {
+                MeetingFiles.Log(persistenceError);
+                // Legacy identity is a fallback if the per-meeting file suddenly
+                // becomes unwritable. Do not overwrite the worker's status.
+                try {
+                    MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home, "last-session.json"), new {
+                        session_dir = session, worker_pid = process.Id,
+                        worker_start_time_utc = process.StartTime.ToUniversalTime().ToString("o")
+                    });
+                } catch (Exception fallbackError) { MeetingFiles.Log(fallbackError); }
+                Notice("进度信息保存异常", "转写仍在进行，请等待这场完成后退出听记；原始资料已保留。", ToolTipIcon.Warning);
+            }
+            SaveLastSession(session, process);
+            if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
+            RefreshFeedback();
+            Notice("录音已保存 · " + record.Label, ((string)config["transcription_mode"] == "api" ? "讲话片段将提交配置的 API。" : "后台本地转写中。") + "托盘 → 最近会议可查看这场进度。", ToolTipIcon.Info);
         } catch (Exception error) {
             MeetingFiles.Log(error);
-            if (recording == null) {
-                panel.ShowStatus("录音已保存，转写未启动", "原始音频已保留，可从托盘重试");
+            if (startedProcess != null) {
+                Notice("转写状态需要检查", "后台处理已启动，原始资料已保留；请从最近会议查看对应场次。", ToolTipIcon.Warning);
+                return;
             }
-            Notice("转写启动失败", error.Message, ToolTipIcon.Error);
+            RecordLaunchFailure(session, error.Message);
+            RefreshFeedback();
+            Notice("转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Error);
         }
     }
     void ReportJobFailure(TranscriptionJob job, string detail) {
         job.Reported = true;
-        string message = (string.IsNullOrEmpty(detail) ? "转写进程退出，未生成完成状态。" : detail) + " 原始音频已保留，可从托盘重试最近一场转写。";
-        if (recording == null) {
-            panel.ShowStatus("转写失败，原始录音已保留", message);
-        }
-        Notice("转写失败", message, ToolTipIcon.Error);
+        SessionRecord record = null;
+        try { record = catalog.Get(job.Session); } catch (Exception error) { MeetingFiles.Log(error); }
+        MarkNotifiedSafely(record);
+        if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
+        string label = record == null ? Path.GetFileName(job.Session) : record.Label;
+        Notice("转写失败 · " + label, (string.IsNullOrEmpty(detail) ? "转写进程退出，未生成完成状态。" : detail) + " 原始资料已保留；托盘 → 最近会议 → " + label + " 检查或重试。", ToolTipIcon.Error);
     }
     void Tick() {
         if (recording != null && !recording.Stopping) {
-            TimeSpan elapsed = recording.Elapsed;
-            panel.SetElapsed(elapsed);
-            panel.AudioLevel.SetLevels(recording.MicrophonePeak, recording.SystemPeak);
+            panel.SetElapsed(recording.Elapsed);
+            panel.SetInputLevels(recording.MicrophonePeak, recording.SystemPeak);
+            if (++deviceCheckTicks >= 4) {
+                deviceCheckTicks = 0;
+                if ((bool)config["notify_device_changes"]) {
+                    string warning = recording.CheckDefaultDeviceChanges();
+                    if (!string.IsNullOrEmpty(warning)) {
+                        panel.SetDeviceWarning(warning);
+                        Notice("默认音频设备已变化", warning, ToolTipIcon.Warning);
+                    }
+                }
+            }
         }
-        foreach (TranscriptionJob job in jobs) {
+        foreach (TranscriptionJob job in jobs.ToArray()) {
             if (job.Reported) continue;
             try {
                 string statusPath = Path.Combine(job.Session, "status.json");
                 var status = MeetingFiles.ReadJson(statusPath);
                 bool workerExited = job.Process.HasExited;
-                // A worker may publish completed and exit between the first
-                // read and this check. Re-read its final state before failing it.
                 if (workerExited) status = MeetingFiles.ReadJson(statusPath);
-                bool freshStatus = job.PreviousStatusWriteUtc == DateTime.MinValue || File.GetLastWriteTimeUtc(statusPath) > job.PreviousStatusWriteUtc;
-                string state = MeetingFiles.Text(status, "state", MeetingFiles.Text(status, "status", ""));
-                string message = MeetingFiles.Text(status, "message", state);
-                if (freshStatus && message != job.LastMessage && !string.IsNullOrEmpty(message)) {
-                    job.LastMessage = message;
-                    if (recording == null) panel.Detail.Text = message;
-                }
-                string note = MeetingFiles.Text(status, "note_path", "");
-                string artifactError = MeetingFiles.Text(status, "artifact_error", "");
-                if (freshStatus && !string.IsNullOrEmpty(artifactError)) {
-                    ReportJobFailure(job, artifactError);
-                } else if (freshStatus && workerExited && job.Process.ExitCode == 0 && (state == "completed" || state == "done" || state == "success")) {
+                DateTime statusWrite = File.GetLastWriteTimeUtc(statusPath);
+                bool fresh = File.Exists(statusPath) && statusWrite >= job.WorkerStartedUtc &&
+                    (job.PreviousStatusWriteUtc == DateTime.MinValue || statusWrite > job.PreviousStatusWriteUtc);
+                if (fresh) job.LastMessage = SessionCatalog.DisplayTitle(status);
+                if (!workerExited) continue;
+                var record = catalog.Get(job.Session);
+                if (fresh && job.Process.ExitCode == 0 && record != null && record.State == "completed") {
                     job.Reported = true;
-                    if (recording == null) panel.Heading.Text = "会议笔记已生成";
-                    Notice("会议笔记已生成", "中文转写和说话人标注已保存。", ToolTipIcon.Info);
-                    if (!string.IsNullOrEmpty(note)) OpenNote(note);
-                } else if ((freshStatus && (state == "error" || state == "failed")) || workerExited) {
-                    string detail = MeetingFiles.Text(status, "error", "");
-                    if (string.IsNullOrEmpty(detail)) detail = MeetingFiles.Text(status, "artifact_error", "");
-                    if (string.IsNullOrEmpty(detail)) detail = workerExited ? "转写进程退出，未生成完成状态。" : message;
+                    MarkNotifiedSafely(record);
+                    if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
+                    Notice("会议笔记已生成 · " + record.Label, "录音与转录已保存；托盘 → 最近会议可打开这场笔记。", ToolTipIcon.Info);
+                    // Completing A must never take focus away from meeting B.
+                    if (recording == null && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
+                        try { OpenNote(record.NotePath, true); }
+                        catch (Exception openError) { MeetingFiles.Log(openError); Notice("笔记已保存，未能自动打开", "请从最近会议手动打开对应笔记。", ToolTipIcon.Warning); }
+                    }
+                } else {
+                    string detail = MeetingFiles.Text(status, "error", MeetingFiles.Text(status, "artifact_error", ""));
+                    if (string.IsNullOrEmpty(detail)) detail = record == null ? "无法读取这场会议的有效状态。" : record.Message;
                     ReportJobFailure(job, detail);
                 }
             } catch (Exception error) {
                 MeetingFiles.Log(error);
-                if (job.Process.HasExited) ReportJobFailure(job, "转写进程已退出，无法读取有效状态：" + error.Message);
+                if (job.Process.HasExited) ReportJobFailure(job, "无法读取有效状态：" + error.Message);
+            }
+            if (job.Reported) { jobs.Remove(job); job.Process.Dispose(); }
+        }
+        RefreshFeedback();
+    }
+    void SetTrayText(string value) { tray.Text = value.Length > 63 ? value.Substring(0, 62) + "…" : value; }
+    void RefreshFeedback() {
+        if (recording != null) {
+            string state = recording.Stopping ? "正在保存录音" : recording.RecordingPaused ? "整场已暂停" : recording.MicrophonePaused ? "麦克风已关闭 · 电脑声录制中" : "录音中";
+            string text = "听记 · " + state + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
+            summary.Text = text; SetTrayText(text);
+            return;
+        }
+        if (focusedSession != null) {
+            foreach (var job in jobs) {
+                if (string.Equals(job.Session, focusedSession, StringComparison.OrdinalIgnoreCase) && !job.Reported) {
+                    string title = string.IsNullOrEmpty(job.LastMessage) ? "录音已保存 · 转写中" : job.LastMessage;
+                    string label = focusedRecord == null ? Path.GetFileName(focusedSession) : focusedRecord.Label;
+                    panel.ShowProcessing(title, label + " · 托盘查看对应会议");
+                    summary.Text = label + " · " + title + (jobs.Count > 1 ? " · 后台 " + jobs.Count + " 场" : "");
+                    SetTrayText("听记 · " + summary.Text); return;
+                }
+            }
+            if (focusedRecord == null || !string.Equals(focusedRecord.DirectoryPath, focusedSession, StringComparison.OrdinalIgnoreCase)) {
+                try { focusedRecord = catalog.Get(focusedSession); }
+                catch (Exception error) {
+                    MeetingFiles.Log(error);
+                    panel.ShowProcessing("会议资料需要检查", "资料未修改，请检查 work 中对应场次");
+                    summary.Text = "会议资料需要检查" + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
+                    SetTrayText("听记 · " + summary.Text); return;
+                }
+            }
+            if (focusedRecord != null) {
+                string title = StateLabel(focusedRecord);
+                panel.ShowProcessing(title, focusedRecord.Label + " · " + focusedRecord.Message);
+                summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
+                SetTrayText("听记 · " + summary.Text); return;
             }
         }
+        panel.ShowStatus("听记已就绪", StartHotkey + " 开始录制");
+        summary.Text = "听记已就绪"; SetTrayText("听记 · " + StartHotkey);
     }
-    void OpenNote(string path) {
-        if (!(bool)config["open_in_obsidian"]) return;
+    static string StateLabel(string state) {
+        switch (state) {
+            case "completed": return "录音与转录已完成";
+            case "interrupted": return "录音中断 · 检查资料";
+            case "failed": return "转写失败 · 可重试";
+            case "retry": return "录音已保留 · 可重试";
+            case "missing": return "成品缺失 · 检查资料";
+            case "processing": return "转写中";
+            case "queued": return "等待上一场转写";
+            default: return "会议资料需要检查";
+        }
+    }
+    static string StateLabel(SessionRecord record) {
+        if (!record.CanRetry && (record.State == "failed" || record.State == "retry")) return "转写未完成 · 检查资料";
+        return StateLabel(record.State);
+    }
+    void RefreshRecentMenu() {
+        try {
+            recent.DropDownItems.Clear();
+            var records = catalog.Snapshot();
+            // Keep the tray compact while retaining a route to every local folder.
+            var displayed = new List<SessionRecord>();
+            foreach (var record in records) if (record.State != "completed" && !record.WorkerAlive && displayed.Count < 10) displayed.Add(record);
+            foreach (var record in records) if (displayed.Count < 20 && !displayed.Contains(record)) displayed.Add(record);
+            foreach (var record in displayed) {
+                string session = record.DirectoryPath;
+                bool current = recording != null && string.Equals(recording.DirectoryPath, session, StringComparison.OrdinalIgnoreCase);
+                var item = new ToolStripMenuItem(record.Label + " · " + (current ? "正在录音" : StateLabel(record)));
+                item.DropDownItems.Add("查看状态", null, delegate { FocusSession(session, true); });
+                if (!string.IsNullOrEmpty(record.NotePath) && File.Exists(record.NotePath))
+                    item.DropDownItems.Add("打开转录笔记", null, delegate { OpenNoteForSession(session); });
+                if (!current && record.CanRetry) item.DropDownItems.Add("重试这场转写", null, delegate { RetrySession(session); });
+                item.DropDownItems.Add("查看录音资料", null, delegate { OpenSessionFolder(session); });
+                recent.DropDownItems.Add(item);
+            }
+            if (displayed.Count == 0) recent.DropDownItems.Add(new ToolStripMenuItem("尚无会议") { Enabled = false });
+            if (records.Count > displayed.Count) recent.DropDownItems.Add("其余会话资料", null, delegate { OpenFolder(Path.Combine(MeetingFiles.Home, "work")); });
+        } catch (Exception error) { MeetingFiles.Log(error); recent.DropDownItems.Add(new ToolStripMenuItem("资料读取异常，请检查 work") { Enabled = false }); }
+    }
+    void OpenSessionFolder(string session) {
+        try {
+            var record = catalog.Get(session);
+            if (record == null) throw new IOException("会议资料不存在。");
+            string folder = !string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath) ? Path.GetDirectoryName(record.AudioPath) : record.DirectoryPath;
+            OpenFolder(folder);
+        } catch (Exception error) { Notice("无法打开这场资料", error.Message, ToolTipIcon.Warning); }
+    }
+    void OpenNoteForSession(string session) {
+        try {
+            var record = catalog.Get(session);
+            if (record == null || !File.Exists(record.NotePath)) throw new IOException("转录笔记已被移动或删除，请检查会议记录文件夹。");
+            OpenNote(record.NotePath, false);
+        } catch (Exception error) { Notice("无法打开这场笔记", error.Message, ToolTipIcon.Warning); }
+    }
+    void OpenNote(string path, bool automatic) {
+        if (automatic && (recording != null || !(bool)config["auto_open_completed_note"] || !(bool)config["open_in_obsidian"])) return;
         string root = MeetingFiles.VaultRoot(config).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        string full = Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(Path.Combine(root, path));
-        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new IOException("笔记路径不在配置的 Obsidian 库中。");
+        string full = Path.GetFullPath(path);
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new IOException("笔记路径不在配置的保存目录中。");
+        MeetingConfig.CheckOrdinaryPath(full);
+        if (!File.Exists(full)) throw new IOException("转录笔记已被移动或删除。");
+        if (noteOpener != null) { noteOpener(full, automatic); return; }
+        if (!(bool)config["open_in_obsidian"]) {
+            try { Process.Start(new ProcessStartInfo(full) { UseShellExecute = true }); }
+            catch { Process.Start(new ProcessStartInfo("explorer.exe", "/select," + Quote(full)) { UseShellExecute = true }); }
+            return;
+        }
         string relative = full.Substring(root.Length).Replace('\\', '/');
         string vault = MeetingFiles.Text(config, "vault_id", "");
         if (string.IsNullOrWhiteSpace(vault)) vault = MeetingFiles.Text(config, "vault_name", "");
@@ -1155,8 +1446,7 @@ internal sealed class MeetingContext : ApplicationContext {
     void RequestExit() {
         exiting = true;
         toggle.Enabled = false;
-        if (recording != null) Stop();
-        else ExitThread();
+        if (recording != null) Stop(); else ExitThread();
     }
     protected override void ExitThreadCore() {
         timer.Stop(); timer.Dispose();
