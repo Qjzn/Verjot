@@ -1,0 +1,57 @@
+# Deny new root files by default. Add only reviewed source files below.
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/LICENSE.md
+!/THIRD_PARTY_NOTICES.md
+!/Build.ps1
+!/config.example.json
+!/requirements.txt
+!/ObsidianMeeting.cs
+!/meeting_worker.py
+!/asr_engine.py
+!/prepare_audio.py
+!/merge_audio.py
+!/download_models.py
+!/download_torch.py
+!/Install-Shortcuts.ps1
+!/Compact-Completed-Meetings.py
+!/Prepare-Legacy-Merged-Meetings.py
+!/test_meeting_worker.py
+!/test_prepare_audio.py
+!/test_merge_audio.py
+
+# Reviewed artwork only. Runtime libraries are restored as documented in README.
+!/assets/
+/assets/*
+!/assets/tingji.ico
+!/assets/tingji-recording.ico
+!/assets/tingji.svg
+!/assets/tingji-recording.svg
+!/assets/tingji.png
+!/assets/tingji-recording.png
+!/assets/Create-Icons.ps1
+
+# Personal configuration, captured audio, models, caches, logs, validation
+# screenshots and build products remain local even when placed in subfolders.
+**/config.json
+**/last-session.json
+**/session.json
+**/status.json
+**/.venv/
+**/models/
+**/runtime-wheels/
+**/work/
+**/validation/
+**/__pycache__/
+*.py[cod]
+*.exe
+*.dll
+*.pdb
+*.log
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
