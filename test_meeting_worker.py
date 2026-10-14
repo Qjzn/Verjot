@@ -199,10 +199,121 @@ class MinimalStorageTests(unittest.TestCase):
             stream.write("用户手写：周五确认预算。\n")
         content = note.read_bytes()
         audio_modified = (self.output / "meeting.wav").stat().st_mtime_ns
+        self.config.update(transcription_mode="api", api_base_url="https://provider.example/v1",
+                           api_model="new-api-model")
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
         with patch.object(worker, "run_stage", side_effect=AssertionError("must not load a model")):
             self.assertEqual(worker.process_session(self.session), 0)
         self.assertEqual(note.read_bytes(), content)
         self.assertEqual((self.output / "meeting.wav").stat().st_mtime_ns, audio_modified)
+
+    def test_legacy_local_session_cannot_be_uploaded_after_config_switches_to_api(self):
+        self.config.update(transcription_mode="api", api_base_url="https://provider.example/v1",
+                           api_model="api-model")
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        note = worker.note_location(self.session, self.config, self.metadata)[1]
+        worker.save_note(note, "已有转写内容，不能因配置改变而覆盖")
+        self.output.mkdir(parents=True)
+        sf.write(self.output / "meeting.wav", np.zeros((48, 2)), 48000, subtype="PCM_16")
+        note_before = note.read_bytes()
+        audio_before = (self.output / "meeting.wav").read_bytes()
+        original = (self.session / "mic.wav").read_bytes()
+        commands = []
+
+        def record_stage(session, command, name):
+            commands.append(command)
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(record_stage), 1)
+        self.assertEqual(commands, [], "旧本地场次不得启动准备或 API 转写进程")
+        self.assertEqual(note.read_bytes(), note_before)
+        self.assertEqual((self.output / "meeting.wav").read_bytes(), audio_before)
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        state = worker.read_json(self.session / "status.json")
+        self.assertEqual(state["state"], "error")
+        self.assertIn("恢复", state["message"])
+        self.config["transcription_mode"] = "local"
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        self.assertEqual(self.process(), 0)
+
+    def test_api_session_cannot_use_a_different_model_from_its_recorded_settings(self):
+        self.metadata.update(transcription_mode="api", transcription_model="recorded-model",
+                             transcription_api_base_url="https://provider.example/v1")
+        self.config.update(transcription_mode="api", api_base_url="https://provider.example/v1",
+                           api_model="different-model")
+        (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        commands = []
+
+        def record_stage(session, command, name):
+            commands.append(command)
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(record_stage), 1)
+        self.assertEqual(commands, [])
+        self.assertFalse(self.output.exists())
+        self.assertTrue((self.session / "mic.wav").is_file())
+        self.assertIn("恢复", worker.read_json(self.session / "status.json")["message"])
+
+    def test_api_session_cannot_change_or_omit_its_recorded_service(self):
+        self.metadata.update(transcription_mode="api", transcription_model="api-model")
+        self.config.update(transcription_mode="api", api_base_url="https://current-provider.example/v1/",
+                           api_model="api-model")
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        original = (self.session / "mic.wav").read_bytes()
+        for recorded_service in ("https://recorded-provider.example/v1", None):
+            with self.subTest(recorded_service=recorded_service):
+                if recorded_service is None:
+                    self.metadata.pop("transcription_api_base_url", None)
+                else:
+                    self.metadata["transcription_api_base_url"] = recorded_service
+                (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+                commands = []
+
+                def record_stage(session, command, name):
+                    commands.append(command)
+                    self.stage(session, command, name)
+
+                self.assertEqual(self.process(record_stage), 1)
+                self.assertEqual(commands, [], "服务快照缺失或改变时不得上传")
+                self.assertFalse(self.output.exists())
+                self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+                state = worker.read_json(self.session / "status.json")
+                self.assertEqual(state["state"], "error")
+                self.assertIn("恢复", state["message"])
+                self.assertNotIn("provider.example", json.dumps(state))
+
+    def test_api_session_accepts_its_recorded_service_with_a_trailing_slash_in_configuration(self):
+        self.metadata.update(transcription_mode="api", transcription_model="api-model",
+                             transcription_api_base_url="https://provider.example/v1")
+        self.config.update(transcription_mode="api", api_base_url="https://provider.example/v1/",
+                           api_model="api-model")
+        (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        commands = []
+
+        def record_stage(session, command, name):
+            commands.append(command)
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(record_stage), 0)
+        self.assertEqual(Path(commands[-1][1]).name, "api_asr.py")
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+
+    def test_plain_markdown_success_publishes_relative_audio_link_and_compacts_work(self):
+        self.metadata["note_link_style"] = "markdown"
+        (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        self.assertEqual(self.process(), 0)
+        note = worker.note_location(self.session, self.config, self.metadata)[1]
+        content = note.read_text(encoding="utf-8")
+        self.assertIn(f"[会议录音](%E9%99%84%E4%BB%B6/{self.session.name}/meeting.wav)", content)
+        self.assertNotIn("![[", content)
+        self.assertEqual(sf.info(self.output / "meeting.wav").frames, 4800)
+        self.assertEqual(sorted(path.suffix for path in self.vault.rglob("*") if path.is_file()),
+                         [".md", ".wav"])
+        self.assertEqual(sorted(path.name for path in self.session.iterdir()),
+                         ["session.json", "status.json"])
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
 
     def test_asr_failure_preserves_original_and_cache(self):
         original = (self.session / "mic.wav").read_bytes()
@@ -337,6 +448,21 @@ class MinimalStorageTests(unittest.TestCase):
         self.assertNotIn("artifact_error", state)
         self.assertNotIn("cleanup_error", state)
         self.assertNotIn("需要检查", state["message"])
+
+    def test_completed_cleanup_retry_accepts_changed_transcription_configuration(self):
+        self.interrupt_cleanup_before_sources()
+        note = worker.note_location(self.session, self.config, self.metadata)[1]
+        note_before = note.read_bytes()
+        audio_before = (self.output / "meeting.wav").read_bytes()
+        self.config.update(transcription_mode="api", api_base_url="https://provider.example/v1",
+                           api_model="new-api-model")
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        with patch.object(worker, "run_stage", side_effect=AssertionError("must not load a model")):
+            self.assertEqual(worker.process_session(self.session), 0)
+        self.assertEqual(note.read_bytes(), note_before)
+        self.assertEqual((self.output / "meeting.wav").read_bytes(), audio_before)
+        self.assertFalse((self.session / "mic.wav").exists())
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
 
     def test_cleanup_retry_reports_damaged_md_without_overwriting_or_deleting_sources(self):
         self.interrupt_cleanup_before_sources()

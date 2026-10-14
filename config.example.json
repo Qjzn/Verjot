@@ -1,8 +1,16 @@
 {
   "vault_root": "D:\\Notes\\MyVault",
-  "vault_id": "MyVault",
+  "vault_id": "",
   "meeting_folder": "会议记录",
   "mic_device_id": "",
   "system_device_id": "",
-  "asr_context": ""
+  "asr_context": "",
+  "hotkey": "Ctrl+Alt+L",
+  "pause_hotkey": "Alt+Space",
+  "open_in_obsidian": false,
+  "transcription_mode": "local",
+  "api_base_url": "",
+  "api_model": "",
+  "api_key_env": "TINGJI_API_KEY",
+  "api_timeout_seconds": 120
 }

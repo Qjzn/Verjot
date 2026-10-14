@@ -15,11 +15,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import quote
 
 import soundfile as sf
 
 from asr_engine import atomic_json
 from merge_audio import merge_session
+from tingji_config import load_config
 
 HOME = Path(__file__).resolve().parent
 BEGIN = "<!-- local-meeting-transcript:start -->"
@@ -128,18 +130,34 @@ def note_location(session: Path, config: dict, metadata: dict):
     return vault, safe_path(vault / folder / name)
 
 
+def audio_link(audio: Path, vault: Path, metadata: dict):
+    if metadata.get("note_link_style", "wiki") == "wiki":
+        return f"![[{audio.relative_to(vault).as_posix()}]]"
+    if metadata.get("note_link_style") != "markdown" or metadata.get("storage_mode") != "minimal":
+        raise ValueError("未知会议录音链接格式")
+    # Minimal-storage notes live two folders above the recording's own folder.
+    relative = os.path.relpath(audio, audio.parent.parent.parent).replace("\\", "/")
+    return f"[会议录音]({quote(relative, safe='/')})"
+
+
 def render_note(session: Path, vault: Path, metadata: dict, result=None, error=None,
                 mixed_audio=None, merge_error=None):
     started = datetime.fromisoformat(metadata["start_time"])
     lines = [f"录制时间：{started:%Y-%m-%d %H:%M:%S}",
              f"时长：{timestamp(float(metadata.get('duration_seconds', 0)))}", "",
-             "转写引擎：Qwen3-ASR-1.7B（本地，中文）", ""]
+             ("转写引擎：API 音频转写（" + str(metadata.get("transcription_model", "已配置服务")) + "）"
+              if metadata.get("transcription_mode") == "api" else "转写引擎：Qwen3-ASR-1.7B（本地，中文）"), ""]
     if mixed_audio is not None:
         default_audio = (Path(metadata["audio_output_dir"]) / "meeting.wav"
                          if metadata.get("storage_mode") == "minimal" else session / "meeting.wav")
         published = Path(mixed_audio.get("published_path", default_audio))
-        relative = safe_path(published).relative_to(safe_path(vault)).as_posix()
-        lines.extend(["**会议录音**", f"![[{relative}]]", ""])
+        lines.extend(["**会议录音**", audio_link(safe_path(published), safe_path(vault), metadata), ""])
+    if metadata.get("recording_pauses"):
+        lines.append("整场暂停区间（录音中保持静音，时间戳保持会议时间轴）：")
+        for pause in metadata["recording_pauses"]:
+            if pause.get("end_seconds") is not None:
+                lines.append(f"- {timestamp(pause['start_seconds'])}–{timestamp(pause['end_seconds'])}")
+        lines.append("")
     if merge_error:
         lines.extend([f"**合并录音暂未生成，原始分轨已保留。** {merge_error}", ""])
     if merge_error or error:
@@ -150,7 +168,7 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
     if error:
         lines.extend(["**转写未完成，原始录音和已完成段已保留。**", str(error), ""])
     elif result is None:
-        lines.extend(["录音已保存，正在本地处理。", ""])
+        lines.extend(["录音已保存，正在转写处理。", ""])
     if result is not None:
         rows = [row for row in result.get("segments", []) if row.get("status") == "done"
                 and str(row.get("text", "")).strip()]
@@ -278,7 +296,7 @@ def verified_artifacts(session: Path, config: dict, metadata: dict, verified_sta
     if not note.is_file():
         raise ValueError("转写笔记不存在，已保留原始录音")
     content = note.read_bytes()
-    link = f"![[{audio.relative_to(vault).as_posix()}]]".encode("utf-8")
+    link = audio_link(audio, vault, metadata).encode("utf-8")
     if not content or link not in content:
         raise ValueError("转写笔记缺少有效录音链接，已保留原始录音")
     if require_markers:
@@ -371,7 +389,7 @@ def run_stage(session: Path, command: list[str], stage: str):
 
 def process_session(session: Path):
     session = safe_path(session)
-    config = read_json(HOME / "config.json")
+    config = load_config(HOME / "config.json")
     metadata = read_json(session / "session.json")
     vault, note = note_location(session, config, metadata)
     for name in COMPACT_FILES:
@@ -402,6 +420,16 @@ def process_session(session: Path):
             return 1
         finish_compaction(session, config, metadata, previous)
         return 0
+    recorded_mode = metadata.get("transcription_mode", "local")
+    transcription_mode = config.get("transcription_mode", "local")
+    recorded_model = metadata.get("transcription_model", "Qwen3-ASR-1.7B" if recorded_mode == "local" else None)
+    transcription_model = config["api_model"] if transcription_mode == "api" else "Qwen3-ASR-1.7B"
+    if recorded_mode != transcription_mode or recorded_model != transcription_model or (
+            recorded_mode == "api" and metadata.get("transcription_api_base_url") != config["api_base_url"].rstrip("/")):
+        message = "转写设置已改变，录音和现有成品已保留；请恢复录制时的模式、模型和服务配置后重试"
+        status(session, message, state="error", stage="configuration", error=message,
+               note_path=str(note))
+        return 1
     status(session, "录音已保存，正在准备中文转写", note_path=str(note))
     result = None
     mixed_audio, merge_error = None, None
@@ -428,12 +456,25 @@ def process_session(session: Path):
                 run_stage(session, [sys.executable, str(HOME / "prepare_audio.py"),
                           "--session", str(session), "--models", str(HOME / "models")], "prepare")
                 atomic_json(session / "prepared_input.json", {"fingerprint": fingerprint})
-            status(session, "正在加载中文会议识别模型", stage="asr")
-            run_stage(session, [sys.executable, str(HOME / "asr_engine.py"),
-                      "--segments", str(session / "segments.json"),
-                      "--model-dir", str(HOME / "models" / "Qwen3-ASR-1.7B-hf"),
-                      "--status", str(session / "asr_status.json"),
-                      "--context", config.get("asr_context", "")], "asr")
+            if transcription_mode == "api":
+                status(session, "正在通过API进行中文会议转写", stage="asr")
+                command = [sys.executable, str(HOME / "api_asr.py"),
+                           "--segments", str(session / "segments.json"),
+                           "--api-base-url", config["api_base_url"], "--api-model", config["api_model"],
+                           "--api-key-env", config.get("api_key_env", "TINGJI_API_KEY"),
+                           "--api-timeout-seconds", str(config.get("api_timeout_seconds", 120)),
+                           "--status", str(session / "asr_status.json"),
+                           "--context", config.get("asr_context", "")]
+            elif transcription_mode == "local":
+                status(session, "正在加载中文会议识别模型", stage="asr")
+                command = [sys.executable, str(HOME / "asr_engine.py"),
+                           "--segments", str(session / "segments.json"),
+                           "--model-dir", str(HOME / "models" / "Qwen3-ASR-1.7B-hf"),
+                           "--status", str(session / "asr_status.json"),
+                           "--context", config.get("asr_context", "")]
+            else:
+                raise ValueError("transcription_mode must be local or api")
+            run_stage(session, command, "asr")
             result = read_json(session / "result.json")
             if not result.get("complete"):
                 raise RuntimeError("转写结果不完整，已保留完成段")

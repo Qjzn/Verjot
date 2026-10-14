@@ -1,4 +1,5 @@
 """Download official public model artifacts; this never reads meeting audio."""
+import argparse
 from pathlib import Path
 import hashlib
 import json
@@ -36,6 +37,13 @@ def download(url, destination, expected_size=None, expected_hash=None):
     for attempt in range(5):
         received = partial.stat().st_size if partial.is_file() else 0
         try:
+            if expected_size is not None and partial.is_file() and received >= expected_size:
+                if received == expected_size and (not expected_hash or sha256(partial) == expected_hash):
+                    partial.replace(destination)
+                    return
+                # Only reset this downloader's own oversized or invalid partial.
+                partial.unlink()
+                received = 0
             headers = {"Range": f"bytes={received}-"} if received else {}
             with HTTP.get(url, headers=headers, stream=True, timeout=(30, 60)) as response:
                 response.raise_for_status()
@@ -66,24 +74,30 @@ def download(url, destination, expected_size=None, expected_hash=None):
             time.sleep(2 * (attempt + 1))
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--speaker-only", action="store_true",
+                        help="Download only local speaker models for API transcription mode")
+    args = parser.parse_args(argv)
     repo = "Qwen/Qwen3-ASR-1.7B-hf"
-    response = HTTP.get(f"https://huggingface.co/api/models/{repo}?blobs=true", timeout=30)
-    response.raise_for_status()
-    metadata = response.json()
-    revision = metadata["sha"]
+    revision = None
     manifest = []
-    for item in metadata["siblings"]:
-        name = item["rfilename"]
-        if name.endswith((".json", ".jinja", ".safetensors")):
-            lfs = item.get("lfs", {})
-            destination = ROOT / "Qwen3-ASR-1.7B-hf" / name
-            expected_size = item.get("size") or lfs.get("size")
-            expected_hash = lfs.get("sha256")
-            download(f"https://huggingface.co/{repo}/resolve/{revision}/{name}", destination,
-                     expected_size, expected_hash)
-            manifest.append({"file": name, "size": destination.stat().st_size,
-                             "sha256": sha256(destination)})
+    if not args.speaker_only:
+        response = HTTP.get(f"https://huggingface.co/api/models/{repo}?blobs=true", timeout=30)
+        response.raise_for_status()
+        metadata = response.json()
+        revision = metadata["sha"]
+        for item in metadata["siblings"]:
+            name = item["rfilename"]
+            if name.endswith((".json", ".jinja", ".safetensors")):
+                lfs = item.get("lfs", {})
+                destination = ROOT / "Qwen3-ASR-1.7B-hf" / name
+                expected_size = item.get("size") or lfs.get("size")
+                expected_hash = lfs.get("sha256")
+                download(f"https://huggingface.co/{repo}/resolve/{revision}/{name}", destination,
+                         expected_size, expected_hash)
+                manifest.append({"file": name, "size": destination.stat().st_size,
+                                 "sha256": sha256(destination)})
     archive = ROOT / "segmentation.tar.bz2"
     download("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/"
              "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2", archive, 6958444)
@@ -94,9 +108,15 @@ def main():
     speaker = ROOT / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
     download("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
              + speaker.name, speaker, 39593761)
-    (ROOT / "model-manifest.json").write_text(json.dumps({"repo": repo, "revision": revision,
-             "files": manifest, "speaker_sha256": sha256(speaker)}, indent=2), encoding="utf-8")
-    report(state="completed", message="官方中文识别和说话人模型下载完成并验证", revision=revision)
+    if args.speaker_only:
+        (ROOT / "speaker-model-manifest.json").write_text(json.dumps({
+                 "speaker_sha256": sha256(speaker), "segmentation_sha256": sha256(archive)},
+                 indent=2), encoding="utf-8")
+        report(state="completed", message="官方说话人模型下载完成并验证（API转写模式）")
+    else:
+        (ROOT / "model-manifest.json").write_text(json.dumps({"repo": repo, "revision": revision,
+                 "files": manifest, "speaker_sha256": sha256(speaker)}, indent=2), encoding="utf-8")
+        report(state="completed", message="官方中文识别和说话人模型下载完成并验证", revision=revision)
 
 
 if __name__ == "__main__":

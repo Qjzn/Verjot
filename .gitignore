@@ -8,6 +8,14 @@
 !/Build.ps1
 !/config.example.json
 !/requirements.txt
+!/requirements-api.txt
+!/config.schema.json
+!/tingji_config.py
+!/tingji.py
+!/api_asr.py
+!/Install.ps1
+!/test_api_asr.py
+!/test_tingji_config.py
 !/ObsidianMeeting.cs
 !/meeting_worker.py
 !/asr_engine.py
@@ -33,6 +41,13 @@
 !/assets/tingji-recording.png
 !/assets/Create-Icons.ps1
 
+# Reviewed installation and configuration documentation.
+!/documentation/
+/documentation/*
+!/documentation/ai-install.md
+!/documentation/configuration.md
+!/documentation/product-scope.md
+
 # Personal configuration, captured audio, models, caches, logs, validation
 # screenshots and build products remain local even when placed in subfolders.
 **/config.json
@@ -44,6 +59,7 @@
 **/runtime-wheels/
 **/work/
 **/validation/
+**/installation/
 **/__pycache__/
 *.py[cod]
 *.exe
