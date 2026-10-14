@@ -680,20 +680,20 @@ internal sealed class RecordingLevelIndicator : Control {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
         animation.Tick += delegate { level *= .78; if (level < .01) level = 0; Invalidate(); };
         TabStop = false;
-        AccessibleName = Text = "电脑声音：暂无明显声音";
+        AccessibleName = Text = "录音输入：暂无明显声音";
     }
     public void SetRecording(bool value) {
         recording = value;
         if (!value) level = 0;
-        if (!value) AccessibleName = Text = "电脑声音：已暂停";
+        if (!value) AccessibleName = Text = "录音输入：整场已暂停";
         animation.Enabled = value && Visible;
         Invalidate();
     }
     public void SetLevels(float microphone, float system) {
-        double peak = recording ? system : 0;
+        double peak = recording ? Math.Max(microphone, system) : 0;
         double next = peak <= .002 ? 0 : Math.Min(1, (Math.Log10(peak) + 2.7) / 2.2);
         level = Math.Max(level, next);
-        AccessibleName = Text = !recording ? "电脑声音：已暂停" : peak > .003 ? "电脑声音：有声音" : "电脑声音：暂无明显声音";
+        AccessibleName = Text = !recording ? "录音输入：整场已暂停" : peak > .003 ? "录音输入：有声音" : "录音输入：暂无明显声音";
     }
     protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); animation.Enabled = recording && Visible; }
     protected override void OnPaint(PaintEventArgs e) {
@@ -759,7 +759,7 @@ internal sealed class RecorderPanel : Form {
         Time.Font = timeNormal;
         Time.ForeColor = Color.FromArgb(36, 59, 83);
         Time.TextAlign = ContentAlignment.MiddleLeft;
-        Heading.SetBounds(82, 53, 50, 13);
+        Heading.SetBounds(10, 50, 74, 14);
         Heading.Font = recordingHeadingFont;
         Heading.ForeColor = Color.FromArgb(72, 103, 135);
         Heading.AutoEllipsis = true;
@@ -778,7 +778,7 @@ internal sealed class RecorderPanel : Form {
         CollapseButton.AccessibleName = CollapseButton.Text = "收起录音浮窗";
         DevicesTip.SetToolTip(StopButton, "结束整个记录 · Ctrl+Alt+L");
         DevicesTip.SetToolTip(Time, "本场会议时长；拖动可移动浮窗");
-        DevicesTip.SetToolTip(AudioLevel, "电脑声音的实际输入音量");
+        DevicesTip.SetToolTip(AudioLevel, "麦克风或电脑声音的实际输入音量");
         DevicesTip.SetToolTip(CollapseButton, "收起浮窗，继续录音；从托盘可恢复");
         Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, MicrophoneButton, StopButton, CollapseButton });
         CollapseButton.Click += delegate { Hide(); };
@@ -810,7 +810,7 @@ internal sealed class RecorderPanel : Form {
         Detail.AccessibleName = "电脑声音：" + systemName;
         DevicesTip.SetToolTip(Detail, "电脑声音：" + systemName);
         MicrophoneButton.Enabled = StopButton.Enabled = true;
-        Heading.SetBounds((int)(82 * ClientSize.Width / 186f), (int)(53 * ClientSize.Height / 68f), (int)(50 * ClientSize.Width / 186f), (int)(13 * ClientSize.Height / 68f));
+        Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(50 * ClientSize.Height / 68f), (int)(74 * ClientSize.Width / 186f), (int)(14 * ClientSize.Height / 68f));
         AudioLevel.SetRecording(true);
         SetMicPaused(false);
         Invalidate();
@@ -830,12 +830,12 @@ internal sealed class RecorderPanel : Form {
         float system = !showingRecording || recordingPaused ? 0 : systemLevel;
         MicrophoneButton.RecordingPaused = recordingPaused;
         MicrophoneButton.SetInputLevel(mic);
-        AudioLevel.SetLevels(0, system);
+        AudioLevel.SetLevels(mic, system);
         string micState = recordingPaused ? "整场已暂停" : microphonePaused ? "已关闭" : mic > .003f ? "有声音" : "暂无明显声音";
         string systemState = recordingPaused ? "整场已暂停" : system > .003f ? "有声音" : "暂无明显声音";
         string devices = "麦克风：" + micName + "\n麦克风输入：" + micState + "\n电脑声音：" + systemName + "\n电脑声音输入：" + systemState;
         if (!string.IsNullOrEmpty(deviceWarning)) devices += "\n" + deviceWarning;
-        string action = recordingPaused ? "点击切换麦克风；恢复整场后生效" : microphonePaused ? "点击开启麦克风" : "点击关闭麦克风，电脑声音继续录制";
+        string action = recordingPaused ? "点击切换麦克风；恢复整场后生效" : microphonePaused ? "点击开启麦克风，电脑声音继续录制" : "点击关闭麦克风，电脑声音继续录制";
         DevicesTip.SetToolTip(MicrophoneButton, devices + "\n" + action);
         DevicesTip.SetToolTip(AudioLevel, devices);
         DevicesTip.SetToolTip(Heading, devices);
@@ -845,9 +845,10 @@ internal sealed class RecorderPanel : Form {
         microphonePaused = paused;
         MicrophoneButton.MicrophoneDisabled = paused;
         if (showingRecording) {
-            Heading.Text = recordingPaused ? "已暂停" : paused ? "已关闭" : "录音中";
-            Heading.AccessibleName = recordingPaused ? "整场录音已暂停" : "麦克风：" + micName + (paused ? "，已关闭" : "，录制中");
-            Heading.ForeColor = recordingPaused || paused ? Color.FromArgb(139, 90, 31) : Color.FromArgb(72, 103, 135);
+            Heading.Visible = recordingPaused;
+            Heading.Text = recordingPaused ? "已暂停" : "";
+            Heading.AccessibleName = recordingPaused ? "整场录音已暂停" : "";
+            Heading.ForeColor = Color.FromArgb(139, 90, 31);
         }
         RefreshInputFeedback();
         MicrophoneButton.Invalidate();
@@ -871,6 +872,7 @@ internal sealed class RecorderPanel : Form {
         AudioLevel.SetRecording(false);
         MicrophoneButton.SetInputLevel(0);
         Time.Visible = AudioLevel.Visible = MicrophoneButton.Visible = StopButton.Visible = false;
+        Heading.Visible = true;
         Detail.Visible = true;
         Heading.Font = processingHeadingFont;
         Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(22 * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(18 * ClientSize.Height / 68f));
