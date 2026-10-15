@@ -38,6 +38,7 @@
 !/test_multi_capture_worker.py
 !/TestTimestampedTimeline.cs
 !/TestJsonReadSharing.cs
+!/TestCaptureReliability.cs
 !/download_models.py
 !/download_torch.py
 !/Install-Shortcuts.ps1
@@ -46,6 +47,8 @@
 !/test_meeting_worker.py
 !/test_prepare_audio.py
 !/test_merge_audio.py
+!/test_legacy_migration.py
+!/test_download_models.py
 
 # Reviewed artwork only. Runtime libraries are restored as documented in README.
 !/assets/
@@ -65,6 +68,7 @@
 !/documentation/configuration.md
 !/documentation/product-scope.md
 !/documentation/quality.md
+!/documentation/risk-review.md
 
 # Personal configuration, captured audio, models, caches, logs, validation
 # screenshots and build products remain local even when placed in subfolders.

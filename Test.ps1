@@ -8,7 +8,7 @@ if (-not (Test-Path -LiteralPath $taskCompiler)) { $taskCompiler = Join-Path $en
 if (-not (Test-Path -LiteralPath $taskCompiler)) { throw '.NET Framework C# compiler was not found.' }
 $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($taskOutput) | Out-Null
-foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline')) {
+foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
@@ -34,7 +34,7 @@ if (-not $NativeOnly) {
     Push-Location $taskRoot
     try {
         $env:TEMP = $env:TMP = $taskPythonTemp
-        & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker
+        & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker test_legacy_migration test_download_models
         if ($LASTEXITCODE -ne 0) { throw "Python regressions failed: $LASTEXITCODE" }
     } finally {
         $env:TEMP = $taskPreviousTemp; $env:TMP = $taskPreviousTmp

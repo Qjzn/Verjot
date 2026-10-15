@@ -10,7 +10,6 @@ import math
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -47,7 +46,7 @@ def status(session: Path, message: str, state="processing", **extra):
     safe_path(session / "status.json")
     safe_path(session / "status.json.tmp")
     previous = read_json(session / "status.json", {})
-    managed = {"managed_note": previous["managed_note"]} if previous.get("managed_note") else {}
+    managed = {key: previous[key] for key in ("managed_note", "published_audio") if previous.get(key)}
     atomic_json(session / "status.json", {**managed, "state": state, "message": message,
                 "updated_at": datetime.now().astimezone().isoformat(), **extra})
 
@@ -389,14 +388,36 @@ def validate_wave(path: Path, merged: dict):
             or info.frames != merged.get("frames")
             or (merged.get("output_size") is not None and path.stat().st_size != merged["output_size"])):
         raise ValueError("完整合并录音验证失败，原始录音已保留")
+    if merged.get("output_sha256") and file_sha256(path) != merged["output_sha256"]:
+        raise ValueError("合并录音内容已改变，已保留原始录音和转写结果")
     return path
+
+
+def file_sha256(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_audio_destination(output: Path, ownership):
+    if not output.exists():
+        return
+    if (not isinstance(ownership, dict) or ownership.get("path") != str(output)
+            or ownership.get("size") != output.stat().st_size
+            or not isinstance(ownership.get("sha256"), str)
+            or file_sha256(output) != ownership["sha256"]):
+        raise ValueError("目标录音已存在且无法确认属于本场，或已被修改；已保留该文件及原始录音")
 
 
 def publish_audio(session: Path, config: dict, metadata: dict, merged: dict):
     vault, _ = note_location(session, config, metadata)
     source = validate_wave(session / "meeting.wav", merged)
     output = audio_output_path(session, vault, metadata, config)
+    ownership = read_json(session / "status.json", {}).get("published_audio")
     if output != source:
+        verify_audio_destination(output, ownership)
         safe_path(output.parent)
         output.parent.mkdir(parents=True, exist_ok=True)
         safe_path(output.parent)
@@ -405,15 +426,25 @@ def publish_audio(session: Path, config: dict, metadata: dict, merged: dict):
             with tempfile.NamedTemporaryFile(prefix=".meeting-", suffix=".tmp", dir=output.parent,
                                              delete=False) as stream:
                 temporary = Path(stream.name)
+                digest = hashlib.sha256()
                 with source.open("rb") as incoming:
-                    shutil.copyfileobj(incoming, stream, length=1024 * 1024)
+                    for block in iter(lambda: incoming.read(1024 * 1024), b""):
+                        stream.write(block)
+                        digest.update(block)
             validate_wave(temporary, merged)
             safe_path(output)
+            verify_audio_destination(output, ownership)
             os.replace(temporary, output)
         finally:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
-    return {**merged, "published_path": str(output)}
+        published_sha256 = digest.hexdigest()
+    else:
+        published_sha256 = file_sha256(source)
+    previous = read_json(session / "status.json", {})
+    atomic_json(session / "status.json", {**previous, "published_audio": {
+        "path": str(output), "size": output.stat().st_size, "sha256": published_sha256}})
+    return {**merged, "published_path": str(output), "output_sha256": published_sha256}
 
 
 def cleanup_candidates(session: Path, *, keep_meeting=False):
@@ -499,6 +530,8 @@ def compact_session(session: Path, config: dict, metadata: dict, verified_status
             and session.parent != safe_path(vault / meeting_folder(config) / "附件")):
         raise ValueError("旧会议清理仅限会议附件目录的直接子目录")
     audio, _ = verified_artifacts(session, config, metadata, verified_status)
+    if not re.fullmatch(r"[a-f0-9]{64}", str(verified_status.get("merged_audio", {}).get("output_sha256", ""))):
+        raise ValueError("旧录音缺少内容校验信息，已保留原始录音和处理资料，请先核对成品")
     candidates = cleanup_candidates(session, keep_meeting=audio == session / "meeting.wav")
     # Remove recovery evidence last, so a interrupted cleanup can be resumed.
     raw_names = {row["path"] for row in capture_sources(session, metadata, require_files=False)}

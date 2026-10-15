@@ -74,6 +74,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath
 
 安装器从官方 NuGet 包提取指定的 NAudio 1.10.0 DLL，并核对固定 SHA256；随后安装依赖、下载模型、构建程序、准备首次配置并执行完整自检。模型下载保留恢复资料，失败后先读取原因再重跑，不重复创建配置、不随意清理缓存。
 
+模型续传会检查 HTTP 范围起点、终点和总量，拒绝错位或越界的响应；失败时保留有效断点。模型完整性、长会议资源和故障恢复的已验范围见 [隐患审查与验证计划](risk-review.md)。不要把正常下载、自检通过或短录音成功当作长会议与中文质量均已验收。
+
 模型只安装到程序目录的 `models/`；虚拟环境在 `.venv/`，下载缓存在 `runtime-wheels/`，安装日志、状态与自检证据在 `installation/`。这些是本机运行文件，不应提交到源码仓库。仓库不收录模型、运行依赖、个人配置、录音、密钥或本机验证截图。第三方条款见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
 
 ## 补齐 API 配置

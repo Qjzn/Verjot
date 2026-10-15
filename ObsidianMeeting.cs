@@ -179,6 +179,9 @@ internal static class MeetingConfig {
 // Audio callbacks are absent while WASAPI loopback is silent. Preserve that
 // wall-clock gap in the WAV, including leading silence and the stop-time tail.
 internal sealed class TimelineWriter : IDisposable {
+    internal sealed class StorageException : IOException {
+        public StorageException(string message, Exception cause) : base(message, cause) { }
+    }
     readonly object gate = new object();
     readonly WaveFileWriter writer;
     readonly int byteRate;
@@ -225,7 +228,9 @@ internal sealed class TimelineWriter : IDisposable {
 
     public TimelineWriter(string path, WaveFormat format) {
         this.path = path;
-        writer = new WaveFileWriter(path, format);
+        try { writer = new WaveFileWriter(path, format); }
+        catch (IOException error) { throw StorageFailure(error); }
+        catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
         byteRate = format.AverageBytesPerSecond;
         blockAlign = format.BlockAlign;
         sampleRate = format.SampleRate; channels = format.Channels; bits = format.BitsPerSample; floatSamples = IsFloat(format);
@@ -235,11 +240,30 @@ internal sealed class TimelineWriter : IDisposable {
     long Bytes(double milliseconds) {
         return (long)Math.Max(0, milliseconds * byteRate / 1000.0) / blockAlign * blockAlign;
     }
+    static StorageException StorageFailure(Exception error) {
+        return new StorageException("录音文件无法继续写入，请检查磁盘空间和文件权限；正在保存已录内容。", error);
+    }
+    void WriteAudio(byte[] data, int count) {
+        try { writer.Write(data, 0, count); }
+        catch (IOException error) { throw StorageFailure(error); }
+        catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
+        catch (ArgumentException error) {
+            // This is the bundled NAudio writer's explicit RIFF/UInt32 guard,
+            // not an arbitrary bad buffer/format argument from the caller.
+            if (!error.Message.StartsWith("WAV file too large", StringComparison.Ordinal)) throw;
+            throw new StorageException("录音文件达到 WAV 4 GB 上限，正在停止并保存已录内容。", error);
+        }
+    }
+    void CloseWriter() {
+        try { writer.Dispose(); }
+        catch (IOException error) { throw StorageFailure(error); }
+        catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
+    }
     void PadTo(long target) {
         target = Math.Min(target, endByteBudget);
         while (written < target) {
             int count = (int)Math.Min(silence.Length, target - written);
-            writer.Write(silence, 0, count);
+            WriteAudio(silence, count);
             written += count;
         }
     }
@@ -279,7 +303,7 @@ internal sealed class TimelineWriter : IDisposable {
             count = (int)Math.Min(count, Math.Max(0, endByteBudget - written));
             if (count == 0) return;
             byte[] audio = MaskPausedAudio(buffer, count);
-            writer.Write(audio, 0, count);
+            WriteAudio(audio, count);
             written += count;
             previousCallbackMs = elapsedMs;
             hadCallback = true;
@@ -387,9 +411,20 @@ internal sealed class TimelineWriter : IDisposable {
         if (bits == 32) return BitConverter.ToInt32(data, index) / 2147483648.0;
         throw new InvalidDataException("不支持的录音采样格式。");
     }
+    [StructLayout(LayoutKind.Explicit)]
+    struct FloatBits {
+        [FieldOffset(0)] public float Value;
+        [FieldOffset(0)] public int Bits;
+    }
     void WriteSample(byte[] data, int frame, int channel, double value) {
         int index = frame * blockAlign + channel * bits / 8;
-        if (floatSamples) { Buffer.BlockCopy(BitConverter.GetBytes((float)value), 0, data, index, 4); return; }
+        if (floatSamples) {
+            // BitConverter.GetBytes allocated an array for every resampled
+            // sample/channel. Reinterpret locally and write WAV little endian.
+            int raw = new FloatBits { Value = (float)value }.Bits;
+            for (int part = 0; part < 4; part++) data[index + part] = (byte)(raw >> (part * 8));
+            return;
+        }
         long maximum = (1L << (bits - 1)) - 1;
         long sample = Math.Max(-maximum - 1, Math.Min(maximum, (long)Math.Round(value * (maximum + 1))));
         for (int part = 0; part < bits / 8; part++) data[index + part] = (byte)(sample >> (part * 8));
@@ -421,7 +456,7 @@ internal sealed class TimelineWriter : IDisposable {
             }
         }
         byte[] masked = MaskPausedAudio(output, output.Length);
-        writer.Write(masked, 0, masked.Length); written += masked.Length;
+        WriteAudio(masked, masked.Length); written += masked.Length;
         peak = paused ? 0 : MeasurePeak(masked, masked.Length, Format);
     }
     public void SetEndBoundary(double elapsedMs) {
@@ -488,16 +523,26 @@ internal sealed class TimelineWriter : IDisposable {
         lock (gate) {
             if (closed) return;
             endByteBudget = Math.Min(endByteBudget, Bytes(elapsedMs));
-            if (pendingPacket != null) {
-                WriteTimestampedPacket(pendingPacket, pendingCount, pendingStartMs,
-                    pendingStartMs + pendingCount / blockAlign * millisecondsPerFrame, null);
-                pendingPacket = null;
+            try {
+                if (pendingPacket != null) {
+                    WriteTimestampedPacket(pendingPacket, pendingCount, pendingStartMs,
+                        pendingStartMs + pendingCount / blockAlign * millisecondsPerFrame, null);
+                    pendingPacket = null;
+                }
+                PadTo(endByteBudget);
+            } catch {
+                // Close even when the final packet/tail cannot be written. The
+                // bundled WAV writer finalizes the prefix and closes its stream
+                // in a finally; retain the original write failure if that fails too.
+                closed = true;
+                try { CloseWriter(); } catch (Exception error) { MeetingFiles.Log(error); }
+                throw;
             }
-            PadTo(endByteBudget);
             closed = true;
-            writer.Dispose();
-            TrimExcessAfterClose(endByteBudget);
-            SilencePausedRangesAfterClose();
+            CloseWriter();
+            try { TrimExcessAfterClose(endByteBudget); SilencePausedRangesAfterClose(); }
+            catch (IOException error) { throw StorageFailure(error); }
+            catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
         }
     }
     public float ReadPeak() {
@@ -523,10 +568,11 @@ internal sealed class TimelineWriter : IDisposable {
         }
         return (float)Math.Min(1, maximum);
     }
-    public void Dispose() { lock (gate) { if (!closed) { closed = true; writer.Dispose(); } } }
+    public void Dispose() { lock (gate) { if (!closed) { closed = true; CloseWriter(); } } }
 }
 
 internal sealed class CaptureTrack : IDisposable {
+    readonly object lifecycleGate = new object();
     readonly WasapiCapture capture;
     readonly TimelineWriter writer;
     readonly Stopwatch clock;
@@ -672,21 +718,31 @@ internal sealed class CaptureTrack : IDisposable {
     public void SetEndBoundary(double elapsedMs) { writer.SetEndBoundary(elapsedMs); }
     public void SetPaused(bool value, double elapsedMs) { writer.SetPaused(value, elapsedMs); }
     public void Finish(double stopMs) {
-        // The writer must outlive the recording thread's last DataAvailable event.
-        if (!requestedStop) RequestStop();
-        if (!stopped.WaitOne(5000)) throw new TimeoutException("等待录音设备停止超时，原始轨道保留：" + DeviceName);
-        if (capture != null) capture.Dispose();
-        writer.Finish(Math.Max(0, stopMs));
+        lock (lifecycleGate) {
+            if (disposed) return;
+            // Never close a writer before its recording thread's last packet.
+            if (!requestedStop) RequestStop();
+            if (!stopped.WaitOne(5000)) throw new TimeoutException("等待录音设备停止超时，原始轨道保留：" + DeviceName);
+            try { writer.Finish(Math.Max(0, stopMs)); }
+            catch {
+                try { Dispose(); } catch (Exception error) { MeetingFiles.Log(error); }
+                throw;
+            }
+            Dispose();
+        }
     }
     public void Dispose() {
-        if (disposed) return;
-        disposed = true;
-        if (deviceId != null) {
-            if (!requestedStop) RequestStop();
-            if (!stopped.WaitOne(5000)) throw new TimeoutException("录音线程未停止，已保留轨道而不关闭正在写入的文件。");
+        lock (lifecycleGate) {
+            if (disposed) return;
+            if (deviceId != null) {
+                if (!requestedStop) RequestStop();
+                if (!stopped.WaitOne(5000)) throw new TimeoutException("录音线程未停止，已保留轨道而不关闭正在写入的文件。");
+            }
+            // A timeout leaves a live writer intact and remains retryable.
+            disposed = true;
+            try { if (capture != null) capture.Dispose(); }
+            finally { try { writer.Dispose(); } finally { stopped.Dispose(); ready.Dispose(); } }
         }
-        try { if (capture != null) capture.Dispose(); }
-        finally { try { writer.Dispose(); } finally { stopped.Dispose(); ready.Dispose(); } }
     }
 }
 
@@ -720,6 +776,7 @@ internal sealed class RecordingSession : IDisposable {
     readonly DateTimeOffset started = DateTimeOffset.Now;
     readonly Dictionary<string, object> metadata;
     readonly Dictionary<string, object> config;
+    readonly Action<Exception> failed;
     readonly MMDeviceEnumerator devices = new MMDeviceEnumerator();
     readonly List<Source> sources = new List<Source>();
     readonly Dictionary<string, Source> active = new Dictionary<string, Source>(StringComparer.OrdinalIgnoreCase);
@@ -735,6 +792,7 @@ internal sealed class RecordingSession : IDisposable {
     Thread deviceThread;
     volatile bool stopping, microphonePaused, recordingPaused;
     int microphoneCount, outputCount, inventoryVersion, observedInventoryVersion;
+    int storageFailureNotified;
     double stopBoundaryMs;
     bool disposed;
     bool initializing = true;
@@ -760,7 +818,7 @@ internal sealed class RecordingSession : IDisposable {
     public string SystemDeviceName { get { return Names("loopback"); } }
 
     public RecordingSession(Dictionary<string, object> settings, Action<Exception> failed) {
-        config = settings;
+        config = settings; this.failed = failed;
         clock.Start();
         string audioFolder = Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"), "附件");
         string folder = Path.Combine(MeetingFiles.Home, "work");
@@ -812,13 +870,29 @@ internal sealed class RecordingSession : IDisposable {
     void MissingDevice(string message) { if (Problem(message)) lock (gate) notices.Enqueue(message); }
     Source[] Snapshot() { lock (gate) return sources.ToArray(); }
     static string EndpointKey(string kind, string id) { return kind + ":" + id; }
+    static bool IsStorageFailure(Exception error) {
+        Exception cause = error;
+        while (cause != null && !(cause is TimelineWriter.StorageException)) cause = cause.InnerException;
+        return cause != null;
+    }
+    void NotifyStorageFailure(Exception error) {
+        if (!IsStorageFailure(error) || stopping || Interlocked.CompareExchange(ref storageFailureNotified, 1, 0) != 0) return;
+        // Do not invoke the stop/save UI callback from a capture thread or while
+        // holding gate: saving waits for those same threads to drain. Multiple
+        // outputs can fail together when a disk fills; notify exactly once.
+        ThreadPool.QueueUserWorkItem(delegate {
+            try { if (!stopping && failed != null) failed(error); }
+            catch (Exception callbackError) { MeetingFiles.Log(callbackError); }
+        });
+    }
     void CaptureFailed(Source source, string endpointKey, Exception error) {
         lock (gate) {
             source.Error = error.Message; source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
             source.EndReason = "capture_error"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
-            notices.Enqueue("音频设备采集中断：" + source.Name + "；其他设备继续录制。");
+            notices.Enqueue(IsStorageFailure(error) ? "录音文件无法继续保存，正在停止并保留已录内容。" : "音频设备采集中断：" + source.Name + "；其他设备继续录制。");
         }
         Problem(source.Name + "：" + error.Message);
+        NotifyStorageFailure(error);
         try { devicesChanged.Set(); } catch (ObjectDisposedException) { }
     }
     void OpenSource(MMDevice device, string kind) {
@@ -848,9 +922,10 @@ internal sealed class RecordingSession : IDisposable {
             lock (gate) {
                 source.Error = error.Message; source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
                 source.EndReason = "open_failed"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
-                notices.Enqueue("暂时无法捕获设备：" + source.Name + "；其他设备继续录制。");
+                notices.Enqueue(IsStorageFailure(error) ? "录音文件无法创建或继续保存，正在停止并保留已录内容。" : "暂时无法捕获设备：" + source.Name + "；其他设备继续录制。");
             }
             Problem(source.Name + "：" + error.Message);
+            NotifyStorageFailure(error);
         }
     }
     void EndSource(Source source, double atMs, string reason) {
@@ -865,7 +940,7 @@ internal sealed class RecordingSession : IDisposable {
     void FinishEndedSources() {
         foreach (Source source in Snapshot()) if (source.Ended && !source.Finished && source.Track != null) {
             try { source.Track.SetEndBoundary(source.EndMs); source.Track.RequestStop(); source.Track.Finish(source.EndMs); }
-            catch (Exception error) { Problem(source.Name + "：" + error.Message); }
+            catch (Exception error) { Problem(source.Name + "：" + error.Message); NotifyStorageFailure(error); }
             source.Finished = true;
         }
     }
@@ -1786,9 +1861,15 @@ internal sealed class MeetingContext : ApplicationContext {
     void Start() {
         try {
             hotkey.EnablePause(true);
-            recording = new RecordingSession(config, delegate(Exception error) {
-                OnUi(delegate { panel.SetDeviceWarning("音频设备异常，正在保存已录内容"); Notice("音频设备异常", error.Message + " 已录内容会保留。", ToolTipIcon.Warning); Stop(); });
+            RecordingSession startedSession = null;
+            startedSession = new RecordingSession(config, delegate(Exception error) {
+                OnUi(delegate {
+                    if (recording == null || !object.ReferenceEquals(recording, startedSession)) return;
+                    panel.SetDeviceWarning("录音异常，正在保存已录内容");
+                    Notice("录音异常", error.Message + " 已录内容会保留。", ToolTipIcon.Warning); Stop();
+                });
             });
+            recording = startedSession;
             catalog.SaveWorker(recording.DirectoryPath, null);
             SaveLastSession(recording.DirectoryPath, null);
             focusedSession = recording.DirectoryPath;

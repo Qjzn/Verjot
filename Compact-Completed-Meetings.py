@@ -164,7 +164,18 @@ def marker_parts(content: bytes) -> tuple[bytes, bytes]:
     first, last = content.index(begin), content.index(end)
     if first >= last:
         raise ValueError("Markdown auto-transcript markers are reversed")
-    return content[:first], content[last + len(end):]
+    suffix = content[last + len(end):]
+    # The former empty template heading is deliberately removed by save_note.
+    suffix = re.sub(rb"\A(?:\r?\n)*## " + "我的笔记".encode() + rb"\r?\n", b"\n", suffix, count=1)
+    return content[:first], suffix
+
+
+def note_parts(note: Path, state: dict) -> tuple[bytes, bytes]:
+    content = note.read_bytes()
+    if state.get("managed_note"):
+        first, last = worker.managed_note_range(note, content, state["managed_note"])
+        return content[:first], content[last:]
+    return marker_parts(content)
 
 
 def file_identity(path: Path) -> tuple[int, int]:
@@ -191,6 +202,8 @@ def validate_audio(audio: Path, session: Path, metadata: dict, status: dict) -> 
         raise ValueError("Combined recording duration does not match the meeting")
     if abs(float(merged.get("duration_seconds", -1)) - info.duration) > 2 / info.samplerate:
         raise ValueError("Combined recording duration does not match its manifest")
+    if merged.get("output_sha256") and digest(audio) != merged["output_sha256"]:
+        raise ValueError("Combined recording content changed; original recordings kept")
     with sf.SoundFile(audio) as stream:
         if len(stream.read(1, always_2d=True)) != 1:
             raise ValueError("Combined recording contains no readable audio")
@@ -225,6 +238,8 @@ def evaluate_session(session: Path, config: dict, home: Path,
         raise ValueError("Transcription result has no segment list")
     audio = session / "meeting.wav"
     audio_info = validate_audio(audio, session, metadata, state)
+    if not re.fullmatch(r"[a-f0-9]{64}", str(state["merged_audio"].get("output_sha256", ""))):
+        raise ValueError("Legacy recording has no trusted content checksum; original recordings kept")
     note = Path(state.get("note_path") or worker.note_location(session, config, metadata)[1])
     if not note.is_absolute():
         note = vault / note
@@ -235,7 +250,7 @@ def evaluate_session(session: Path, config: dict, home: Path,
     if not note.is_file() or note.suffix.lower() != ".md":
         raise ValueError("Completed Markdown note is missing")
     content = note.read_bytes()
-    marker_parts(content)
+    note_parts(note, state)
     relative_audio = audio.relative_to(vault).as_posix()
     if f"![[{relative_audio}]]".encode() not in content:
         raise ValueError("Markdown does not embed the combined recording")
@@ -321,14 +336,14 @@ def apply_session(plan: dict, config: dict, home: Path = HOME,
         raise ValueError("Session files changed after planning; no cleanup performed")
     note, audio = Path(fresh["note_path"]), Path(fresh["recording"])
     before_note, before_audio = note.read_bytes(), digest(audio)
-    before_outside = marker_parts(before_note)
+    before_outside = note_parts(note, fresh["_status"])
     metadata, state = fresh["_metadata"], fresh["_status"]
     mixed_audio = dict(state.get("merged_audio") or worker.read_json(session / "merged_audio.json"))
     mixed_audio["published_path"] = str(audio)
     content = worker.render_note(session, Path(config["vault_root"]).resolve(), metadata,
                                  result=fresh["_result"], mixed_audio=mixed_audio)
-    worker.save_note(note, content)
-    if marker_parts(note.read_bytes()) != before_outside:
+    state["managed_note"] = worker.save_note(note, content, state.get("managed_note"))
+    if note_parts(note, state) != before_outside:
         raise ValueError("Handwritten Markdown bytes changed; cleanup aborted")
     work_session = Path(fresh["work_session"])
     guarded_path(work_session, home)
@@ -337,12 +352,14 @@ def apply_session(plan: dict, config: dict, home: Path = HOME,
         key: metadata[key] for key in (
             "schema_version", "start_time", "end_time", "state", "duration_seconds",
             "capture_error", "device_names", "microphone_pauses", "microphone_paused",
+            "note_filename", "title", "note_link_style", "bookmarks", "recording_pauses", "recording_paused",
         ) if key in metadata
     }
     minimal_metadata.update(session_dir=str(work_session), storage_mode="minimal",
                             audio_output_dir=str(session))
     minimal_status = {key: state[key] for key in (
-        "state", "message", "updated_at", "note_path", "segments", "merged_audio", "merge_error"
+        "state", "message", "updated_at", "note_path", "segments", "merged_audio", "merge_error",
+        "managed_note", "published_audio"
     ) if key in state}
     minimal_status.update(note_path=str(note), storage_mode="minimal", result_complete=True,
                           cleanup_complete=False, artifacts_compacted=False)
@@ -357,7 +374,7 @@ def apply_session(plan: dict, config: dict, home: Path = HOME,
         raise ValueError("Recognized processing artifacts remain; control metadata kept")
     if digest(audio) != before_audio:
         raise ValueError("Combined recording changed during cleanup")
-    if marker_parts(note.read_bytes()) != before_outside:
+    if note_parts(note, state) != before_outside:
         raise ValueError("Handwritten Markdown bytes changed during cleanup")
     validate_audio(audio, session, metadata, state)
     for name in ("session.json", "status.json"):

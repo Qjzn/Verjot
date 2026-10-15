@@ -6,12 +6,16 @@ from datetime import datetime
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
+import re
+import tempfile
 
 import numpy as np
 import soundfile as sf
 
 import meeting_worker as worker
+from merge_audio import _fingerprint as merge_fingerprint
 
 HOME = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("legacy_compaction", HOME / "Compact-Completed-Meetings.py")
@@ -79,7 +83,7 @@ def eligible_session(session: Path, config: dict, home: Path = HOME,
     note = compaction.guarded_path(supplied_note, folder, required=True)
     if note != expected_note or not note.is_file() or note.suffix.lower() != ".md":
         raise ValueError("Completed legacy Markdown note is missing or has an unexpected path")
-    compaction.marker_parts(note.read_bytes())
+    compaction.note_parts(note, status)
     paths.append(note)
     audio = compaction.guarded_path(session / "meeting.wav", session)
     manifest = compaction.guarded_path(session / "merged_audio.json", session)
@@ -91,10 +95,19 @@ def eligible_session(session: Path, config: dict, home: Path = HOME,
     if status.get("merged_audio") and audio.is_file():
         compaction.validate_audio(audio, session, metadata, status)
         raise ValueError("Legacy meeting already has a verified combined recording")
+    reusable = None
+    if audio.exists():
+        candidate = compaction.read_json_file(manifest, session) if manifest.is_file() else {}
+        if (not re.fullmatch(r"[a-f0-9]{64}", str(candidate.get("output_sha256", "")))
+                or candidate.get("fingerprint") != merge_fingerprint(session, metadata)):
+            raise ValueError("Combined recording already exists without verified ownership; original files kept")
+        compaction.validate_audio(audio, session, metadata, {"merged_audio": candidate})
+        reusable = candidate
     return {"session": str(session), "note_path": str(note), "recording": str(audio),
             "duration_seconds": duration, "segments": len(segments), "sources": sources,
             "changes": [str(audio), str(manifest), str(note), str(session / "status.json")],
             "deletes_files": False, "_metadata": metadata, "_status": status, "_result": result,
+            "_reusable_merge": reusable,
             "_identities": {str(path): compaction.file_identity(path) for path in paths}}
 
 
@@ -131,12 +144,15 @@ def apply_session(plan: dict, config: dict, home: Path = HOME,
     protected = [session / "session.json", session / "result.json",
                  session / "mic.wav", session / "system.wav"]
     before = {str(path): compaction.digest(path) for path in protected}
-    manual_bytes = compaction.marker_parts(note.read_bytes())
+    original_note = note.read_bytes()
+    manual_bytes = compaction.note_parts(note, fresh["_status"])
     metadata, previous = fresh["_metadata"], fresh["_status"]
-    merged = worker.merge_session(session, metadata)
+    merged = fresh["_reusable_merge"] or worker.merge_session(session, metadata)
+    audio = Path(fresh["recording"])
+    merged["output_sha256"] = compaction.digest(audio)
+    worker.atomic_json(session / "merged_audio.json", merged)
     completed = {**previous, "merged_audio": merged, "merge_error": None,
                  "updated_at": datetime.now().astimezone().isoformat()}
-    audio = Path(fresh["recording"])
     info = compaction.validate_audio(audio, session, metadata, completed)
     content = worker.render_note(session, Path(config["vault_root"]).resolve(), metadata,
                                  result=fresh["_result"], mixed_audio=merged)
@@ -145,16 +161,37 @@ def apply_session(plan: dict, config: dict, home: Path = HOME,
                  session / "mic.wav", session / "system.wav"]:
         if compaction.file_identity(path) != fresh["_identities"][str(path)]:
             raise ValueError("Legacy inputs changed during merge; original files kept")
-    worker.save_note(note, content)
-    if compaction.marker_parts(note.read_bytes()) != manual_bytes:
-        raise ValueError("Handwritten Markdown bytes changed; status not updated")
-    link = f"![[{audio.relative_to(Path(config['vault_root']).resolve()).as_posix()}]]".encode()
-    if link not in note.read_bytes():
-        raise ValueError("Prepared Markdown is missing its combined-recording embed")
-    for path in protected:
-        if compaction.digest(path) != before[str(path)]:
-            raise ValueError("Legacy source or complete transcription changed; status not updated")
-    worker.atomic_json(session / "status.json", completed)
+    generated_note = None
+    try:
+        completed["managed_note"] = worker.save_note(note, content, previous.get("managed_note"))
+        generated_note = note.read_bytes()
+        if compaction.note_parts(note, completed) != manual_bytes:
+            raise ValueError("Handwritten Markdown bytes changed; status not updated")
+        link = worker.audio_link(audio, Path(config["vault_root"]).resolve(), metadata).encode()
+        if link not in generated_note:
+            raise ValueError("Prepared Markdown is missing its combined-recording embed")
+        for path in protected:
+            if compaction.digest(path) != before[str(path)]:
+                raise ValueError("Legacy source or complete transcription changed; status not updated")
+        worker.atomic_json(session / "status.json", completed)
+    except Exception:
+        # Ordinary commit failures are retryable. Preserve any concurrent user
+        # edit and never roll back just the note after status already committed.
+        if (generated_note is not None and worker.read_json(session / "status.json") == previous
+                and note.read_bytes() == generated_note):
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix=".tingji-rollback-", suffix=".tmp",
+                                                 dir=note.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(original_note)
+                worker.safe_path(note)
+                if note.read_bytes() == generated_note:
+                    os.replace(temporary, note)
+            finally:
+                if temporary is not None and temporary.exists():
+                    temporary.unlink()
+        raise
     worker.verified_artifacts(session, config, metadata, completed)
     return {**public_plan(fresh), "prepared": True, "audio": info,
             "source_and_result_bytes_unchanged": True, "handwritten_bytes_preserved": True,

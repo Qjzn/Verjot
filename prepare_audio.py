@@ -33,6 +33,18 @@ IDENTITY_CLUSTER_DISTANCE = 0.70
 IDENTITY_MARGIN = 0.08
 
 
+def _channel_rms(samples: np.ndarray) -> np.ndarray:
+    """Accumulate channel energy without a whole-track float64 copy/square."""
+    channels = 1 if samples.ndim == 1 else samples.shape[1]
+    energy = np.zeros(channels, dtype=np.float64)
+    for first in range(0, len(samples), 65536):
+        block = np.asarray(samples[first:first + 65536], dtype=np.float64).reshape(-1, channels)
+        if not np.isfinite(block).all():
+            raise ValueError("Non-finite audio samples")
+        energy += np.einsum("ij,ij->j", block, block)
+    return np.sqrt(energy / len(samples)) if len(samples) else energy
+
+
 def read_audio(path: Path) -> tuple[np.ndarray, dict]:
     """Read/resample without denoising or mixing separate recording sources."""
     import soundfile as sf
@@ -41,13 +53,14 @@ def read_audio(path: Path) -> tuple[np.ndarray, dict]:
     samples, rate = sf.read(path, dtype="float32", always_2d=True)
     if samples.size == 0:
         return np.empty(0, dtype=np.float32), {"sample_rate": rate, "channels": samples.shape[1]}
-    if not np.isfinite(samples).all():
-        raise ValueError(f"Non-finite audio samples: {path}")
-    channel_rms = np.sqrt(np.mean(samples.astype(np.float64) ** 2, axis=0))
+    try:
+        channel_rms = _channel_rms(samples)
+    except ValueError:
+        raise ValueError(f"Non-finite audio samples: {path}") from None
     mono = samples.mean(axis=1)
     # Stereo averaging can cancel opposite-polarity channels. Use the strongest
     # channel in that case, instead of silently producing a near-empty recording.
-    if np.sqrt(np.mean(mono.astype(np.float64) ** 2)) < channel_rms.max() * 0.25:
+    if _channel_rms(mono)[0] < channel_rms.max() * 0.25:
         mono = samples[:, int(channel_rms.argmax())]
     mono = mono - mono.mean()
     if rate != SAMPLE_RATE:
@@ -65,9 +78,14 @@ def peak_frame_rms(samples: np.ndarray) -> float:
     if len(samples) == 0:
         return 0.0
     frame = SAMPLE_RATE // 10
-    count = (len(samples) + frame - 1) // frame
-    padded = np.pad(samples, (0, count * frame - len(samples)))
-    return float(np.sqrt(np.mean(padded.reshape(count, frame).astype(np.float64) ** 2, axis=1)).max())
+    peak = 0.0
+    for first in range(0, len(samples), frame * 64):
+        block = samples[first:first + frame * 64]
+        padded = np.pad(block, (0, (-len(block)) % frame))
+        values = padded.reshape(-1, frame).astype(np.float64)
+        mean_square = np.einsum("ij,ij->i", values, values) / frame
+        peak = float(np.maximum(peak, mean_square.max()))
+    return math.sqrt(peak)
 
 
 def make_diarizer(segmentation_model: Path, embedding_model: Path, threads: int = 4,

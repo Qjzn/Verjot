@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 import hashlib
 import json
+import re
 import tarfile
 import time
 import requests
@@ -44,16 +45,31 @@ def download(url, destination, expected_size=None, expected_hash=None):
                 # Only reset this downloader's own oversized or invalid partial.
                 partial.unlink()
                 received = 0
-            headers = {"Range": f"bytes={received}-"} if received else {}
+            headers = {"Range": f"bytes={received}-", "Accept-Encoding": "identity"} if received else {}
             with HTTP.get(url, headers=headers, stream=True, timeout=(30, 60)) as response:
                 response.raise_for_status()
-                if response.status_code != 206:
+                response_end = None
+                if response.status_code == 206:
+                    match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",
+                                         response.headers.get("Content-Range", ""))
+                    if not match:
+                        raise IOError("Invalid Content-Range for model download")
+                    first, last, total = map(int, match.groups())
+                    if (first != received or last < first or last >= total
+                            or expected_size is not None and total != expected_size):
+                        raise IOError("Unexpected Content-Range for model download")
+                    if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                        raise IOError("Encoded Content-Range for model download")
+                    response_end = last + 1
+                else:
                     received = 0
-                total = expected_size or (int(response.headers.get("Content-Length", 0)) + received)
+                    total = expected_size or int(response.headers.get("Content-Length", 0))
                 mode = "ab" if received else "wb"
                 began, previous, initial = time.monotonic(), 0, received
                 with partial.open(mode) as stream:
                     for block in response.iter_content(1024 * 1024):
+                        if response_end is not None and received + len(block) > response_end:
+                            raise IOError("Response exceeds Content-Range for model download")
                         stream.write(block)
                         received += len(block)
                         now = time.monotonic()
@@ -61,8 +77,10 @@ def download(url, destination, expected_size=None, expected_hash=None):
                             report(state="downloading", file=destination.name, received=received,
                                    total=total, bytes_per_second=(received-initial)/max(now-began,.01))
                             previous = now
-            if expected_size and received != expected_size:
-                raise IOError(f"Incomplete file: {destination.name} {received}/{expected_size}")
+                if response_end is not None and received != response_end:
+                    raise IOError("Incomplete Content-Range for model download")
+            if total and received != total:
+                raise IOError(f"Incomplete file: {destination.name} {received}/{total}")
             if expected_hash and sha256(partial) != expected_hash:
                 partial.unlink()
                 raise IOError(f"SHA256 mismatch: {destination.name}")

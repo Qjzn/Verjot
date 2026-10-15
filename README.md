@@ -114,4 +114,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
 
 旧版附件整理工具默认只规划：`Compact-Completed-Meetings.py`；未合并但完整的旧记录可先用 `Prepare-Legacy-Merged-Meetings.py`。实际变更需明确传入 `--apply`，后者还要求 `--only-session` 名单。只清理已验证的生成文件，未知文件与缺少成品的记录保留。
 
+成品清理前会核对录音内容摘要；已有发布目标须匹配本场记录，避免覆盖其他录音。旧版没有可信摘要的成品会保留原轨并提示核对，不自动认证后清理。普通 RIFF WAV 仍有单文件容量上限；长会议、异常收尾与待验证事项见 [隐患审查与验证计划](documentation/risk-review.md)。
+
 产品边界与后续小功能候选见 [产品范围](documentation/product-scope.md)。第三方条款见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -536,6 +536,22 @@ class MinimalStorageTests(unittest.TestCase):
         self.assertTrue((self.session / "clips" / "mic_00000.wav").is_file())
         self.assertFalse(worker.read_json(self.session / "status.json").get("artifacts_compacted", False))
 
+    def test_asr_failure_keeps_public_audio_ownership_and_allows_unchanged_retry(self):
+        def failed_stage(session, command, name):
+            if name == "asr":
+                raise RuntimeError("fixture interrupted after publishing")
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(failed_stage), 1)
+        ownership = worker.read_json(self.session / "status.json")["published_audio"]
+        audio = self.output / "meeting.wav"
+        original = audio.read_bytes()
+        self.assertEqual(ownership["path"], str(audio))
+        self.assertEqual(ownership["sha256"], worker.file_sha256(audio))
+        self.assertEqual(self.process(), 0)
+        self.assertEqual(audio.read_bytes(), original)
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+
     def test_merge_failure_keeps_original_even_if_transcript_completed(self):
         (self.session / "system.wav").write_bytes(b"bad WAV")
         original = (self.session / "mic.wav").read_bytes()
@@ -656,6 +672,48 @@ class MinimalStorageTests(unittest.TestCase):
         self.assertNotIn("artifact_error", state)
         self.assertNotIn("cleanup_error", state)
         self.assertNotIn("需要检查", state["message"])
+
+    def test_cleanup_retry_rejects_valid_same_size_replaced_audio_before_deleting_sources(self):
+        self.interrupt_cleanup_before_sources()
+        audio = self.output / "meeting.wav"
+        before_source = (self.session / "mic.wav").read_bytes()
+        original_size = audio.stat().st_size
+        sf.write(audio, np.full((4800, 2), .7), 48000, subtype="PCM_16")
+        replaced = audio.read_bytes()
+        self.assertEqual(audio.stat().st_size, original_size)
+        with patch.object(worker, "run_stage", side_effect=AssertionError("must not load a model")):
+            self.assertEqual(worker.process_session(self.session), 1)
+        self.assertEqual((self.session / "mic.wav").read_bytes(), before_source)
+        self.assertEqual(audio.read_bytes(), replaced)
+        self.assertTrue((self.session / "result.json").is_file())
+        self.assertFalse(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+
+    def test_preexisting_unowned_public_wav_is_not_overwritten(self):
+        self.output.mkdir(parents=True)
+        audio = self.output / "meeting.wav"
+        sf.write(audio, np.full((4800, 2), .7), 48000, subtype="PCM_16")
+        original = audio.read_bytes()
+        before_source = (self.session / "mic.wav").read_bytes()
+        self.process()
+        self.assertEqual(audio.read_bytes(), original)
+        self.assertEqual((self.session / "mic.wav").read_bytes(), before_source)
+        state = worker.read_json(self.session / "status.json")
+        self.assertFalse(state.get("artifacts_compacted"))
+        self.assertTrue(state.get("merge_error"))
+
+    def test_legacy_completed_status_without_content_hash_cannot_delete_recovery_tracks(self):
+        self.interrupt_cleanup_before_sources()
+        state = worker.read_json(self.session / "status.json")
+        state["merged_audio"].pop("output_sha256")
+        worker.atomic_json(self.session / "status.json", state)
+        original = (self.session / "mic.wav").read_bytes()
+        with patch.object(worker, "run_stage", side_effect=AssertionError("must not load a model")):
+            self.assertEqual(worker.process_session(self.session), 0)
+        state = worker.read_json(self.session / "status.json")
+        self.assertFalse(state["artifacts_compacted"])
+        self.assertIn("内容校验", state["cleanup_error"])
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        self.assertTrue((self.session / "result.json").is_file())
 
     def test_completed_cleanup_retry_accepts_changed_transcription_configuration(self):
         self.interrupt_cleanup_before_sources()

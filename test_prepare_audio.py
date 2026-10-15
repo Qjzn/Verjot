@@ -1,6 +1,7 @@
 """Targeted invariants for meeting segmentation; all inputs are synthetic."""
 
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,73 @@ import prepare_audio as preparation
 
 
 class PreparationTests(unittest.TestCase):
+    def test_chunked_channel_rms_matches_reference_at_block_boundaries(self):
+        random = np.random.default_rng(120)
+        for length in (0, 1, 65535, 65536, 65537, 131079):
+            for channels in (1, 2):
+                with self.subTest(length=length, channels=channels):
+                    samples = random.normal(0, .03, (length, channels)).astype(np.float32)
+                    expected = (np.sqrt(np.mean(samples.astype(np.float64) ** 2, axis=0))
+                                if length else np.zeros(channels))
+                    np.testing.assert_allclose(preparation._channel_rms(samples), expected, rtol=1e-12, atol=1e-14)
+                    if channels == 1:
+                        np.testing.assert_allclose(preparation._channel_rms(samples[:, 0]), expected,
+                                                   rtol=1e-12, atol=1e-14)
+
+    def test_chunked_statistics_still_reject_nonfinite_audio(self):
+        import soundfile as sf
+        from unittest.mock import patch
+        for invalid in (np.nan, np.inf, -np.inf):
+            with self.subTest(invalid=invalid):
+                samples = np.zeros((65537, 2), dtype=np.float32)
+                samples[-1, 1] = invalid
+                with patch.object(sf, "read", return_value=(samples, preparation.SAMPLE_RATE)):
+                    with self.assertRaisesRegex(ValueError, "Non-finite audio samples: synthetic.wav"):
+                        preparation.read_audio(Path("synthetic.wav"))
+
+    def test_peak_frame_rms_pads_the_last_partial_frame_with_zero(self):
+        samples = np.zeros(preparation.SAMPLE_RATE // 10 * 65 + 1, dtype=np.float32)
+        samples[-1] = .8
+        self.assertAlmostEqual(preparation.peak_frame_rms(samples),
+                               float(samples[-1]) / math.sqrt(preparation.SAMPLE_RATE // 10), places=12)
+
+    def test_read_audio_statistics_use_bounded_temporary_memory(self):
+        import soundfile as sf
+        from scipy.signal import resample_poly  # Warm imports outside measurement.
+        import tracemalloc
+        from unittest.mock import patch
+
+        samples = np.full((preparation.SAMPLE_RATE * 30, 2), .03, dtype=np.float32)
+        samples[:, 1] *= .5
+        expected = samples.mean(axis=1)
+        expected -= expected.mean()
+        with patch.object(sf, "read", return_value=(samples, preparation.SAMPLE_RATE)):
+            tracemalloc.start()
+            try:
+                actual, info = preparation.read_audio(Path("synthetic-memory-fixture.wav"))
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(info["channels"], 2)
+        self.assertLess(peak, 6 * 1024 * 1024, f"Statistics allocated {peak} bytes")
+
+    def test_peak_frame_rms_uses_bounded_memory_and_keeps_tail_padding(self):
+        import tracemalloc
+        samples = np.random.default_rng(119).normal(0, .03, preparation.SAMPLE_RATE * 30 + 13).astype(np.float32)
+        frame = preparation.SAMPLE_RATE // 10
+        padded = np.pad(samples, (0, (-len(samples)) % frame))
+        expected = float(np.sqrt(np.mean(padded.reshape(-1, frame).astype(np.float64) ** 2, axis=1)).max())
+        del padded
+        tracemalloc.start()
+        try:
+            actual = preparation.peak_frame_rms(samples)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertAlmostEqual(actual, expected, places=12)
+        self.assertLess(peak, 3 * 1024 * 1024, f"Frame statistics allocated {peak} bytes")
+
     def test_echo_evidence_handles_delay_channel_response_and_preserves_inputs(self):
         from scipy.signal import butter, sosfilt
         rate = preparation.SAMPLE_RATE
