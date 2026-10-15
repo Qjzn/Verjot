@@ -87,6 +87,49 @@ internal static class TestSessionCatalog {
         True(!new SessionCatalog(home, vault).Get(completed).NeedsAttention, "completed is not repeatedly announced");
         File.Delete(audio);
         True(catalog.Get(completed).State == "missing" && !catalog.Get(completed).CanRetry, "missing finished audio never automatically retranscribes");
+        File.Delete(note);
+        var removed = catalog.Get(completed);
+        True(removed.State == "removed" && !removed.NeedsAttention && !removed.CanRetry,
+            "both explicitly published finished files removed by user are not a recoverable failure");
+        True(!Contains(catalog.Snapshot(), completed), "removed completed meeting is omitted from history");
+        True(File.Exists(Path.Combine(completed, "status.json")) && Directory.Exists(completed),
+            "removed history never deletes its retained controller metadata");
+        Write(Path.Combine(completed, "status.json"), new { status = "success", note_path = note, audio_path = audio });
+        Equal(catalog.Get(completed).State, "removed", "legacy completed alias also recognizes cleared outputs");
+        Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note,
+            audio_path = audio, artifact_error = "fixture verification error" });
+        True(catalog.Get(completed).State == "missing" && Contains(catalog.Snapshot(), completed),
+            "verification failure with absent files remains visible");
+        Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note,
+            audio_path = audio, merge_error = "fixture merge error" });
+        Equal(catalog.Get(completed).State, "missing", "merge failure with absent files remains visible");
+        Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note,
+            audio_path = audio, cleanup_error = "fixture cleanup error" });
+        Equal(catalog.Get(completed).State, "missing", "cleanup failure with absent files remains visible");
+        Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note });
+        Equal(catalog.Get(completed).State, "missing", "undeclared audio path is not mistaken for deliberate removal");
+        Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note, audio_path = audio });
+        Directory.CreateDirectory(audio);
+        Equal(catalog.Get(completed).State, "missing", "replacement directory is not mistaken for deliberate removal");
+        Directory.Delete(audio);
+        File.WriteAllText(audio, "not-audio");
+        True(catalog.Get(completed).State == "missing" && Contains(catalog.Snapshot(), completed),
+            "restoring one file makes incomplete meeting visible again");
+        File.WriteAllText(note, "fixture note", new UTF8Encoding(false));
+        Equal(catalog.Get(completed).State, "completed", "restoring both files restores completed meeting");
+        string offline = Session("20261014-120100", "recorded");
+        string unavailableVault = Path.Combine(root, "offline-vault");
+        Write(Path.Combine(offline, "status.json"), new { state = "completed",
+            note_path = Path.Combine(unavailableVault, "fixture.md"), audio_path = Path.Combine(unavailableVault, "fixture.wav") });
+        Equal(new SessionCatalog(home, unavailableVault).Get(offline).State, "missing",
+            "unavailable vault must not hide every completed meeting as user removal");
+        string incomplete = Session("20261014-120200", "recorded");
+        Write(Path.Combine(incomplete, "status.json"), new { state = "error", note_path = note, audio_path = audio });
+        True(catalog.Get(incomplete).State == "failed" && Contains(catalog.Snapshot(), incomplete),
+            "failed session with absent outputs remains in history");
+        Write(Path.Combine(incomplete, "status.json"), new { state = "queued", note_path = note, audio_path = audio });
+        True(catalog.Get(incomplete).State == "retry" && Contains(catalog.Snapshot(), incomplete),
+            "unfinished session with absent outputs remains recoverable");
         File.WriteAllText(audio, "not-audio");
         Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note, published_audio_path = audio });
         Equal(catalog.Get(completed).State, "completed", "top-level published_audio_path supported");
@@ -103,6 +146,16 @@ internal static class TestSessionCatalog {
         File.WriteAllText(localAudio, "not-audio");
         Write(Path.Combine(local, "status.json"), new { state = "completed", note_path = note, audio_path = localAudio });
         Equal(catalog.Get(local).State, "completed", "top-level audio_path supports own local artifact");
+        string originalLabel = catalog.Get(local).Label;
+        Write(Path.Combine(local, "session.json"), new { state = "recorded", session_dir = local,
+            start_time = "2026-10-14T09:00:00+08:00", title = "  产品会议  " });
+        Equal(catalog.Get(local).Label, originalLabel + " · 产品会议", "meeting title retains its chronological label");
+        Write(Path.Combine(local, "session.json"), new { state = "recorded", session_dir = local,
+            start_time = "2026-10-14T09:00:00+08:00", title = "产品\n会议\u202e\0" });
+        Equal(catalog.Get(local).Label, originalLabel + " · 产品 会议", "display title removes control and format characters");
+        Write(Path.Combine(local, "session.json"), new { state = "recorded", session_dir = local,
+            start_time = "2026-10-14T09:00:00+08:00", title = new string('长', 1000) });
+        True(catalog.Get(local).Label.Length <= originalLabel.Length + 3 + 64, "display title length is bounded");
 
         string live = Session("20261014-130000", "recorded");
         using (var process = Process.GetCurrentProcess()) {
@@ -207,6 +260,10 @@ internal static class TestSessionCatalog {
     static SessionRecord Find(List<SessionRecord> records, string path) {
         foreach (var record in records) if (record.DirectoryPath == path) return record;
         throw new Exception("fixture not found: " + Path.GetFileName(path));
+    }
+    static bool Contains(List<SessionRecord> records, string path) {
+        foreach (var record in records) if (record.DirectoryPath == path) return true;
+        return false;
     }
     static void True(bool value, string label) { if (!value) throw new Exception(label); passed++; }
     static void Equal(object actual, object expected, string label) { True(object.Equals(actual, expected), label + ": " + actual); }

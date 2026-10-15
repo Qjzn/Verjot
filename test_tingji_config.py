@@ -7,6 +7,27 @@ from meeting_worker import audio_link
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_asr_denoise_defaults_to_light_and_can_be_disabled(self):
+        self.assertEqual(self.validate()["asr_denoise"], "light")
+        self.assertEqual(self.validate(asr_denoise="off")["asr_denoise"], "off")
+        for value in (True, None, "aggressive", "LIGHT"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.validate(asr_denoise=value)
+
+    def test_productivity_defaults_and_custom_shortcuts(self):
+        config = self.validate()
+        self.assertEqual(config["bookmark_hotkey"], "Ctrl+Alt+K")
+        self.assertEqual(config["silence_warning_seconds"], 60)
+        self.assertEqual(self.validate(bookmark_hotkey="Ctrl+Shift+F8")["bookmark_hotkey"], "Ctrl+Shift+F8")
+        self.assertEqual(self.validate(silence_warning_seconds=0)["silence_warning_seconds"], 0)
+
+    def test_bookmark_shortcut_conflicts_and_invalid_silence_limits(self):
+        for changes in ({"bookmark_hotkey": "Alt+Ctrl+L"}, {"bookmark_hotkey": "Alt+Space"},
+                        {"silence_warning_seconds": -1}, {"silence_warning_seconds": True},
+                        {"silence_warning_seconds": 3601}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.validate(**changes)
+
     def validate(self, **changes):
         return validate_config({"vault_root": "D:\\Notes\\Example", **changes}, check_directory=False)
 

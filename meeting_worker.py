@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -44,7 +45,9 @@ def read_json(path: Path, default=None):
 def status(session: Path, message: str, state="processing", **extra):
     safe_path(session / "status.json")
     safe_path(session / "status.json.tmp")
-    atomic_json(session / "status.json", {"state": state, "message": message,
+    previous = read_json(session / "status.json", {})
+    managed = {"managed_note": previous["managed_note"]} if previous.get("managed_note") else {}
+    atomic_json(session / "status.json", {**managed, "state": state, "message": message,
                 "updated_at": datetime.now().astimezone().isoformat(), **extra})
 
 
@@ -127,6 +130,12 @@ def note_location(session: Path, config: dict, metadata: dict):
     stamp = started.strftime("%Y%m%d-%H%M%S")
     suffix = session.name[len(stamp):] if session.name.startswith(stamp) else "-" + session.name[-6:]
     name = f"{started:%Y-%m-%d %H-%M-%S}{suffix}.md"
+    if metadata.get("note_filename"):
+        name = metadata["note_filename"]
+        if (not isinstance(name, str) or not name.lower().endswith(".md")
+                or not name[:-3].strip() or name != name.strip()
+                or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)):
+            raise ValueError("会议笔记文件名必须是有效的 Markdown 文件名，不能包含目录")
     return vault, safe_path(vault / folder / name)
 
 
@@ -140,18 +149,91 @@ def audio_link(audio: Path, vault: Path, metadata: dict):
     return f"[会议录音]({quote(relative, safe='/')})"
 
 
+def clean_transcript_text(value):
+    """Clean transport whitespace without rewriting speech or guessing punctuation."""
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[\u200b\ufeff]", "", text)
+    return "\n".join(re.sub(r"[^\S\n]+", " ", line).strip()
+                     for line in text.split("\n")).strip()
+
+
+def transcript_with_evidence(session: Path, result):
+    """Join verified preparation evidence for display, leaving ASR checkpoints intact."""
+    if result is None:
+        return None
+    prepared = read_json(session / "segments.json", [])
+    if not isinstance(prepared, list):
+        return result
+    rows = []
+    for row in result.get("segments", []):
+        current = dict(row)
+        index = row.get("index")
+        if type(index) is int and 0 <= index < len(prepared):
+            original = prepared[index]
+            if (isinstance(original, dict)
+                    and all(original.get(key) == row.get(key) for key in ("start", "end", "speaker"))
+                    and isinstance(original.get("text_audio"), str)):
+                path = Path(original["text_audio"])
+                path = path if path.is_absolute() else session / path
+                if str(path.resolve()) == row.get("text_audio"):
+                    for key in ("segment_id", "possible_duplicate_of"):
+                        if isinstance(original.get(key), str) and original[key].strip():
+                            current[key] = original[key]
+                    similarity = original.get("waveform_similarity")
+                    if (type(similarity) in (int, float) and math.isfinite(similarity)
+                            and 0 <= similarity <= 1):
+                        current["waveform_similarity"] = similarity
+                    if original.get("source") in ("mic", "system"):
+                        current["source"] = original["source"]
+                    if type(original.get("speaker_global")) is bool:
+                        current["speaker_global"] = original["speaker_global"]
+                    if original.get("speaker_status") in ("matched", "unknown"):
+                        current["speaker_status"] = original["speaker_status"]
+                    identity = original.get("global_speaker")
+                    if isinstance(identity, str) and re.fullmatch(r"speaker_\d+", identity):
+                        current["global_speaker"] = identity
+        rows.append(current)
+    return {**result, "segments": rows}
+
+
+def transcript_rows(result):
+    rows = [row for row in result.get("segments", []) if row.get("status") == "done"
+            and clean_transcript_text(row.get("text", ""))]
+    by_id = {row["segment_id"]: row for row in rows if row.get("segment_id")}
+    retained = []
+    for row in sorted(rows, key=lambda item: (item["start"], item["end"], str(item["speaker"]))):
+        original = by_id.get(row.get("possible_duplicate_of"))
+        if (original and str(row["speaker"]).startswith("mic_")
+                and str(original["speaker"]).startswith("system_")
+                and float(row.get("waveform_similarity", 0)) >= 0.998
+                and clean_transcript_text(row["text"]) == clean_transcript_text(original["text"])):
+            overlap = min(row["end"], original["end"]) - max(row["start"], original["start"])
+            # Require matching text AND simultaneous, near-identical waveform evidence.
+            # True repeats, ordinary echo and different recognition results are retained.
+            if overlap >= 0.9 * max(row["end"] - row["start"], original["end"] - original["start"]):
+                continue
+        retained.append(row)
+    return retained
+
+
 def render_note(session: Path, vault: Path, metadata: dict, result=None, error=None,
                 mixed_audio=None, merge_error=None):
-    started = datetime.fromisoformat(metadata["start_time"])
-    lines = [f"录制时间：{started:%Y-%m-%d %H:%M:%S}",
-             f"时长：{timestamp(float(metadata.get('duration_seconds', 0)))}", "",
-             ("转写引擎：API 音频转写（" + str(metadata.get("transcription_model", "已配置服务")) + "）"
-              if metadata.get("transcription_mode") == "api" else "转写引擎：Qwen3-ASR-1.7B（本地，中文）"), ""]
+    lines = []
     if mixed_audio is not None:
         default_audio = (Path(metadata["audio_output_dir"]) / "meeting.wav"
                          if metadata.get("storage_mode") == "minimal" else session / "meeting.wav")
         published = Path(mixed_audio.get("published_path", default_audio))
         lines.extend(["**会议录音**", audio_link(safe_path(published), safe_path(vault), metadata), ""])
+    bookmarks = [item for item in metadata.get("bookmarks", []) if isinstance(item, dict)
+                 and isinstance(item.get("time_seconds"), (int, float))
+                 and not isinstance(item["time_seconds"], bool)
+                 and math.isfinite(item["time_seconds"]) and item["time_seconds"] >= 0]
+    if bookmarks:
+        lines.extend(["## 重点时刻", ""])
+        for item in sorted(bookmarks, key=lambda item: item["time_seconds"]):
+            label = " ".join(clean_transcript_text(item.get("label", "重点")).splitlines()) or "重点"
+            lines.append(f"- [{timestamp(item['time_seconds'])}] {label}")
+        lines.append("")
     if metadata.get("recording_pauses"):
         lines.append("整场暂停区间（录音中保持静音，时间戳保持会议时间轴）：")
         for pause in metadata["recording_pauses"]:
@@ -170,46 +252,83 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
     elif result is None:
         lines.extend(["录音已保存，正在转写处理。", ""])
     if result is not None:
-        rows = [row for row in result.get("segments", []) if row.get("status") == "done"
-                and str(row.get("text", "")).strip()]
-        labels = {}
+        rows = transcript_rows(result)
         if not rows:
             lines.extend(["未检测到可转写的讲话，请检查录音音量。", ""])
         else:
             lines.extend(["**逐段转写**", ""])
             for row in rows:
                 speaker = str(row["speaker"])
-                if speaker not in labels:
-                    source = "麦克风" if speaker.startswith("mic_") else "电脑声音"
-                    labels[speaker] = f"{source} · 说话人 {speaker.rsplit('_', 1)[-1]}"
-                text = str(row.get("text", "")).strip()
+                source = "麦克风" if row.get("source") == "mic" or speaker.startswith("mic_") else "电脑声音" if row.get("source") == "system" or speaker.startswith("system_") else "未知音轨"
+                identity = row.get("global_speaker")
+                if (row.get("speaker_global") is True and isinstance(identity, str)
+                        and re.fullmatch(r"speaker_\d+", identity)):
+                    label = "说话人 " + identity.rsplit("_", 1)[-1]
+                elif row.get("speaker_status") == "unknown" or row.get("speaker_global") is False:
+                    label = "说话人待确认 · " + source
+                else:
+                    label = f"{source} · 说话人 {speaker.rsplit('_', 1)[-1]}"
+                text = clean_transcript_text(row.get("text", ""))
                 if text:
-                    lines.extend([f"**[{timestamp(row['start'])}–{timestamp(row['end'])}] {labels[speaker]}**",
+                    lines.extend([f"**[{timestamp(row['start'])}–{timestamp(row['end'])}] {label}**",
                                   text, ""])
-            lines.extend(["说话人编号为每条音轨内的匿名分组。同一人在两条音轨上可能有不同编号；"
-                          "重叠讲话与扬声器串音仍需核对原音频。", ""])
+            caveat = ("说话人按跨音轨声纹匿名分组，待确认段不作身份归并；重叠讲话与串音仍需核对原音频。"
+                      if any("speaker_global" in row for row in rows) else
+                      "说话人编号为每条音轨内的匿名分组。同一人在两条音轨上可能有不同编号；重叠讲话与扬声器串音仍需核对原音频。")
+            lines.extend([caveat, ""])
     return "\n".join(lines)
 
 
-def save_note(path: Path, content: str):
+def managed_note_range(path: Path, current: bytes, ownership: dict):
+    if (not isinstance(ownership, dict) or ownership.get("path") != str(path)
+            or type(ownership.get("start")) is not int or type(ownership.get("length")) is not int):
+        raise ValueError("缺少笔记生成区校验信息，已保留现有笔记")
+    first, length = ownership["start"], ownership["length"]
+    if first < 0 or length <= 0 or first + length > len(current):
+        raise ValueError("笔记生成区位置已改变，已保留现有笔记")
+    last = first + length
+    if hashlib.sha256(current[first:last]).hexdigest() != ownership.get("sha256"):
+        raise ValueError("笔记生成区已被编辑，已保留现有笔记；请另存转写结果")
+    return first, last
+
+
+def save_note(path: Path, content: str, ownership=None):
     safe_path(path)
-    block = f"{BEGIN}\n{content}\n{END}".encode("utf-8")
+    block = (content.rstrip() + "\n").encode("utf-8")
     if path.is_file():
         current = path.read_bytes()
         begin, end = BEGIN.encode(), END.encode()
-        if current.count(begin) != 1 or current.count(end) != 1:
-            raise ValueError("笔记自动转写标记被修改，已保留现有笔记；结果仍在录音目录 result.json")
-        first, last = current.index(begin), current.index(end) + len(end)
-        if first >= last:
-            raise ValueError("笔记转写标记顺序无效，已保留现有笔记")
-        text = current[:first] + block + current[last:]
+        if ownership is not None:
+            first, last = managed_note_range(path, current, ownership)
+            suffix = current[last:]
+        elif begin in current or end in current:
+            if current.count(begin) != 1 or current.count(end) != 1 or current.index(begin) >= current.index(end):
+                raise ValueError("笔记自动转写标记被修改，已保留现有笔记；结果仍在录音目录 result.json")
+            first, last = current.index(begin), current.index(end) + len(end)
+            suffix = current[last:]
+            # Remove only the former template heading; retain all handwritten bytes.
+            suffix = re.sub(rb"\A(?:\r?\n)*## " + "我的笔记".encode() + rb"\r?\n", b"\n", suffix, count=1)
+        else:
+            raise ValueError("缺少笔记生成区校验信息，已保留现有笔记")
+        text = current[:first] + block + suffix
     else:
-        text = "# 会议记录\n\n".encode("utf-8") + block + "\n\n## 我的笔记\n\n".encode("utf-8")
+        prefix = "# 会议记录\n\n".encode("utf-8")
+        first = len(prefix)
+        text = prefix + block + b"\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".md.tmp")
     safe_path(temporary)
     temporary.write_bytes(text)
     os.replace(temporary, path)
+    return {"path": str(path), "start": first, "length": len(block),
+            "sha256": hashlib.sha256(block).hexdigest()}
+
+
+def save_session_note(session: Path, path: Path, content: str):
+    state_path = safe_path(session / "status.json")
+    previous = read_json(state_path, {})
+    ownership = save_note(path, content, previous.get("managed_note"))
+    atomic_json(state_path, {**previous, "managed_note": ownership})
 
 
 def validate_wave(path: Path, merged: dict):
@@ -301,10 +420,14 @@ def verified_artifacts(session: Path, config: dict, metadata: dict, verified_sta
         raise ValueError("转写笔记缺少有效录音链接，已保留原始录音")
     if require_markers:
         begin, end = BEGIN.encode(), END.encode()
-        if (content.count(begin) != 1 or content.count(end) != 1
-                or content.index(begin) >= content.index(end)):
-            raise ValueError("笔记自动转写标记被修改，已停止清理")
-        if link not in content[content.index(begin):content.index(end)]:
+        if actual.get("managed_note"):
+            first, last = managed_note_range(note, content, actual["managed_note"])
+        elif (content.count(begin) == 1 and content.count(end) == 1
+              and content.index(begin) < content.index(end)):
+            first, last = content.index(begin), content.index(end)
+        else:
+            raise ValueError("笔记生成区校验失败，已停止清理")
+        if link not in content[first:last]:
             raise ValueError("自动转写区块缺少录音链接，已停止清理")
     return audio, note
 
@@ -444,18 +567,27 @@ def process_session(session: Path):
         with (session / "merge.log").open("a", encoding="utf-8") as log:
             log.write(json.dumps({"updated_at": datetime.now().astimezone().isoformat(),
                                   "audio": mixed_audio, "error": merge_error}, ensure_ascii=False) + "\n")
-        save_note(note, render_note(session, vault, metadata, mixed_audio=mixed_audio,
+        save_session_note(session, note, render_note(session, vault, metadata, mixed_audio=mixed_audio,
                                    merge_error=merge_error))
         with processing_slot(session):
             fingerprint = input_fingerprint(session)
             cache = read_json(session / "prepared_input.json", {})
-            if cache.get("fingerprint") != fingerprint or not (session / "segments.json").is_file():
+            has_prepared = (session / "segments.json").is_file()
+            # A retry must keep the same clip bytes as its ASR checkpoints. Old
+            # caches predate the filter and therefore represent unfiltered audio.
+            denoise = metadata.get("asr_denoise", cache.get("asr_denoise", "off")
+                                   if has_prepared and cache.get("fingerprint") else config["asr_denoise"])
+            if denoise not in ("light", "off"):
+                raise ValueError("会议的 asr_denoise 配置必须为 light 或 off")
+            if (cache.get("fingerprint") != fingerprint or not has_prepared
+                    or cache.get("asr_denoise", "off") != denoise):
                 if (session / "result.json").exists():
                     raise RuntimeError("原始录音或分段已改变，已保留旧结果，请使用新的录音目录重新处理")
                 status(session, "正在分析麦克风和电脑声音，区分说话人", stage="speakers")
                 run_stage(session, [sys.executable, str(HOME / "prepare_audio.py"),
-                          "--session", str(session), "--models", str(HOME / "models")], "prepare")
-                atomic_json(session / "prepared_input.json", {"fingerprint": fingerprint})
+                          "--session", str(session), "--models", str(HOME / "models"),
+                          "--asr-denoise", denoise], "prepare")
+                atomic_json(session / "prepared_input.json", {"fingerprint": fingerprint, "asr_denoise": denoise})
             if transcription_mode == "api":
                 status(session, "正在通过API进行中文会议转写", stage="asr")
                 command = [sys.executable, str(HOME / "api_asr.py"),
@@ -478,7 +610,8 @@ def process_session(session: Path):
             result = read_json(session / "result.json")
             if not result.get("complete"):
                 raise RuntimeError("转写结果不完整，已保留完成段")
-            save_note(note, render_note(session, vault, metadata, result=result,
+            save_session_note(session, note, render_note(session, vault, metadata,
+                                       result=transcript_with_evidence(session, result),
                                        mixed_audio=mixed_audio, merge_error=merge_error))
             summary = read_json(session / "prepare_summary.json", {})
             count = sum(bool(str(row.get("text", "")).strip()) for row in result.get("segments", []))
@@ -494,7 +627,8 @@ def process_session(session: Path):
     except Exception as error:
         result = read_json(session / "result.json", result)
         try:
-            save_note(note, render_note(session, vault, metadata, result=result, error=str(error),
+            save_session_note(session, note, render_note(session, vault, metadata,
+                                       result=transcript_with_evidence(session, result), error=str(error),
                                        mixed_audio=mixed_audio, merge_error=merge_error))
         except Exception as note_error:
             error = RuntimeError(f"{error}；{note_error}")

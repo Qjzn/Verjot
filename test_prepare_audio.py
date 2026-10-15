@@ -11,6 +11,129 @@ import prepare_audio as preparation
 
 
 class PreparationTests(unittest.TestCase):
+    def test_light_denoise_removes_low_rumble_and_retains_speech_band(self):
+        rate = preparation.SAMPLE_RATE
+        time = np.arange(rate * 3) / rate
+        rumble = .2 * np.sin(2 * np.pi * 20 * time)
+        speech = .2 * np.sin(2 * np.pi * 300 * time)
+        original = (rumble + speech).astype(np.float32)
+        filtered = preparation.denoise_asr_clip(original, "light")
+        center = slice(rate // 2, -rate // 2)
+        def amplitude(samples, frequency):
+            return abs(2 * np.mean(samples[center] * np.exp(-2j * np.pi * frequency * time[center])))
+        self.assertLess(amplitude(filtered, 20) / .2, .02)
+        self.assertGreater(amplitude(filtered, 300) / .2, .99)
+        self.assertEqual(len(filtered), len(original))
+        np.testing.assert_array_equal(original, (rumble + speech).astype(np.float32))
+
+    def test_denoise_off_is_bit_exact_and_light_preserves_impulse_time(self):
+        samples = np.zeros(preparation.SAMPLE_RATE * 2, dtype=np.float32)
+        samples[preparation.SAMPLE_RATE] = .7
+        off = preparation.denoise_asr_clip(samples, "off")
+        np.testing.assert_array_equal(off, samples)
+        light = preparation.denoise_asr_clip(samples, "light")
+        self.assertEqual(len(light), len(samples))
+        self.assertEqual(int(np.argmax(np.abs(light))), preparation.SAMPLE_RATE)
+        self.assertTrue(np.isfinite(light).all())
+        np.testing.assert_array_equal(preparation.denoise_asr_clip(samples[:8], "light"), samples[:8])
+        with self.assertRaises(ValueError):
+            preparation.denoise_asr_clip(samples, "aggressive")
+
+    def test_cross_track_identity_uses_voice_vectors_not_local_number(self):
+        groups = {
+            "mic_01": {"source": "mic", "first_time": 5., "vector": np.array([1., 0., 0.])},
+            "system_01": {"source": "system", "first_time": 0., "vector": np.array([0., 1., 0.])},
+            "system_02": {"source": "system", "first_time": 10., "vector": np.array([.99, .01, 0.])},
+        }
+        mapped, uncertain = preparation.cluster_voice_identities(groups)
+        self.assertEqual(mapped["mic_01"], mapped["system_02"])
+        self.assertNotEqual(mapped["mic_01"], mapped["system_01"])
+        self.assertEqual(mapped["system_01"], "speaker_01")
+        self.assertEqual(mapped["mic_01"], "speaker_02")
+        self.assertEqual(uncertain, set())
+
+    def test_cross_track_identity_rejects_ambiguous_close_candidates(self):
+        groups = {
+            "mic_01": {"source": "mic", "first_time": 0., "vector": np.array([1., 0., 0.])},
+            "system_01": {"source": "system", "first_time": 1., "vector": np.array([.9999, .01, 0.])},
+            "mic_02": {"source": "mic", "first_time": 2., "vector": np.array([0., 1., 0.])},
+            "system_02": {"source": "system", "first_time": 3., "vector": np.array([.7071, .7071, 0.])},
+        }
+        mapped, uncertain = preparation.cluster_voice_identities(groups)
+        self.assertEqual(mapped["mic_01"], mapped["system_01"])
+        self.assertNotEqual(mapped["mic_01"], mapped["mic_02"])
+        self.assertIn("system_02", uncertain)
+
+    def test_joint_turn_clustering_can_repair_a_wrong_local_cluster(self):
+        groups = {
+            "system_turn_1": {"source": "system", "first_time": 0., "vector": np.array([1., 0., 0.])},
+            "system_turn_2": {"source": "system", "first_time": 1., "vector": np.array([0., 0., 1.])},
+            "mic_turn_1": {"source": "mic", "first_time": 2., "vector": np.array([.5, .866, 0.])},
+        }
+        mapped, uncertain = preparation.cluster_voice_identities(groups)
+        self.assertEqual(mapped["system_turn_1"], mapped["mic_turn_1"])
+        self.assertNotEqual(mapped["system_turn_1"], mapped["system_turn_2"])
+        self.assertEqual(uncertain, set())
+
+    def test_global_identity_leaves_short_and_overlapping_turns_unknown(self):
+        rows = [
+            {"speaker": "mic_01", "source": "mic", "start": 0., "end": .5},
+            {"speaker": "mic_02", "source": "mic", "start": 1., "end": 4.},
+            {"speaker": "mic_03", "source": "mic", "start": 2., "end": 5.},
+        ]
+        summary = preparation.assign_global_speakers(rows, {}, {}, Path("unused"))
+        self.assertEqual(summary["resolved_segments"], 0)
+        self.assertEqual(summary["unknown_segments"], 3)
+        self.assertTrue(all(row["speaker_status"] == "unknown" for row in rows))
+        self.assertTrue(all(row["global_speaker"] is None for row in rows))
+
+    def test_identity_anchor_uses_source_offset_without_modifying_audio(self):
+        class Stream:
+            def accept_waveform(self, rate, samples):
+                self.samples = samples.copy()
+            def input_finished(self):
+                pass
+
+        class Extractor:
+            def __init__(self):
+                self.streams = []
+            def create_stream(self):
+                stream = Stream()
+                self.streams.append(stream)
+                return stream
+            def is_ready(self, stream):
+                return True
+            def compute(self, stream):
+                return [1., 0., 0.]
+
+        mic = np.linspace(-.2, .2, 32000, dtype=np.float32)
+        system = np.linspace(.1, -.1, 32000, dtype=np.float32)
+        sources = {"mic": mic.copy(), "system": system.copy()}
+        rows = [{"start": 10., "end": 12., "source": "mic", "speaker": "mic_01"},
+                {"start": 30., "end": 32., "source": "system", "speaker": "system_03"}]
+        extractor = Extractor()
+        summary = preparation.assign_global_speakers(rows, sources, {"mic": 10., "system": 30.},
+                                                      Path("unused"), embedding_extractor=extractor)
+        np.testing.assert_array_equal(extractor.streams[0].samples, mic)
+        np.testing.assert_array_equal(extractor.streams[1].samples, system)
+        np.testing.assert_array_equal(sources["mic"], mic)
+        np.testing.assert_array_equal(sources["system"], system)
+        self.assertEqual(summary["resolved_segments"], 2)
+        self.assertEqual(rows[0]["global_speaker"], rows[1]["global_speaker"])
+        self.assertEqual([row["speaker"] for row in rows], ["mic_01", "system_03"])
+
+    def test_identity_backend_error_keeps_transcription_manifest_usable(self):
+        class Extractor:
+            def create_stream(self):
+                raise RuntimeError("embedding fixture failure")
+
+        rows = [{"start": 0., "end": 2., "source": "mic", "speaker": "mic_01"}]
+        summary = preparation.assign_global_speakers(rows, {"mic": np.ones(32000, dtype=np.float32)}, {},
+                                                      Path("unused"), embedding_extractor=Extractor())
+        self.assertEqual(summary["unknown_segments"], 1)
+        self.assertIn("embedding fixture failure", summary["error"])
+        self.assertEqual(rows[0]["speaker"], "mic_01")
+
     def test_short_turn_survives_in_long_silence(self):
         samples = np.zeros(60 * preparation.SAMPLE_RATE, dtype=np.float32)
         samples[30 * preparation.SAMPLE_RATE:30 * preparation.SAMPLE_RATE + 1600] = 0.02
@@ -80,6 +203,20 @@ class PreparationTests(unittest.TestCase):
             def process(self, samples):
                 return Result()
 
+        class Stream:
+            def accept_waveform(self, rate, samples):
+                pass
+            def input_finished(self):
+                pass
+
+        class Extractor:
+            def create_stream(self):
+                return Stream()
+            def is_ready(self, stream):
+                return True
+            def compute(self, stream):
+                return [1., 0., 0.]
+
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent / "validation") as temporary:
             session = Path(temporary)
             rate = 48000
@@ -90,8 +227,10 @@ class PreparationTests(unittest.TestCase):
             sf.write(session / "system.wav", voice, rate)
             original = {source: (session / f"{source}.wav").read_bytes() for source in ("mic", "system")}
             (session / "session.json").write_text(json.dumps({"capture_offsets_ms": {"system": 1000}}))
-            segments = preparation.prepare_session(session, "unused", "unused", diarizer=Diarizer())
+            segments = preparation.prepare_session(session, "unused", "unused", diarizer=Diarizer(),
+                                                     embedding_extractor=Extractor())
             self.assertEqual([item["speaker"] for item in segments], ["mic_01", "system_01"])
+            self.assertEqual([item["global_speaker"] for item in segments], ["speaker_01", "speaker_01"])
             self.assertAlmostEqual(segments[1]["start"], 1.1)
             for item in segments:
                 audio, audio_rate = sf.read(item["text_audio"])

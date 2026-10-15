@@ -93,15 +93,156 @@ class NoteTests(unittest.TestCase):
     def test_retry_preserves_user_notes_and_single_transcript(self):
         with tempfile.TemporaryDirectory() as folder:
             note = Path(folder) / "note.md"
-            worker.save_note(note, "第一次转写")
+            ownership = worker.save_note(note, "第一次转写")
             with note.open("a", encoding="utf-8") as stream:
                 stream.write("用户手写：周五确认预算。\n")
-            worker.save_note(note, "恢复后的完整转写")
+            worker.save_note(note, "恢复后的完整转写", ownership)
             content = note.read_text(encoding="utf-8")
             self.assertIn("用户手写：周五确认预算。", content)
             self.assertIn("恢复后的完整转写", content)
             self.assertNotIn("第一次转写", content)
-            self.assertEqual(content.count(worker.BEGIN), 1)
+            self.assertNotIn(worker.BEGIN, content)
+            self.assertNotIn(worker.END, content)
+            self.assertNotIn("我的笔记", content)
+
+    def test_generated_text_edit_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as folder:
+            note = Path(folder) / "note.md"
+            ownership = worker.save_note(note, "转写正文")
+            note.write_bytes(note.read_bytes().replace("正文".encode(), "正文的手写修订".encode()))
+            original = note.read_bytes()
+            with self.assertRaises(ValueError):
+                worker.save_note(note, "新正文", ownership)
+            self.assertEqual(note.read_bytes(), original)
+
+    def test_new_note_is_compact_and_bookmarks_use_meeting_timeline(self):
+        metadata = {"start_time": "2026-10-14T15:00:00+08:00", "duration_seconds": 80,
+                    "bookmarks": [{"time_seconds": 62.1, "label": "预算确认"},
+                                  {"time_seconds": 8, "label": "重点 1"}]}
+        result = {"segments": [{"start": 1, "end": 3, "speaker": "mic_01", "status": "done",
+                                "text": "会议\u200b  记录"}]}
+        content = worker.render_note(Path("audio"), Path("vault"), metadata, result=result)
+        for unwanted in ("录制时间", "时长：", "转写引擎", "我的笔记", worker.BEGIN, worker.END):
+            self.assertNotIn(unwanted, content)
+        self.assertIn("## 重点时刻", content)
+        self.assertIn("[01:02] 预算确认", content)
+        self.assertLess(content.index("[00:08]"), content.index("[01:02]"))
+        self.assertNotIn("\u200b", content)
+
+    def test_duplicate_suppression_requires_waveform_text_and_overlap_evidence(self):
+        system = {"segment_id": "system_00000", "source": "system", "start": 1, "end": 4,
+                  "speaker": "system_01", "status": "done", "text": "确认预算。"}
+        mic = {**system, "segment_id": "mic_00000", "source": "mic", "speaker": "mic_01",
+               "possible_duplicate_of": "system_00000", "waveform_similarity": 0.999}
+        def render(rows):
+            return worker.render_note(Path("audio"), Path("vault"),
+                                      {"start_time": "2026-10-14T15:00:00+08:00"},
+                                      result={"segments": rows})
+        self.assertEqual(render([mic, system]).count("确认预算。"), 1)
+        self.assertEqual(render([{**mic, "waveform_similarity": 0.8}, system]).count("确认预算。"), 2)
+        self.assertIn("重新确认预算。", render([{**mic, "text": "重新确认预算。"}, system]))
+        self.assertEqual(render([{**mic, "start": 4, "end": 7}, system]).count("确认预算。"), 2)
+        self.assertEqual(render([{key: value for key, value in mic.items()
+                                  if key != "possible_duplicate_of"}, system]).count("确认预算。"), 2)
+
+    def test_global_speaker_uses_one_label_across_sources_and_unknown_stays_unassigned(self):
+        base = {"start": 1, "end": 3, "status": "done", "speaker_global": True,
+                "global_speaker": "speaker_01", "speaker_status": "matched"}
+        rows = [{**base, "speaker": "mic_02", "text": "确认预算。"},
+                {**base, "start": 4, "end": 6, "speaker": "system_01", "text": "周五完成。"},
+                {**base, "start": 6, "end": 7, "speaker": "system_03", "text": "收到。",
+                 "speaker_global": False, "speaker_status": "unknown", "global_speaker": None}]
+        content = worker.render_note(Path("audio"), Path("vault"),
+                                     {"start_time": "2026-10-14T15:00:00+08:00"}, result={"segments": rows})
+        self.assertEqual(content.count("] 说话人 01**"), 2)
+        self.assertNotIn("麦克风 · 说话人", content)
+        self.assertIn("说话人待确认 · 电脑声音", content)
+        self.assertNotIn("每条音轨内", content)
+
+    def test_session_note_ownership_survives_progress_status_updates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "work"
+            session.mkdir()
+            note = Path(folder) / "note.md"
+            worker.status(session, "正在转写")
+            worker.save_session_note(session, note, "第一次转写")
+            worker.status(session, "正在处理", stage="asr")
+            worker.save_session_note(session, note, "完整转写")
+            self.assertIn("完整转写", note.read_text(encoding="utf-8"))
+            self.assertNotIn("第一次转写", note.read_text(encoding="utf-8"))
+            self.assertIn("managed_note", worker.read_json(session / "status.json"))
+
+    def test_prepared_waveform_evidence_joins_results_without_changing_checkpoint(self):
+        from asr_engine import read_segments
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "segments.json"
+            clip = Path(folder) / "clip.wav"
+            sf.write(clip, np.zeros(1600), 16000)
+            row = {"start": 0, "end": 0.1, "speaker": "mic_01", "text_audio": "clip.wav",
+                   "segment_id": "mic_00000", "possible_duplicate_of": "system_00000",
+                   "waveform_similarity": 0.999, "speaker_global": True,
+                   "global_speaker": "speaker_01", "speaker_status": "matched", "source": "mic"}
+            source.write_text(json.dumps([row]), encoding="utf-8")
+            actual = {**read_segments(source)[0], "status": "done", "text": "确认预算。"}
+            result = {"segments": [actual]}
+            merged = worker.transcript_with_evidence(Path(folder), result)["segments"][0]
+            for key in ("segment_id", "possible_duplicate_of", "waveform_similarity", "speaker_global",
+                        "global_speaker", "speaker_status", "source"):
+                self.assertEqual(merged[key], row[key])
+                self.assertNotIn(key, actual)
+            for invalid in (-0.1, 1.01, "0.999", True, float("nan")):
+                with self.subTest(invalid=invalid):
+                    source.write_text(json.dumps([{**row, "waveform_similarity": invalid}]), encoding="utf-8")
+                    merged = worker.transcript_with_evidence(Path(folder), result)["segments"][0]
+                    self.assertNotIn("waveform_similarity", merged)
+            source.write_text(json.dumps([{**row, "speaker": "mic_02"}]), encoding="utf-8")
+            self.assertEqual(worker.transcript_with_evidence(Path(folder), result), result)
+
+    def test_manifest_to_asr_checkpoint_to_note_retains_only_verified_digital_duplicate(self):
+        import asr_engine
+        import prepare_audio
+
+        class Turn:
+            start, end, speaker = 0.1, 1.9, 0
+
+        class Diarizer:
+            def process(self, samples):
+                return SimpleNamespace(sort_by_start_time=lambda: [Turn()])
+
+        class Backend:
+            def __init__(self, *args):
+                pass
+
+            def transcribe(self, row):
+                return "预算确认在周五完成。"
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder)
+            samples = (np.sin(np.arange(96000) * 2 * np.pi * 300 / 48000) * 0.03).astype(np.float32)
+            for source in ("mic", "system"):
+                sf.write(session / (source + ".wav"), samples, 48000)
+            metadata = {"start_time": "2026-10-14T15:00:00+08:00"}
+            (session / "session.json").write_text(json.dumps(metadata), encoding="utf-8")
+            prepared = prepare_audio.prepare_session(session, "unused", "unused", diarizer=Diarizer())
+            self.assertEqual(len(prepared), 2)
+            self.assertIn("possible_duplicate_of", prepared[0])
+            model = session / "model"
+            model.mkdir()
+            args = SimpleNamespace(segments=str(session / "segments.json"), output=None,
+                                   status=str(session / "asr_status.json"), model_dir=str(model),
+                                   context="", max_new_tokens=512, device="cpu", no_cpu_fallback=True)
+            with patch.object(asr_engine, "release_cuda"):
+                self.assertEqual(asr_engine.run_job(args, backend_factory=Backend), 0)
+            before = (session / "result.json").read_bytes()
+            result = worker.transcript_with_evidence(session, worker.read_json(session / "result.json"))
+            note = worker.render_note(session, session, metadata, result=result)
+            self.assertEqual(note.count("预算确认在周五完成。"), 1)
+            self.assertEqual((session / "result.json").read_bytes(), before)
+            with patch.object(asr_engine, "release_cuda"):
+                self.assertEqual(asr_engine.run_job(args, backend_factory=lambda *args: self.fail("cached result")), 0)
 
     def test_damaged_markers_do_not_overwrite_note(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -135,6 +276,17 @@ class NoteTests(unittest.TestCase):
             self.assertNotEqual(first, second)
             with self.assertRaises(ValueError):
                 worker.note_location(vault.parent / "outside", config, metadata)
+
+    def test_named_note_path_is_local_and_completed_retry_uses_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            vault = Path(folder)
+            metadata = {"start_time": "2026-10-14T15:00:00+08:00", "note_filename": "预算确认.md"}
+            config = {"vault_root": str(vault)}
+            session = vault / "audio"
+            self.assertEqual(worker.note_location(session, config, metadata)[1], vault / "会议记录" / "预算确认.md")
+            for invalid in ("../other.md", "..\\other.md", "other.txt", ".md", "C:\\other.md"):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    worker.note_location(session, config, {**metadata, "note_filename": invalid})
 
 
 class MinimalStorageTests(unittest.TestCase):
@@ -192,6 +344,45 @@ class MinimalStorageTests(unittest.TestCase):
                          ["session.json", "status.json"])
         self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
 
+    def test_recorded_denoise_mode_is_used_after_configuration_changes(self):
+        self.metadata["asr_denoise"] = "off"
+        (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        commands = []
+
+        def stage(session, command, name):
+            if name == "prepare":
+                commands.append(command)
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(stage), 0)
+        self.assertEqual(commands[0][commands[0].index("--asr-denoise") + 1], "off")
+
+    def test_legacy_retry_keeps_prepared_audio_mode_without_recreating_clips(self):
+        self.config["asr_denoise"] = "off"
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+
+        def fail_asr(session, command, name):
+            if name == "asr":
+                raise RuntimeError("fixture interrupted ASR")
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(fail_asr), 1)
+        cache = worker.read_json(self.session / "prepared_input.json")
+        self.assertEqual(cache["asr_denoise"], "off")
+        # Simulate a cache from a release predating the optional filter.
+        cache.pop("asr_denoise")
+        worker.atomic_json(self.session / "prepared_input.json", cache)
+        self.config["asr_denoise"] = "light"
+        (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        names = []
+
+        def resume(session, command, name):
+            names.append(name)
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(resume), 0)
+        self.assertEqual(names, ["asr"])
+
     def test_completed_retry_keeps_handwritten_md_without_reloading_model(self):
         self.assertEqual(self.process(), 0)
         note = worker.note_location(self.session, self.config, self.metadata)[1]
@@ -207,12 +398,29 @@ class MinimalStorageTests(unittest.TestCase):
         self.assertEqual(note.read_bytes(), content)
         self.assertEqual((self.output / "meeting.wav").stat().st_mtime_ns, audio_modified)
 
+    def test_completed_named_meeting_retries_without_recreating_old_filename(self):
+        self.assertEqual(self.process(), 0)
+        old_note = worker.note_location(self.session, self.config, self.metadata)[1]
+        self.metadata["note_filename"] = "预算确认.md"
+        (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        new_note = worker.note_location(self.session, self.config, self.metadata)[1]
+        old_note.replace(new_note)
+        state = worker.read_json(self.session / "status.json")
+        state["note_path"] = str(new_note)
+        state["managed_note"]["path"] = str(new_note)
+        worker.atomic_json(self.session / "status.json", state)
+        before = new_note.read_bytes()
+        with patch.object(worker, "run_stage", side_effect=AssertionError("completed meeting needs no model")):
+            self.assertEqual(worker.process_session(self.session), 0)
+        self.assertFalse(old_note.exists())
+        self.assertEqual(new_note.read_bytes(), before)
+
     def test_legacy_local_session_cannot_be_uploaded_after_config_switches_to_api(self):
         self.config.update(transcription_mode="api", api_base_url="https://provider.example/v1",
                            api_model="api-model")
         (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
         note = worker.note_location(self.session, self.config, self.metadata)[1]
-        worker.save_note(note, "已有转写内容，不能因配置改变而覆盖")
+        worker.save_session_note(self.session, note, "已有转写内容，不能因配置改变而覆盖")
         self.output.mkdir(parents=True)
         sf.write(self.output / "meeting.wav", np.zeros((48, 2)), 48000, subtype="PCM_16")
         note_before = note.read_bytes()
@@ -469,7 +677,7 @@ class MinimalStorageTests(unittest.TestCase):
         note = worker.note_location(self.session, self.config, self.metadata)[1]
         before_note = note.read_bytes()
         before_source = (self.session / "mic.wav").read_bytes()
-        modified_note = before_note.replace(worker.END.encode(), b"<!-- user edited marker -->")
+        modified_note = before_note.replace("未检测到可转写的讲话".encode(), "用户修订：没有讲话".encode())
         modified_note += "\r\n手写内容保持原样。\r\n".encode("utf-8")
         note.write_bytes(modified_note)
         with patch.object(worker, "run_stage", side_effect=AssertionError("must not load a model")):

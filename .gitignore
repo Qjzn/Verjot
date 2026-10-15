@@ -17,6 +17,11 @@
 !/test_api_asr.py
 !/test_tingji_config.py
 !/ObsidianMeeting.cs
+!/ObsidianMeeting.exe.config
+!/app.manifest
+!/MeetingActions.cs
+!/TestMeetingActions.cs
+!/TestMeetingHotkeys.cs
 !/SessionCatalog.cs
 !/TestSessionCatalog.cs
 !/TestRecorderPanel.cs
@@ -54,6 +59,7 @@
 !/documentation/ai-install.md
 !/documentation/configuration.md
 !/documentation/product-scope.md
+!/documentation/quality.md
 
 # Personal configuration, captured audio, models, caches, logs, validation
 # screenshots and build products remain local even when placed in subfolders.

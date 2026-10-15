@@ -92,6 +92,8 @@ internal static class TestMeetingExperience {
             var panel = (RecorderPanel)Field(context, "panel");
             var recent = (ToolStripMenuItem)Field(context, "recent");
             var menu = tray.ContextMenuStrip;
+            Check(menu.Items["bookmark"] != null, "The actual menu needs a bookmark action");
+            Check(panel.ContextMenuStrip == menu, "The floating window needs the shared recording context menu");
             // Exercise the actual first menu opening. WinForms will not offer
             // an expansion affordance for an initially empty child menu, so
             // calling RefreshRecentMenu directly hides this entry-point bug.
@@ -114,7 +116,7 @@ internal static class TestMeetingExperience {
             Check(((NotifyIcon)Field(context, "tray")).Text.Contains("23/80"), "Tray must expose progress without relying on balloons");
             panel.Show(); panel.CollapseButton.PerformClick(); Call(context, "Tick");
             Check(!panel.Visible, "Progress updates must respect a collapsed panel");
-            Check(panel.ClientSize == new Size(186, 68), "Processing must remain 186 x 68");
+            Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Processing must remain 186 x 68");
             string b = Fixture("20261014-120001", "recorded");
             Call(context, "SaveLastSession", b, null);
             Set(context, "recording", FakeActiveRecording(b));

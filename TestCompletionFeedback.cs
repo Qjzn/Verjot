@@ -30,8 +30,10 @@ internal static class TestCompletionFeedback {
         if (file != null) bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png); return bitmap;
     }
     static bool Different(Bitmap a, Bitmap b) {
-        for (int y = 59; y < Math.Min(a.Height, b.Height) - 2; y++)
-            for (int x = 10; x < Math.Min(a.Width, b.Width) - 10; x++) if (a.GetPixel(x, y) != b.GetPixel(x, y)) return true;
+        int height = Math.Min(a.Height, b.Height), width = Math.Min(a.Width, b.Width);
+        int margin = (int)Math.Round(10 * width / 186.0);
+        for (int y = (int)Math.Round(59 * height / 68.0); y < height - (int)Math.Round(2 * height / 68.0); y++)
+            for (int x = margin; x < width - margin; x++) if (a.GetPixel(x, y) != b.GetPixel(x, y)) return true;
         return false;
     }
     static void NativeLinkClick(LinkLabel link) {
@@ -85,7 +87,7 @@ internal static class TestCompletionFeedback {
                 Call(panel, "ShowResult", session, audio, note, root);
                 Check(!timer.Enabled && !panel.Heading.Visible && !panel.Detail.Visible, "Results must replace generic completion text and stop loading");
                 var audioLink = (LinkLabel)Field(panel, "AudioFile"); var noteLink = (LinkLabel)Field(panel, "TranscriptFile");
-                Check(audioLink.Visible && noteLink.Visible && panel.ClientSize == new Size(186, 68), "Both file destinations must fit the existing panel");
+                Check(audioLink.Visible && noteLink.Visible && panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Both file destinations must fit the existing panel");
                 Check(audioLink.Text.Contains("录音") && audioLink.Text.Contains("meeting.wav") && noteLink.Text.Contains("转录") && noteLink.Text.Contains(".md"), "Result rows must identify both actual artifacts");
                 Check(TextRenderer.MeasureText(audioLink.Text, audioLink.Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width <= audioLink.Width, "Rendered compact paths must retain the audio basename within the available width");
                 Check(audioLink.AutoEllipsis && panel.DevicesTip.GetToolTip(audioLink).Contains(audio), "Long audio paths must retain the full absolute path in a tooltip");

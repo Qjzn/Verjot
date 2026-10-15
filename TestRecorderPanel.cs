@@ -37,7 +37,7 @@ internal static class TestRecorderPanel {
                 panel.ShowRecording("Test microphone", "Test speakers");
                 panel.Show();
                 Application.DoEvents();
-                Check(panel.ClientSize == new Size(186, 68), "Panel must remain 186 x 68");
+                Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Panel must remain 186 x 68");
                 Check(panel.TopMost && !panel.ShowInTaskbar, "Panel must be topmost without a taskbar window");
                 Check(!panel.Heading.Visible, "Recording must not put a whole-meeting label under the microphone");
                 using (var stop = new Bitmap(panel.StopButton.Width, panel.StopButton.Height)) {
@@ -97,7 +97,7 @@ internal static class TestRecorderPanel {
                 Application.DoEvents();
                 Check(panel.MicrophoneButton.Visible && panel.StopButton.Visible && panel.AudioLevel.Visible && !panel.Detail.Visible, "A new recording must restore its controls");
                 Check(panel.DevicesTip.GetToolTip(panel.AudioLevel).IndexOf("默认设备已变化", StringComparison.Ordinal) < 0, "A new recording must clear prior device warnings");
-                Check(panel.ClientSize == new Size(186, 68), "Processing must not resize the panel");
+                Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Processing must not resize the panel");
                 panel.AllowClose = true;
                 panel.Close();
             }

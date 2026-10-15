@@ -85,8 +85,9 @@ def validate_config(config: dict, *, check_directory: bool = True) -> dict:
     output = ordinary_path(root / folder)
     if output.is_file():
         raise ValueError("meeting_folder 已被同名文件占用，请改用目录")
-    if parse_hotkey(result["hotkey"]) == parse_hotkey(result["pause_hotkey"]):
-        raise ValueError("开始/结束快捷键和暂停快捷键必须不同")
+    shortcuts = [parse_hotkey(result[key]) for key in ("hotkey", "pause_hotkey", "bookmark_hotkey")]
+    if len(set(shortcuts)) != len(shortcuts):
+        raise ValueError("开始/结束、暂停和标记重点快捷键必须各不相同")
     if result["transcription_mode"] == "api":
         try:
             url = urlsplit(result["api_base_url"])

@@ -50,7 +50,8 @@ internal sealed class SessionCatalog {
             try {
                 string session = CheckSession(folder);
                 if (!File.Exists(Path.Combine(session, "session.json"))) continue;
-                result.Add(ReadRecord(session, legacy));
+                var record = ReadRecord(session, legacy);
+                if (record.State != "removed") result.Add(record);
             } catch (Exception error) {
                 result.Add(InvalidRecord(folder, error));
             }
@@ -157,11 +158,22 @@ internal sealed class SessionCatalog {
                 if (merged != null) audio = Text(merged, "published_path", Text(merged, "path", ""));
             }
             record.AudioPath = ArtifactPath(audio, session, ".wav");
-            bool hasArtifacts = record.NotePath.Length != 0 && record.AudioPath.Length != 0 &&
-                File.Exists(record.NotePath) && File.Exists(record.AudioPath) &&
-                Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
-            record.State = hasArtifacts ? "completed" : "missing";
-            if (!hasArtifacts) record.Message = "会议录音或转录成品需要检查；保留资料不会自动重新转写";
+            bool declaredArtifacts = record.NotePath.Length != 0 && record.AudioPath.Length != 0;
+            bool noteExists = File.Exists(record.NotePath), audioExists = File.Exists(record.AudioPath);
+            bool verifiedStatus = Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
+            bool hasArtifacts = declaredArtifacts && noteExists && audioExists && verifiedStatus;
+            // A clean final status with both named outputs removed represents a
+            // user-cleared meeting. Keep its private metadata untouched, while a
+            // single missing output, failed publication or unavailable vault
+            // still requires inspection rather than silently disappearing.
+            bool removedArtifacts = declaredArtifacts && !noteExists && !audioExists && verifiedStatus &&
+                Text(status, "cleanup_error", "").Length == 0 &&
+                !Directory.Exists(record.NotePath) && !Directory.Exists(record.AudioPath) &&
+                (Within(record.NotePath, session) || Directory.Exists(artifactRoot)) &&
+                (Within(record.AudioPath, session) || Directory.Exists(artifactRoot));
+            record.State = hasArtifacts ? "completed" : removedArtifacts ? "removed" : "missing";
+            if (removedArtifacts) record.Message = "会议成品已移除";
+            else if (!hasArtifacts) record.Message = "会议录音或转录成品需要检查；保留资料不会自动重新转写";
             else if (record.Message.Length == 0) record.Message = "录音和转录笔记已保存";
             if (hasArtifacts && Text(status, "cleanup_error", "").Length != 0)
                 record.Message += "；临时资料清理未完成，已保留";
@@ -186,7 +198,8 @@ internal sealed class SessionCatalog {
             if (!record.CanRetry) record.Message = "未发现可重试的原始录音，请检查保留资料；不会自动重新转写";
         }
         record.Fingerprint = Fingerprint(record, status);
-        record.NeedsAttention = !record.WorkerAlive && Text(controller, "notified_fingerprint", "") != record.Fingerprint;
+        record.NeedsAttention = !record.WorkerAlive && record.State != "removed" &&
+            Text(controller, "notified_fingerprint", "") != record.Fingerprint;
         return record;
     }
 
@@ -295,9 +308,17 @@ internal sealed class SessionCatalog {
     }
     static string Label(string session, Dictionary<string, object> metadata) {
         DateTimeOffset time;
+        string label = Path.GetFileName(session);
         if (DateTimeOffset.TryParse(Text(metadata, "start_time", ""), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out time))
-            return time.ToLocalTime().ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-        return Path.GetFileName(session);
+            label = time.ToLocalTime().ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        var title = new StringBuilder();
+        foreach (char character in Text(metadata, "title", "")) {
+            if (char.GetUnicodeCategory(character) == UnicodeCategory.Format) continue;
+            title.Append(char.IsControl(character) ? ' ' : character);
+            if (title.Length == 64) break;
+        }
+        string safeTitle = title.ToString().Trim();
+        return safeTitle.Length == 0 ? label : label + " · " + safeTitle;
     }
     static string Fingerprint(SessionRecord record, Dictionary<string, object> status) {
         string text = record.State + "\n" + Text(status, "updated_at", "") + "\n" + record.NotePath + "\n" + record.AudioPath +
