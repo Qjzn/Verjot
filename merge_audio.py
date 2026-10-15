@@ -12,16 +12,19 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
+from audio_sources import capture_sources
+
 
 SAMPLE_RATE = 48000
 CHANNELS = 2
-VERSION = 1
+VERSION = 2
 
 
 def _fingerprint(session: Path, metadata: dict) -> str:
     files = []
-    for source in ("mic", "system"):
-        path = session / f"{source}.wav"
+    for entry in capture_sources(session, metadata):
+        source = entry["source"]
+        path = session / entry["path"]
         if path.is_file():
             info = path.stat()
             files.append([source, info.st_size, info.st_mtime_ns])
@@ -102,10 +105,9 @@ def merge_session(session: Path, metadata: dict, block_frames: int = SAMPLE_RATE
         with ExitStack() as resources:
             tracks = []
             frames = int(round(duration * SAMPLE_RATE))
-            for source in ("mic", "system"):
-                path = session / f"{source}.wav"
-                if not path.is_file():
-                    continue
+            for entry in capture_sources(session, metadata):
+                source = entry["source"]
+                path = session / entry["path"]
                 offset_seconds = float(metadata.get("capture_offsets_ms", {}).get(source, 0)) / 1000
                 if not math.isfinite(offset_seconds) or offset_seconds < 0:
                     raise ValueError("capture_offsets_ms must contain non-negative finite numbers")

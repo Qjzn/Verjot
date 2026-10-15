@@ -289,6 +289,29 @@ internal static class TestMeetingExperience {
             File.Delete(Path.Combine(removed, "session.json")); File.Delete(Path.Combine(removed, "mic.wav")); Directory.Delete(removed);
             Call(context, "Tick");
             Check(panel.Heading.Text.Contains("检查"), "Removed session must give a safe status instead of crashing the timer");
+            // Successful transcription cannot certify that capture was intact.
+            // Exercise the real completion callback and native recent menu.
+            string warned = Fixture("20261014-120008", "recorded_with_error");
+            var warnedMetadata = MeetingFiles.ReadJson(Path.Combine(warned, "session.json"));
+            warnedMetadata["title"] = "Native capture-warning fixture";
+            warnedMetadata["capture_error"] = "Synthetic device discontinuity";
+            MeetingFiles.WriteJson(Path.Combine(warned, "session.json"), warnedMetadata);
+            Set(context, "workerLauncher", new Func<string, Process>(delegate(string session) { return Child(true); }));
+            Call(context, "LaunchWorker", warned);
+            string warningNote = Path.Combine((string)config["vault_root"], "warning.md");
+            string warningAudio = Path.Combine((string)config["vault_root"], "warning.wav");
+            Complete(warned, warningNote, warningAudio);
+            config["auto_open_completed_note"] = true;
+            int opensBeforeWarning = autoOpens;
+            children[children.Count - 1].WaitForExit(10000); Call(context, "Tick");
+            Check(((List<TranscriptionJob>)Field(context, "jobs")).Count == 0, "Capture warning must finish the job without restarting ASR");
+            Check(panel.Heading.Text == "采集异常 · 检查录音", "Completed transcription must retain an explicit capture warning");
+            Check(autoOpens == opensBeforeWarning, "Capture warning must not automatically open the note as a normal success");
+            var warningItem = OpenRecent(menu, recent, "Native capture-warning fixture");
+            Check(warningItem != null && warningItem.Text.Contains("采集异常") && !warningItem.Text.Contains("成品缺失"), "Capture errors with existing files must not become a missing-artifact alarm");
+            Check(MenuAction(warningItem, "打开转录笔记") != null && MenuAction(warningItem, "定位录音文件") != null, "Warning results must keep both published files reachable");
+            Check(MenuAction(warningItem, "重试这场转写") == null, "A completed warning must not offer an ineffective ASR retry");
+            menu.Close();
             Console.WriteLine("Meeting experience: " + assertions + " assertions passed; no audio, model, cloud or external editor.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

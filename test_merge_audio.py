@@ -116,6 +116,35 @@ class MergeTests(unittest.TestCase):
             self.merge()
         self.assertEqual((self.session / "meeting.wav").read_bytes(), original)
 
+    def test_all_declared_outputs_and_switched_microphones_share_one_timeline(self):
+        self.metadata["sources"] = [
+            {"source": key, "path": key + ".wav", "kind": kind}
+            for key, kind in (("mic", "microphone"), ("mic_02", "microphone"),
+                              ("system", "loopback"), ("system_02", "loopback"))]
+        expected = np.zeros(48000, dtype=np.float32)
+        for index, row in enumerate(self.metadata["sources"]):
+            samples = np.zeros(48000, dtype=np.float32)
+            first = 1000 + index * 10000
+            samples[first:first + 50] = 0.1 * (index + 1)
+            self.write(row["source"], samples, 48000)
+            expected += samples
+        self.merge(block_frames=4096)
+        actual, _ = self.output()
+        np.testing.assert_allclose(actual[:, 0], expected, atol=1 / 32768)
+        before = (self.session / "meeting.wav").read_bytes()
+        self.write("system_02", np.zeros(48000), 48000)
+        self.assertFalse(self.merge()["reused"])
+        self.assertNotEqual((self.session / "meeting.wav").read_bytes(), before)
+
+    def test_declared_missing_endpoint_cannot_silently_publish_partial_audio(self):
+        self.write("system", np.full(48000, 0.1), 48000)
+        self.metadata["sources"] = [
+            {"source": "system", "path": "system.wav", "kind": "loopback"},
+            {"source": "system_02", "path": "system_02.wav", "kind": "loopback"}]
+        with self.assertRaisesRegex(ValueError, "system_02"):
+            self.merge()
+        self.assertFalse((self.session / "meeting.wav").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

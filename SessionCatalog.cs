@@ -177,18 +177,23 @@ internal sealed class SessionCatalog {
             bool noteExists = File.Exists(record.NotePath), audioExists = File.Exists(record.AudioPath);
             bool verifiedStatus = Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
             bool hasArtifacts = declaredArtifacts && noteExists && audioExists && verifiedStatus;
+            bool captureNeedsReview = metadataState == "recorded_with_error" ||
+                !string.IsNullOrWhiteSpace(Text(metadata, "capture_error", "")) ||
+                !string.IsNullOrWhiteSpace(Text(status, "capture_error", "")) ||
+                string.Equals(Text(status, "capture_needs_review", ""), "true", StringComparison.OrdinalIgnoreCase);
             // Completed files can be independently removed by the user. Keep a
             // neutral entry for a remaining file, hide fully cleared results,
             // and retain warnings for errors or an unavailable save directory.
             bool removableArtifacts = declaredArtifacts && verifiedStatus &&
                 Text(status, "cleanup_error", "").Length == 0 &&
-                Text(metadata, "capture_error", "").Length == 0 &&
+                !captureNeedsReview &&
                 !Directory.Exists(record.NotePath) && !Directory.Exists(record.AudioPath) &&
                 (Within(record.NotePath, session) || Directory.Exists(artifactRoot)) &&
                 (Within(record.AudioPath, session) || Directory.Exists(artifactRoot));
-            record.State = hasArtifacts ? "completed" : !removableArtifacts ? "missing" :
+            record.State = captureNeedsReview ? "capture_warning" : hasArtifacts ? "completed" : !removableArtifacts ? "missing" :
                 noteExists ? "transcript_only" : audioExists ? "audio_only" : "removed";
-            if (record.State == "removed") record.Message = "会议成品已移除";
+            if (record.State == "capture_warning") record.Message = "采集异常，请检查录音与转录；不能保证录音完整";
+            else if (record.State == "removed") record.Message = "会议成品已移除";
             else if (record.State == "transcript_only") record.Message = "仅保留转录，录音文件已移除";
             else if (record.State == "audio_only") record.Message = "仅保留录音，转录文件已移除";
             else if (!hasArtifacts) record.Message = "会议录音或转录成品需要检查；保留资料不会自动重新转写";
@@ -212,7 +217,7 @@ internal sealed class SessionCatalog {
         }
         if (record.CanRetry) {
             record.NotePath = ArtifactPath(Text(status, "note_path", ""), session, ".md");
-            record.CanRetry = HasOriginalAudio(session);
+            record.CanRetry = HasOriginalAudio(session, metadata);
             if (!record.CanRetry) record.Message = "未发现可重试的原始录音，请检查保留资料；不会自动重新转写";
         }
         record.Fingerprint = Fingerprint(record, status);
@@ -264,7 +269,29 @@ internal sealed class SessionCatalog {
         return path;
     }
 
-    static bool HasOriginalAudio(string session) {
+    static bool HasOriginalAudio(string session, Dictionary<string, object> metadata) {
+        object declared;
+        if (metadata.TryGetValue("sources", out declared)) {
+            var sources = declared as System.Collections.IList;
+            if (sources == null || sources.Count == 0) throw new IOException("会议录音来源清单无效");
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            bool complete = true;
+            foreach (object item in sources) {
+                var source = item as Dictionary<string, object>;
+                if (source == null) throw new IOException("会议录音来源必须为对象");
+                string name = Text(source, "source", "");
+                if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"\A(?:mic|system)(?:_[0-9]{2,})?\z") || !names.Add(name))
+                    throw new IOException("会议录音来源名称无效或重复");
+                string kind = name == "mic" || name.StartsWith("mic_", StringComparison.Ordinal) ? "microphone" : "loopback";
+                if (Text(source, "kind", "") != kind || Text(source, "path", "") != name + ".wav")
+                    throw new IOException("会议录音来源类型或路径无效");
+                string path = Path.Combine(session, name + ".wav");
+                CheckOrdinary(path);
+                if (Directory.Exists(path)) throw new IOException("会议录音来源不能为目录");
+                if (!File.Exists(path)) complete = false;
+            }
+            return complete;
+        }
         bool found = false;
         foreach (string name in new[] { "mic.wav", "system.wav" }) {
             string path = Path.Combine(session, name);
@@ -285,8 +312,24 @@ internal sealed class SessionCatalog {
 
     Dictionary<string, object> ReadJson(string path, bool optional) {
         CheckOrdinary(path);
-        if (optional && !File.Exists(path)) return new Dictionary<string, object>();
-        var data = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+        bool observed = File.Exists(path);
+        string snapshot;
+        for (int attempt = 0; ; attempt++) {
+            try {
+                CheckOrdinary(path);
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8)) snapshot = reader.ReadToEnd();
+                break;
+            } catch (IOException error) {
+                if (attempt >= 3) {
+                    if (optional && !observed && (error is FileNotFoundException || error is DirectoryNotFoundException))
+                        return new Dictionary<string, object>();
+                    throw;
+                }
+                System.Threading.Thread.Sleep(10);
+            }
+        }
+        var data = json.Deserialize<Dictionary<string, object>>(snapshot);
         if (data == null) throw new IOException("会议状态 JSON 顶层必须为对象");
         return data;
     }

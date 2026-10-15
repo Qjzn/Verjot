@@ -65,6 +65,61 @@ internal static class TestSessionCatalog {
         Write(Path.Combine(noRaw, "status.json"), new { state = "error", message = "fixture failure" });
         True(catalog.Get(noRaw).State == "failed" && !catalog.Get(noRaw).CanRetry,
             "failed meeting without original tracks only offers inspection");
+        string numbered = Session("20261014-111100", "recorded");
+        File.Delete(Path.Combine(numbered, "mic.wav"));
+        string numberedAudio = Path.Combine(numbered, "system_02.wav");
+        File.WriteAllText(numberedAudio, "numbered track existence only");
+        Write(Path.Combine(numbered, "session.json"), new { state = "recorded", session_dir = numbered,
+            sources = new[] { new { source = "system_02", path = "system_02.wav", kind = "loopback" } } });
+        True(catalog.Get(numbered).State == "retry" && catalog.Get(numbered).CanRetry,
+            "declared numbered-only capture can retry without legacy mic or system tracks");
+        Write(Path.Combine(numbered, "session.json"), new { state = "recorded", session_dir = numbered,
+            sources = new[] { new { source = "mic_02", path = "mic_02.wav", kind = "microphone" },
+                              new { source = "system_02", path = "system_02.wav", kind = "loopback" } } });
+        File.WriteAllText(Path.Combine(numbered, "mic.wav"), "unlisted legacy track");
+        True(!catalog.Get(numbered).CanRetry, "missing declared track cannot fall back to unlisted legacy mic");
+        File.WriteAllText(Path.Combine(numbered, "mic_02.wav"), "numbered microphone existence only");
+        True(catalog.Get(numbered).CanRetry, "all declared numbered tracks permit retry");
+        File.Delete(numberedAudio);
+        True(!catalog.Get(numbered).CanRetry, "one retained declared track cannot hide another missing track");
+        Directory.CreateDirectory(numberedAudio);
+        Equal(catalog.Get(numbered).State, "invalid", "declared capture replaced by directory is rejected");
+        Directory.Delete(numberedAudio);
+        foreach (string unsafePath in new[] { @"..\system_02.wav", @"subdir\system_02.wav", "subdir/system_02.wav",
+                                             Path.Combine(outside, "system_02.wav"), "system_02.wav:stream" }) {
+            Write(Path.Combine(numbered, "session.json"), new { state = "recorded", session_dir = numbered,
+                sources = new[] { new { source = "system_02", path = unsafePath, kind = "loopback" } } });
+            True(catalog.Get(numbered).State == "invalid" && !catalog.Get(numbered).CanRetry,
+                "declared capture path cannot escape its exact source basename: " + unsafePath);
+        }
+        foreach (object invalidSources in new object[] { null, new object[0], "system_02.wav",
+            new { source = "system_02", path = "system_02.wav", kind = "loopback" },
+            new[] { new { source = "system_02", path = "system_02.wav", kind = "microphone" } },
+            new[] { new { source = "system_2", path = "system_2.wav", kind = "loopback" } },
+            new[] { new { source = "system_02", path = "system_02.wav", kind = "loopback" },
+                    new { source = "system_02", path = "system_02.wav", kind = "loopback" } } }) {
+            Write(Path.Combine(numbered, "session.json"), new { state = "recorded", session_dir = numbered, sources = invalidSources });
+            True(catalog.Get(numbered).State == "invalid" && !catalog.Get(numbered).CanRetry,
+                "malformed or duplicated source manifest does not fall back to legacy tracks");
+        }
+        File.Delete(Path.Combine(numbered, "mic.wav"));
+        File.WriteAllText(numberedAudio, "unlisted numbered track");
+        Write(Path.Combine(numbered, "session.json"), new { state = "recorded", session_dir = numbered });
+        True(!catalog.Get(numbered).CanRetry, "legacy sessions do not guess undeclared numbered tracks");
+        File.WriteAllText(Path.Combine(numbered, "system.wav"), "legacy system track");
+        True(catalog.Get(numbered).CanRetry, "legacy system-only capture remains retryable");
+        string linkedCapture = Session("20261014-111200", "recorded");
+        string linkedRaw = Path.Combine(linkedCapture, "system_02.wav");
+        string outsideRaw = Path.Combine(outside, "original.wav");
+        File.WriteAllText(outsideRaw, "outside raw existence only");
+        if (CreateSymbolicLink(linkedRaw, outsideRaw, 2)) {
+            try {
+                Write(Path.Combine(linkedCapture, "session.json"), new { state = "recorded", session_dir = linkedCapture,
+                    sources = new[] { new { source = "system_02", path = "system_02.wav", kind = "loopback" } } });
+                True(catalog.Get(linkedCapture).State == "invalid" && !catalog.Get(linkedCapture).CanRetry,
+                    "declared numbered track symlink is rejected before retry");
+            } finally { File.Delete(linkedRaw); }
+        } else { skipped++; Console.WriteLine("SKIP: symbolic-link capture creation unavailable on this Windows account"); }
         string partialNote = Path.Combine(vault, "partial.md");
         File.WriteAllText(partialNote, "partial fixture transcript");
         Write(Path.Combine(failed, "status.json"), new { state = "error", note_path = partialNote });
@@ -85,6 +140,48 @@ internal static class TestSessionCatalog {
             "completed legacy merged_audio path resolves without reading audio");
         catalog.MarkNotified(finished);
         True(!new SessionCatalog(home, vault).Get(completed).NeedsAttention, "completed is not repeatedly announced");
+        string captureWarning = Session("20261014-120010", "recorded_with_error");
+        string warningNote = Path.Combine(vault, "capture-warning.md");
+        string warningAudio = Path.Combine(vault, "capture-warning.wav");
+        File.WriteAllText(warningNote, "capture warning note");
+        File.WriteAllText(warningAudio, "capture warning audio existence only");
+        Write(Path.Combine(captureWarning, "session.json"), new { state = "recorded_with_error", session_dir = captureWarning,
+            capture_error = "fixture capture discontinuity" });
+        Write(Path.Combine(captureWarning, "status.json"), new { state = "completed", result_complete = true,
+            note_path = warningNote, audio_path = warningAudio, message = "transcription completed" });
+        var warning = catalog.Get(captureWarning);
+        True(warning.State == "capture_warning" && warning.NeedsAttention && !warning.CanRetry,
+            "completed ASR does not conceal a capture error or offer ineffective retranscription");
+        True(warning.NotePath == warningNote && warning.AudioPath == warningAudio && warning.Message.Contains("采集异常"),
+            "capture warning retains both output routes and explains the capture problem");
+        catalog.MarkNotified(warning);
+        True(!new SessionCatalog(home, vault).Get(captureWarning).NeedsAttention,
+            "acknowledged capture warning does not alert again after restart");
+        Write(Path.Combine(captureWarning, "session.json"), new { state = "recorded_with_error", session_dir = captureWarning });
+        Equal(catalog.Get(captureWarning).State, "capture_warning", "recorded-with-error remains a warning without detailed error text");
+        Write(Path.Combine(captureWarning, "session.json"), new { state = "recorded", session_dir = captureWarning,
+            capture_error = "fixture capture failure" });
+        Equal(catalog.Get(captureWarning).State, "capture_warning", "metadata capture error remains authoritative with ordinary recorded state");
+        Write(Path.Combine(captureWarning, "session.json"), new { state = "recorded", session_dir = captureWarning });
+        Write(Path.Combine(captureWarning, "status.json"), new { state = "completed", note_path = warningNote,
+            audio_path = warningAudio, capture_needs_review = true });
+        Equal(catalog.Get(captureWarning).State, "capture_warning", "worker capture-review flag is reflected in history");
+        Write(Path.Combine(captureWarning, "status.json"), new { state = "completed", note_path = warningNote,
+            audio_path = warningAudio, capture_error = "fixture worker capture error" });
+        Equal(catalog.Get(captureWarning).State, "capture_warning", "worker capture error is reflected without a separate flag");
+        File.Delete(warningAudio);
+        True(catalog.Get(captureWarning).State == "capture_warning" && catalog.Get(captureWarning).NotePath == warningNote,
+            "removing one output cannot hide a capture warning or its retained transcript");
+        File.Delete(warningNote);
+        True(catalog.Get(captureWarning).State == "capture_warning" && Contains(catalog.Snapshot(), captureWarning),
+            "removing both outputs cannot hide known capture failure evidence");
+        File.WriteAllText(warningNote, "capture warning note");
+        File.WriteAllText(warningAudio, "capture warning audio existence only");
+        Write(Path.Combine(captureWarning, "status.json"), new { state = "completed", note_path = warningNote,
+            audio_path = warningAudio, capture_needs_review = false, capture_error = "" });
+        Write(Path.Combine(captureWarning, "session.json"), new { state = "recorded", session_dir = captureWarning,
+            diagnostics = new[] { new { timing_uncertain = true, message = "diagnostic alone" } } });
+        Equal(catalog.Get(captureWarning).State, "completed", "diagnostics alone do not invent a capture failure");
         File.Delete(audio);
         var transcriptOnly = catalog.Get(completed);
         True(transcriptOnly.State == "transcript_only" && !transcriptOnly.CanRetry && !transcriptOnly.NeedsAttention,
@@ -102,7 +199,7 @@ internal static class TestSessionCatalog {
         }
         Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note, audio_path = audio });
         Write(Path.Combine(completed, "session.json"), new { state = "recorded", session_dir = completed, capture_error = "fixture capture failure" });
-        True(catalog.Get(completed).State == "missing" && catalog.Get(completed).NeedsAttention,
+        True(catalog.Get(completed).State == "capture_warning" && catalog.Get(completed).NeedsAttention,
             "capture failure with a retained transcript is not classified as ordinary user removal");
         Write(Path.Combine(completed, "session.json"), new { state = "recorded", session_dir = completed });
         File.Delete(note);

@@ -11,6 +11,95 @@ import prepare_audio as preparation
 
 
 class PreparationTests(unittest.TestCase):
+    def test_echo_evidence_handles_delay_channel_response_and_preserves_inputs(self):
+        from scipy.signal import butter, sosfilt
+        rate = preparation.SAMPLE_RATE
+        random = np.random.default_rng(81)
+        system = sosfilt(butter(3, [160, 3000], btype="bandpass", fs=rate, output="sos"),
+                         random.normal(0, .03, 5 * rate)).astype(np.float32)
+        delayed = np.pad(sosfilt(butter(2, [120, 3200], btype="bandpass", fs=rate, output="sos"),
+                                system), (round(.12 * rate), 0))[:len(system)]
+        mic = (delayed + random.normal(0, .0005, len(system))).astype(np.float32)
+        before = mic.copy(), system.copy()
+        result = preparation.echo_evidence(mic, system, .5, 4.5)
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result["echo_delay_ms"], 120, delta=2)
+        self.assertGreaterEqual(result["echo_similarity"], .95)
+        self.assertGreaterEqual(result["echo_window_support"], .9)
+        self.assertGreaterEqual(result["echo_window_min_similarity"], .85)
+        self.assertLessEqual(result["echo_residual_ratio"], .10)
+        self.assertGreaterEqual(result["echo_window_count"], 3)
+        np.testing.assert_array_equal(mic, before[0])
+        np.testing.assert_array_equal(system, before[1])
+
+    def test_echo_evidence_rejects_different_simultaneous_voice_and_partial_near_voice(self):
+        from scipy.signal import butter, sosfilt
+        rate = preparation.SAMPLE_RATE
+        random = np.random.default_rng(82)
+        def voice():
+            return sosfilt(butter(3, [160, 3000], btype="bandpass", fs=rate, output="sos"),
+                           random.normal(0, .03, 5 * rate)).astype(np.float32)
+        system, own = voice(), voice()
+        different = preparation.echo_evidence(own, system, .5, 4.5)
+        self.assertTrue(different is None or different["echo_similarity"] < .5)
+        mixed = np.pad(system, (round(.1 * rate), 0))[:len(system)].copy()
+        mixed[2 * rate:3 * rate] += own[2 * rate:3 * rate]
+        result = preparation.echo_evidence(mixed, system, .5, 4.5)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["echo_window_min_similarity"] < .85
+                        or result["echo_residual_ratio"] > .10)
+        self.assertIsNone(preparation.echo_evidence(own, system, 0, 1))
+        self.assertIsNone(preparation.echo_evidence(np.zeros(rate * 2), np.zeros(rate * 2), 0, 2))
+
+    def test_numbered_capture_sources_use_their_own_offsets_for_duplicate_and_echo(self):
+        from scipy.signal import butter, sosfilt
+        rate = preparation.SAMPLE_RATE
+        voice = sosfilt(butter(3, [180, 3000], fs=rate, btype="bandpass", output="sos"),
+                        np.random.default_rng(91).normal(0, .03, 4 * rate)).astype(np.float32)
+        rows = [{"start": 5.5, "end": 8.5, "source": "mic_02", "segment_id": "mic_02_00001"},
+                {"start": 5.5, "end": 8.5, "source": "system_02", "segment_id": "system_02_00001"}]
+        sources = {"mic_02": voice.copy(), "system_02": voice.copy()}
+        preparation.mark_digital_duplicates(rows, sources, {"mic_02": 5, "system_02": 5})
+        self.assertEqual(rows[0]["possible_duplicate_of"], "system_02_00001")
+        rows[0].pop("possible_duplicate_of")
+        delay = round(.12 * rate)
+        sources["mic_02"] = np.pad(voice, (delay, 0))[:len(voice)]
+        preparation.mark_acoustic_echo(rows, sources, {"mic_02": 5, "system_02": 5})
+        self.assertEqual(rows[0]["echo_candidate_of"], "system_02_00001")
+        self.assertAlmostEqual(rows[0]["echo_delay_ms"], 120, delta=2)
+        self.assertEqual(len(rows), 2, "Echo candidates must retain both source segments")
+
+    def test_declared_multi_device_tracks_keep_each_timeline_and_source_kind(self):
+        import soundfile as sf
+        from unittest.mock import patch
+        class Turn:
+            start, end, speaker = .1, 1.3, 0
+        class Result:
+            def sort_by_start_time(self): return [Turn()]
+        class Diarizer:
+            def process(self, samples): return Result()
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent / "validation") as temporary:
+            session = Path(temporary)
+            entries = [{"source": key, "path": key + ".wav", "kind": kind}
+                       for key, kind in (("mic", "microphone"), ("system", "loopback"),
+                                         ("system_02", "loopback"))]
+            for index, entry in enumerate(entries):
+                samples = (.02 * np.sin(np.arange(32000) / 16000 * (200 + index * 80) * 2 * np.pi))
+                sf.write(session / entry["path"], samples, 16000)
+            (session / "session.json").write_text(json.dumps({"sources": entries,
+                "capture_offsets_ms": {"system_02": 2000}}), encoding="utf-8")
+            with patch.object(preparation, "mark_acoustic_echo") as detection:
+                rows = preparation.prepare_session(session, "unused", "unused", diarizer=Diarizer(),
+                                                   asr_echo_filter=False)
+            self.assertFalse(detection.called, "Opt-out must not run echo inference")
+            self.assertEqual({row["source"] for row in rows}, {"mic", "system", "system_02"})
+            last = next(row for row in rows if row["source"] == "system_02")
+            self.assertAlmostEqual(last["start"], 2.1)
+            self.assertEqual(last["source_kind"], "loopback")
+            summary = json.loads((session / "prepare_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(summary["sources"]), {"mic", "system", "system_02"})
+            self.assertFalse(summary["asr_echo_filter"])
+
     def test_light_denoise_removes_low_rumble_and_retains_speech_band(self):
         rate = preparation.SAMPLE_RATE
         time = np.arange(rate * 3) / rate

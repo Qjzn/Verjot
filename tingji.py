@@ -63,7 +63,7 @@ def doctor(full=False):
             add("asr_runtime", True, detail)
         except Exception:
             add("asr_runtime", False, "本地模型接口导入失败，请恢复 requirements.txt 中的运行库版本")
-    for name in ("ObsidianMeeting.exe", "NAudio.dll", "meeting_worker.py", "prepare_audio.py", "merge_audio.py",
+    for name in ("ObsidianMeeting.exe", "NAudio.dll", "meeting_worker.py", "prepare_audio.py", "merge_audio.py", "audio_sources.py",
                  "api_asr.py" if mode == "api" else "asr_engine.py"):
         add("file:" + name, (HOME / name).is_file(), "已就绪" if (HOME / name).is_file() else "文件缺失，请运行安装/构建脚本")
     models = HOME / "models"

@@ -78,6 +78,11 @@ internal static class TestMeetingActions {
             var entries = new List<Dictionary<string, object>>();
             var clock = Stopwatch.StartNew();
             Set(recording, "clock", clock); Set(recording, "DirectoryPath", marks); Set(recording, "bookmarks", entries);
+            // The no-device fixture bypasses every instance field initializer.
+            // Bookmark persistence now snapshots the capture inventory under its lock.
+            Set(recording, "gate", new object());
+            Set(recording, "sources", Activator.CreateInstance(typeof(RecordingSession).GetField("sources", BindingFlags.Instance | BindingFlags.NonPublic).FieldType));
+            Set(recording, "captureProblems", new List<string>());
             Set(recording, "metadata", new Dictionary<string, object> { { "bookmarks", entries } });
             double first = recording.AddBookmark(); Thread.Sleep(20); double second = recording.AddBookmark();
             Check(first >= 0 && second > first, "Bookmark positions follow the shared monotonic session clock");

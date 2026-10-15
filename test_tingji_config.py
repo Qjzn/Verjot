@@ -7,6 +7,16 @@ from meeting_worker import audio_link
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_multi_device_capture_defaults_and_explicit_override(self):
+        self.assertEqual(self.validate()["system_capture_mode"], "all_active")
+        self.assertEqual(self.validate(system_capture_mode="default")["system_capture_mode"], "default")
+        self.assertIs(self.validate()["asr_echo_filter"], True)
+        self.assertIs(self.validate(asr_echo_filter=False)["asr_echo_filter"], False)
+        for changes in ({"system_capture_mode": "all"}, {"system_capture_mode": True},
+                        {"asr_echo_filter": "true"}, {"asr_echo_filter": 1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.validate(**changes)
+
     def test_asr_denoise_defaults_to_light_and_can_be_disabled(self):
         self.assertEqual(self.validate()["asr_denoise"], "light")
         self.assertEqual(self.validate(asr_denoise="off")["asr_denoise"], "off")

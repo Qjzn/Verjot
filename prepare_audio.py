@@ -15,6 +15,8 @@ from typing import Callable
 
 import numpy as np
 
+from audio_sources import capture_sources, source_kind
+
 
 SAMPLE_RATE = 16000
 MAX_CLIP_SECONDS = 24.0
@@ -188,18 +190,18 @@ def mark_digital_duplicates(segments: list[dict], sources: dict[str, np.ndarray]
     Ordinary acoustic echo is deliberately left for transcript review. A high
     waveform similarity is evidence of duplication, not speaker identification.
     """
-    media = [item for item in segments if item["source"] == "system"]
-    for mic in (item for item in segments if item["source"] == "mic"):
+    media = [item for item in segments if source_kind(item["source"]) == "loopback"]
+    for mic in (item for item in segments if source_kind(item["source"]) == "microphone"):
         for system in media:
             begin, finish = max(mic["start"], system["start"]), min(mic["end"], system["end"])
             if finish - begin < max(0.8, (mic["end"] - mic["start"]) * 0.9):
                 continue
             count = int((finish - begin) * SAMPLE_RATE)
-            mic_start = max(0, int(round((begin - offsets["mic"]) * SAMPLE_RATE)))
-            system_start = max(0, int(round((begin - offsets["system"]) * SAMPLE_RATE)))
             # Subsampling is sufficient for this conservative same-waveform check.
-            a = sources["mic"][mic_start:mic_start + count:4].astype(np.float64)
-            b = sources["system"][system_start:system_start + count:4].astype(np.float64)
+            mic_start = max(0, int(round((begin - offsets.get(mic["source"], 0)) * SAMPLE_RATE)))
+            system_start = max(0, int(round((begin - offsets.get(system["source"], 0)) * SAMPLE_RATE)))
+            a = sources[mic["source"]][mic_start:mic_start + count:4].astype(np.float64)
+            b = sources[system["source"]][system_start:system_start + count:4].astype(np.float64)
             length = min(len(a), len(b))
             if length < SAMPLE_RATE // 5:
                 continue
@@ -209,6 +211,103 @@ def mark_digital_duplicates(segments: list[dict], sources: dict[str, np.ndarray]
             if denominator > 1e-8 and similarity >= 0.998:
                 mic["possible_duplicate_of"] = system["segment_id"]
                 mic["waveform_similarity"] = round(similarity, 6)
+                break
+
+
+def echo_evidence(mic: np.ndarray, system: np.ndarray, start: float, end: float,
+                  mic_offset: float = 0, system_offset: float = 0) -> dict | None:
+    """Measure delayed channel similarity; never edit or subtract recorded audio.
+
+    A small FIR models a fixed speaker/room frequency response. Each half-second
+    block is scored with a response fitted only on the other blocks, so matching
+    a flexible filter to the same samples cannot count as independent evidence.
+    Residual energy can still include quiet nearby speech: this is evidence for
+    conservative transcript deduplication, not acoustic echo cancellation.
+    """
+    from scipy import signal
+
+    if not 1.5 <= end - start <= MAX_CLIP_SECONDS + .5:
+        return None
+    rate, maximum_delay = 4000, .30
+    maximum = round(maximum_delay * rate)
+    sections = signal.butter(2, [150, 1700], btype="bandpass", fs=SAMPLE_RATE, output="sos")
+
+    def crop(samples, begin, finish, offset):
+        first, last = round((begin - offset) * SAMPLE_RATE), round((finish - offset) * SAMPLE_RATE)
+        cropped = np.zeros(last - first, dtype=np.float32)
+        left, right = max(0, first), min(len(samples), last)
+        if right > left:
+            cropped[left - first:right - first] = samples[left:right]
+        return signal.sosfiltfilt(sections, cropped)[::4].astype(np.float64)
+
+    a = crop(mic, start, end, mic_offset)
+    b = crop(system, start - maximum_delay, end, system_offset)
+    if np.dot(a, a) < 1e-10 or np.dot(b, b) < 1e-10:
+        return None
+    dots = signal.correlate(b, a, mode="valid", method="fft")
+    energy = np.r_[0., np.cumsum(b * b)]
+    norms = np.sqrt(np.maximum(1e-20, (energy[len(a):] - energy[:-len(a)]) * np.dot(a, a)))
+    scores = np.abs(dots / norms)
+    best = int(np.argmax(scores))
+    aligned = b[best:best + len(a)]
+    similarity = min(1., float(scores[best]))
+    residual = max(0., 1 - similarity * similarity)
+    if similarity > .5:
+        taps = 32
+        padded = np.pad(aligned, (taps // 2, taps - 1 - taps // 2))
+        matrix = np.lib.stride_tricks.sliding_window_view(padded, taps)
+        prediction = np.zeros_like(a)
+        blocks = (np.arange(len(a)) // (rate // 2)) % 2
+        for fold in (0, 1):
+            training = np.flatnonzero(blocks != fold)[::4]
+            testing = blocks == fold
+            x, y = matrix[training], a[training]
+            gram = x.T @ x
+            ridge = np.trace(gram) / taps * 1e-3 + 1e-12
+            weights = np.linalg.solve(gram + ridge * np.eye(taps), x.T @ y)
+            prediction[testing] = matrix[testing] @ weights
+        aligned = prediction
+        similarity = min(1., float(abs(np.dot(a, aligned)) /
+                                   max(np.linalg.norm(a) * np.linalg.norm(aligned), 1e-12)))
+        residual = min(1., float(np.sum((a - aligned) ** 2) / max(np.sum(a * a), 1e-12)))
+    window, windows = rate // 2, []
+    for begin in range(0, len(a) - window + 1, window):
+        x, y = a[begin:begin + window], aligned[begin:begin + window]
+        denominator = np.linalg.norm(x) * np.linalg.norm(y)
+        if denominator > 1e-9:
+            windows.append(min(1., float(abs(np.dot(x, y)) / denominator)))
+    return {
+        "echo_similarity": round(similarity, 6),
+        "echo_delay_ms": round((maximum - best) * 1000 / rate, 3),
+        "echo_window_support": round(float(np.mean(np.asarray(windows) >= .85)), 6) if windows else 0.,
+        "echo_window_min_similarity": round(min(windows, default=0.), 6),
+        "echo_residual_ratio": round(residual, 6), "echo_window_count": len(windows),
+    }
+
+
+def mark_acoustic_echo(segments: list[dict], sources: dict[str, np.ndarray],
+                       offsets: dict[str, float]) -> None:
+    """Attach strict echo candidates; retain all segments and all original audio."""
+    media = [row for row in segments if source_kind(row["source"]) == "loopback"]
+    for mic in (row for row in segments if source_kind(row["source"]) == "microphone"):
+        if mic.get("possible_duplicate_of") or mic["end"] - mic["start"] < 1.5:
+            continue
+        for system in media:
+            if (min(mic["end"], system["end"] + .3) - max(mic["start"], system["start"])
+                    < .9 * (mic["end"] - mic["start"])):
+                continue
+            evidence = echo_evidence(sources[mic["source"]], sources[system["source"]],
+                                     mic["start"], mic["end"], offsets.get(mic["source"], 0),
+                                     offsets.get(system["source"], 0))
+            if (evidence is None or evidence["echo_similarity"] < .95
+                    or evidence["echo_window_support"] < .9
+                    or evidence["echo_window_min_similarity"] < .85
+                    or evidence["echo_residual_ratio"] > .10 or evidence["echo_window_count"] < 3):
+                continue
+            delay = evidence["echo_delay_ms"] / 1000
+            overlap = min(mic["end"], system["end"] + delay) - max(mic["start"], system["start"] + delay)
+            if overlap >= .9 * max(mic["end"] - mic["start"], system["end"] - system["start"]):
+                mic.update(echo_candidate_of=system["segment_id"], **evidence)
                 break
 
 
@@ -339,26 +438,28 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
 def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
                     embedding_model: str | Path, progress: Callable[[dict], None] | None = None,
                     threads: int = 4, threshold: float = DEFAULT_CLUSTER_THRESHOLD, diarizer=None,
-                    embedding_extractor=None, asr_denoise: str = "light") -> list[dict]:
+                    embedding_extractor=None, asr_denoise: str = "light",
+                    asr_echo_filter: bool = True) -> list[dict]:
     import soundfile as sf
 
     if asr_denoise not in ("light", "off"):
         raise ValueError("asr_denoise must be light or off")
+    if type(asr_echo_filter) is not bool:
+        raise ValueError("asr_echo_filter must be a boolean")
     session_dir = Path(session_dir).resolve()
     metadata_path = session_dir / "session.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig")) if metadata_path.is_file() else {}
+    entries = capture_sources(session_dir, metadata)
     raw_offsets = metadata.get("capture_offsets_ms", {})
-    offsets = {source: float(raw_offsets.get(source, 0)) / 1000 for source in ("mic", "system")}
+    offsets = {entry["source"]: float(raw_offsets.get(entry["source"], 0)) / 1000 for entry in entries}
     if any(not math.isfinite(value) or value < 0 for value in offsets.values()):
         raise ValueError("capture_offsets_ms must contain non-negative finite numbers")
     clip_dir = session_dir / "clips"
     clip_dir.mkdir(exist_ok=True)
     sources, segments, summaries = {}, [], {}
-    for source in ("mic", "system"):
-        audio_path = session_dir / f"{source}.wav"
-        if not audio_path.is_file():
-            summaries[source] = {"status": "missing"}
-            continue
+    for entry in entries:
+        source = entry["source"]
+        audio_path = session_dir / entry["path"]
         samples, info = read_audio(audio_path)
         sources[source] = samples
         info["peak_frame_rms"] = round(peak_frame_rms(samples), 6)
@@ -397,6 +498,7 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
                     "audio_end": round(audio_finish / SAMPLE_RATE + offsets[source], 4),
                     "speaker": labels[turn["speaker"]],
                     "source": source,
+                    "source_kind": entry["kind"],
                     "segment_id": segment_id,
                     "text_audio": str(audio_output),
                 })
@@ -406,8 +508,11 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
         progress({"stage": "speaker_identity", "message": "正在比较声纹，统一跨音轨说话人"})
     identities = assign_global_speakers(segments, sources, offsets, Path(embedding_model),
                                        threads, embedding_extractor)
-    if "mic" in sources and "system" in sources:
+    if any(source_kind(source) == "microphone" for source in sources) and any(
+            source_kind(source) == "loopback" for source in sources):
         mark_digital_duplicates(segments, sources, offsets)
+        if asr_echo_filter:
+            mark_acoustic_echo(segments, sources, offsets)
     summary = {
         "sample_rate": SAMPLE_RATE,
         "speaker_cluster_threshold": threshold,
@@ -416,10 +521,11 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
         "segments": len(segments),
         "global_speaker_identity": identities,
         "asr_denoise": asr_denoise,
+        "asr_echo_filter": asr_echo_filter,
         "limitations": [
             "Global speaker labels use conservative cross-source voice comparisons, not identified people.",
             "Short, overlapping or ambiguous speech remains unassigned; real device/channel differences may affect matches.",
-            "Possible duplicate audio is flagged and retained; acoustic echo may remain.",
+            "High-confidence delayed echo is flagged for text-verified transcript deduplication; audio echo remains.",
         ],
     }
     # Replace result manifests only after all model processing and clip writes succeed.
@@ -451,10 +557,13 @@ def main() -> None:
     parser.add_argument("--threshold", default=DEFAULT_CLUSTER_THRESHOLD, type=float)
     parser.add_argument("--asr-denoise", choices=("light", "off"), default="light",
                         help="Optional 70 Hz low-frequency reduction on ASR copies; originals/mix unchanged")
+    parser.add_argument("--echo-filter", choices=("on", "off"), default="on",
+                        help="Flag high-confidence delayed echo for conservative transcript deduplication")
     args = parser.parse_args()
     segmentation, embedding = find_models(args.models)
     prepare_session(args.session, segmentation, embedding, threads=args.threads,
                     threshold=args.threshold, asr_denoise=args.asr_denoise,
+                    asr_echo_filter=args.echo_filter == "on",
                     progress=lambda event: print(json.dumps(event), flush=True))
 
 

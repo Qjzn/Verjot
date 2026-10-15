@@ -20,7 +20,8 @@ from urllib.parse import quote
 
 import soundfile as sf
 
-from asr_engine import atomic_json
+from asr_engine import atomic_json, job_fingerprint as local_job_fingerprint, read_segments
+from audio_sources import capture_sources, source_kind, SOURCE_NAME
 from merge_audio import merge_session
 from tingji_config import load_config
 
@@ -28,13 +29,13 @@ HOME = Path(__file__).resolve().parent
 BEGIN = "<!-- local-meeting-transcript:start -->"
 END = "<!-- local-meeting-transcript:end -->"
 COMPACT_FILES = frozenset({
-    "mic.wav", "system.wav", "meeting.wav", "meeting.wav.tmp",
+    "meeting.wav", "meeting.wav.tmp",
     "merged_audio.json", "merged_audio.json.tmp", "segments.json", "segments.json.tmp",
     "prepared_input.json", "prepared_input.json.tmp", "prepare_summary.json", "prepare_summary.json.tmp",
     "result.json", "result.json.tmp", "asr_status.json", "asr_status.json.tmp",
     "prepare.log", "asr.log", "merge.log", "worker.log",
 })
-CLIP_NAME = re.compile(r"(?:mic|system)_\d{5,}\.wav\Z")
+CLIP_NAME = re.compile(r"(?:mic|system)(?:_\d{2,})?_\d{5,}\.wav\Z")
 
 
 def read_json(path: Path, default=None):
@@ -157,6 +158,16 @@ def clean_transcript_text(value):
                      for line in text.split("\n")).strip()
 
 
+def capture_failure(metadata: dict):
+    """Only recorder-confirmed errors affect retention; diagnostics are advisory."""
+    error = metadata.get("capture_error")
+    if isinstance(error, str) and error.strip():
+        return error.strip()
+    if metadata.get("state") == "recorded_with_error":
+        return "录音设备报告采集异常，部分声音可能缺失"
+    return ""
+
+
 def transcript_with_evidence(session: Path, result):
     """Join verified preparation evidence for display, leaving ASR checkpoints intact."""
     if result is None:
@@ -176,15 +187,25 @@ def transcript_with_evidence(session: Path, result):
                 path = Path(original["text_audio"])
                 path = path if path.is_absolute() else session / path
                 if str(path.resolve()) == row.get("text_audio"):
-                    for key in ("segment_id", "possible_duplicate_of"):
+                    for key in ("segment_id", "possible_duplicate_of", "echo_candidate_of"):
                         if isinstance(original.get(key), str) and original[key].strip():
                             current[key] = original[key]
                     similarity = original.get("waveform_similarity")
                     if (type(similarity) in (int, float) and math.isfinite(similarity)
                             and 0 <= similarity <= 1):
                         current["waveform_similarity"] = similarity
-                    if original.get("source") in ("mic", "system"):
+                    for key in ("echo_similarity", "echo_window_support", "echo_window_min_similarity",
+                                "echo_residual_ratio", "echo_delay_ms"):
+                        value = original.get(key)
+                        maximum = 300 if key == "echo_delay_ms" else 1
+                        if type(value) in (int, float) and math.isfinite(value) and 0 <= value <= maximum:
+                            current[key] = value
+                    count = original.get("echo_window_count")
+                    if type(count) is int and count >= 0:
+                        current["echo_window_count"] = count
+                    if isinstance(original.get("source"), str) and SOURCE_NAME.fullmatch(original["source"]):
                         current["source"] = original["source"]
+                        current["source_kind"] = source_kind(original["source"])
                     if type(original.get("speaker_global")) is bool:
                         current["speaker_global"] = original["speaker_global"]
                     if original.get("speaker_status") in ("matched", "unknown"):
@@ -196,12 +217,41 @@ def transcript_with_evidence(session: Path, result):
     return {**result, "segments": rows}
 
 
+def _verified_echo(row: dict, original: dict | None) -> bool:
+    """Suppress text only with independent acoustic evidence and exact content.
+
+    This does not alter the recording or equate a fitted echo score with digital
+    identity. Short acknowledgements, different words and real repeats remain.
+    """
+    if (not original or not str(row.get("speaker", "")).startswith("mic_")
+            or not str(original.get("speaker", "")).startswith("system_")):
+        return False
+    text = clean_transcript_text(row.get("text", ""))
+    if text != clean_transcript_text(original.get("text", "")) or len(re.sub(r"[\W_]", "", text)) < 8:
+        return False
+    rules = {"echo_similarity": (0.95, 1), "echo_window_support": (0.9, 1),
+             "echo_window_min_similarity": (0.85, 1), "echo_residual_ratio": (0, 0.10),
+             "echo_delay_ms": (0, 300)}
+    for key, (minimum, maximum) in rules.items():
+        value = row.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or not minimum <= value <= maximum:
+            return False
+    if type(row.get("echo_window_count")) is not int or row["echo_window_count"] < 3:
+        return False
+    duration, other_duration = row["end"] - row["start"], original["end"] - original["start"]
+    delay = row["echo_delay_ms"] / 1000
+    overlap = min(row["end"] - delay, original["end"]) - max(row["start"] - delay, original["start"])
+    return min(duration, other_duration) >= 1.5 and overlap >= 0.9 * max(duration, other_duration)
+
+
 def transcript_rows(result):
     rows = [row for row in result.get("segments", []) if row.get("status") == "done"
             and clean_transcript_text(row.get("text", ""))]
     by_id = {row["segment_id"]: row for row in rows if row.get("segment_id")}
     retained = []
     for row in sorted(rows, key=lambda item: (item["start"], item["end"], str(item["speaker"]))):
+        if _verified_echo(row, by_id.get(row.get("echo_candidate_of"))):
+            continue
         original = by_id.get(row.get("possible_duplicate_of"))
         if (original and str(row["speaker"]).startswith("mic_")
                 and str(original["speaker"]).startswith("system_")
@@ -245,8 +295,8 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
     if merge_error or error:
         location = "程序工作目录" if metadata.get("storage_mode") == "minimal" else "原会议目录"
         lines.extend([f"原始录音和处理数据保留在{location}，可通过录音工具重试。", ""])
-    if metadata.get("capture_error"):
-        lines.extend([f"录音异常：{metadata['capture_error']}", ""])
+    if capture_failure(metadata):
+        lines.extend([f"录音异常：{capture_failure(metadata)}", ""])
     if error:
         lines.extend(["**转写未完成，原始录音和已完成段已保留。**", str(error), ""])
     elif result is None:
@@ -259,7 +309,7 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
             lines.extend(["**逐段转写**", ""])
             for row in rows:
                 speaker = str(row["speaker"])
-                source = "麦克风" if row.get("source") == "mic" or speaker.startswith("mic_") else "电脑声音" if row.get("source") == "system" or speaker.startswith("system_") else "未知音轨"
+                source = "麦克风" if row.get("source_kind") == "microphone" or row.get("source") == "mic" or speaker.startswith("mic_") else "电脑声音" if row.get("source_kind") == "loopback" or row.get("source") == "system" or speaker.startswith("system_") else "未知音轨"
                 identity = row.get("global_speaker")
                 if (row.get("speaker_global") is True and isinstance(identity, str)
                         and re.fullmatch(r"speaker_\d+", identity)):
@@ -370,7 +420,10 @@ def cleanup_candidates(session: Path, *, keep_meeting=False):
     """Plan only known generated files; callers must validate the session boundary."""
     session = safe_path(session)
     candidates = []
-    for name in sorted(COMPACT_FILES):
+    metadata = read_json(session / "session.json", {})
+    generated = set(COMPACT_FILES)
+    generated.update(row["path"] for row in capture_sources(session, metadata, require_files=False))
+    for name in sorted(generated):
         if name == "meeting.wav" and keep_meeting:
             continue
         path = session / name
@@ -439,6 +492,8 @@ def compact_session(session: Path, config: dict, metadata: dict, verified_status
     actually removed; marking artifacts_compacted is the caller's final action.
     """
     session = safe_path(session)
+    if capture_failure(metadata) or capture_failure(verified_status):
+        raise ValueError("采集异常，已保留原始录音、分段和转写结果供检查，不能清理恢复资料")
     vault, _ = note_location(session, config, metadata)
     if (metadata.get("storage_mode") != "minimal"
             and session.parent != safe_path(vault / meeting_folder(config) / "附件")):
@@ -446,7 +501,8 @@ def compact_session(session: Path, config: dict, metadata: dict, verified_status
     audio, _ = verified_artifacts(session, config, metadata, verified_status)
     candidates = cleanup_candidates(session, keep_meeting=audio == session / "meeting.wav")
     # Remove recovery evidence last, so a interrupted cleanup can be resumed.
-    candidates.sort(key=lambda path: (path.name in ("mic.wav", "system.wav", "result.json"),
+    raw_names = {row["path"] for row in capture_sources(session, metadata, require_files=False)}
+    candidates.sort(key=lambda path: (path.name in raw_names or path.name == "result.json",
                                       path.name == "result.json", str(path)))
     removed = []
     for path in candidates:
@@ -464,6 +520,17 @@ def compact_session(session: Path, config: dict, metadata: dict, verified_status
 def finish_compaction(session: Path, config: dict, metadata: dict, completed: dict):
     """Keep transcription completion distinct from an interrupted cleanup."""
     if metadata.get("storage_mode") != "minimal" or completed.get("merge_error"):
+        return
+    failure = capture_failure(metadata) or capture_failure(completed)
+    if failure:
+        message = completed.get("message", "转写处理已结束")
+        if not completed.get("capture_needs_review"):
+            message += "；采集异常，请检查录音；原始资料已保留"
+        # Processing can finish on an incomplete recording. Preserve the
+        # existing completed/retry path while keeping every recovery artifact.
+        completed = {**completed, "message": message, "capture_error": failure,
+                     "capture_needs_review": True, "artifacts_compacted": False}
+        atomic_json(safe_path(session / "status.json"), completed)
         return
     if completed.get("artifact_error"):
         count = completed.get("segments", 0)
@@ -483,12 +550,65 @@ def finish_compaction(session: Path, config: dict, metadata: dict, completed: di
 
 def input_fingerprint(session: Path):
     entries = []
-    for name in ("session.json", "mic.wav", "system.wav"):
+    metadata = read_json(session / "session.json", {})
+    names = ["session.json", *(row["path"] for row in capture_sources(session, metadata))]
+    for name in names:
         path = session / name
         if path.is_file():
             info = path.stat()
             entries.append([name, info.st_size, info.st_mtime_ns])
     return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+
+
+def validate_asr_checkpoint(session: Path, config: dict):
+    """Validate the same ASR identity before touching either public artifact."""
+    segments = read_segments(session / "segments.json")
+    context = config.get("asr_context", "")
+    if config.get("transcription_mode", "local") == "api":
+        from api_asr import job_fingerprint as api_job_fingerprint
+
+        fingerprint = api_job_fingerprint(segments, config["api_base_url"].rstrip("/"),
+                                          config["api_model"].strip(), context)
+    else:
+        fingerprint = local_job_fingerprint(segments, (HOME / "models" / "Qwen3-ASR-1.7B-hf").resolve(),
+                                            context, 512)
+    saved = read_json(session / "result.json")
+    if not isinstance(saved, dict) or saved.get("fingerprint") != fingerprint:
+        raise RuntimeError("转写输入、模型或术语设置已改变，已保留现有成品和旧结果；请恢复设置或使用新的录音目录重新处理")
+    cached = saved.get("segments", [])
+    if not isinstance(cached, list):
+        raise RuntimeError("转写断点的分段资料无效，已保留现有成品和旧结果")
+    for index, row in enumerate(segments):
+        if index >= len(cached):
+            break
+        old = cached[index]
+        if not isinstance(old, dict) or (old.get("status") == "done" and (
+                any(old.get(key) != row[key] for key in row) or not isinstance(old.get("text"), str))):
+            raise RuntimeError("已完成转写段与录音分段不一致，已保留现有成品和旧结果")
+
+
+def preparation_state(session: Path, metadata: dict, config: dict):
+    fingerprint = input_fingerprint(session)
+    cache = read_json(session / "prepared_input.json", {})
+    has_prepared = (session / "segments.json").is_file()
+    # A retry must keep the same clip bytes as its ASR checkpoints. Old caches
+    # predate the filters and therefore represent unfiltered audio.
+    denoise = metadata.get("asr_denoise", cache.get("asr_denoise", "off")
+                           if has_prepared and cache.get("fingerprint") else config["asr_denoise"])
+    echo_filter = metadata.get("asr_echo_filter", cache.get("asr_echo_filter", False)
+                               if has_prepared and cache.get("fingerprint") else config["asr_echo_filter"])
+    if denoise not in ("light", "off"):
+        raise ValueError("会议的 asr_denoise 配置必须为 light 或 off")
+    if type(echo_filter) is not bool:
+        raise ValueError("会议的 asr_echo_filter 配置必须为布尔值")
+    needs_preparation = (cache.get("fingerprint") != fingerprint or not has_prepared
+                         or cache.get("asr_denoise", "off") != denoise
+                         or cache.get("asr_echo_filter", False) != echo_filter)
+    if (session / "result.json").exists():
+        if needs_preparation:
+            raise RuntimeError("原始录音或分段已改变，已保留旧结果，请使用新的录音目录重新处理")
+        validate_asr_checkpoint(session, config)
+    return fingerprint, denoise, echo_filter, needs_preparation
 
 
 def run_stage(session: Path, command: list[str], stage: str):
@@ -553,6 +673,17 @@ def process_session(session: Path):
         status(session, message, state="error", stage="configuration", error=message,
                note_path=str(note))
         return 1
+    if (session / "result.json").exists():
+        # Reject incompatible checkpoints before replacing either public file.
+        # The ordinary processing error handler renders partial results, which
+        # would pair old text with changed audio and overwrite the existing MD.
+        try:
+            preparation_state(session, metadata, config)
+        except Exception as error:
+            status(session, "输入检查未通过，录音和现有成品已保留", state="error",
+                   stage="input_validation", error=str(error), note_path=str(note))
+            print(error, file=sys.stderr)
+            return 1
     status(session, "录音已保存，正在准备中文转写", note_path=str(note))
     result = None
     mixed_audio, merge_error = None, None
@@ -570,24 +701,14 @@ def process_session(session: Path):
         save_session_note(session, note, render_note(session, vault, metadata, mixed_audio=mixed_audio,
                                    merge_error=merge_error))
         with processing_slot(session):
-            fingerprint = input_fingerprint(session)
-            cache = read_json(session / "prepared_input.json", {})
-            has_prepared = (session / "segments.json").is_file()
-            # A retry must keep the same clip bytes as its ASR checkpoints. Old
-            # caches predate the filter and therefore represent unfiltered audio.
-            denoise = metadata.get("asr_denoise", cache.get("asr_denoise", "off")
-                                   if has_prepared and cache.get("fingerprint") else config["asr_denoise"])
-            if denoise not in ("light", "off"):
-                raise ValueError("会议的 asr_denoise 配置必须为 light 或 off")
-            if (cache.get("fingerprint") != fingerprint or not has_prepared
-                    or cache.get("asr_denoise", "off") != denoise):
-                if (session / "result.json").exists():
-                    raise RuntimeError("原始录音或分段已改变，已保留旧结果，请使用新的录音目录重新处理")
+            fingerprint, denoise, echo_filter, needs_preparation = preparation_state(session, metadata, config)
+            if needs_preparation:
                 status(session, "正在分析麦克风和电脑声音，区分说话人", stage="speakers")
                 run_stage(session, [sys.executable, str(HOME / "prepare_audio.py"),
                           "--session", str(session), "--models", str(HOME / "models"),
-                          "--asr-denoise", denoise], "prepare")
-                atomic_json(session / "prepared_input.json", {"fingerprint": fingerprint, "asr_denoise": denoise})
+                          "--asr-denoise", denoise, "--echo-filter", "on" if echo_filter else "off"], "prepare")
+                atomic_json(session / "prepared_input.json", {"fingerprint": fingerprint,
+                            "asr_denoise": denoise, "asr_echo_filter": echo_filter})
             if transcription_mode == "api":
                 status(session, "正在通过API进行中文会议转写", stage="asr")
                 command = [sys.executable, str(HOME / "api_asr.py"),
@@ -618,9 +739,13 @@ def process_session(session: Path):
             message = f"已完成中文转写，共 {count} 段" if count else "录音已保存，未检测到讲话"
             if merge_error:
                 message += "；合并录音失败，原始分轨已保留"
+            failure = capture_failure(metadata)
+            if failure:
+                message += "；采集异常，请检查录音；原始资料已保留"
             status(session, message,
                    state="completed", note_path=str(note), segments=count,
                    sources=summary.get("sources", {}), merged_audio=mixed_audio, merge_error=merge_error,
+                   capture_error=failure, capture_needs_review=bool(failure),
                    result_complete=True, artifacts_compacted=False)
             finish_compaction(session, config, metadata, read_json(session / "status.json"))
             return 0

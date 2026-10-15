@@ -33,6 +33,11 @@
 !/asr_engine.py
 !/prepare_audio.py
 !/merge_audio.py
+!/audio_sources.py
+!/test_audio_sources.py
+!/test_multi_capture_worker.py
+!/TestTimestampedTimeline.cs
+!/TestJsonReadSharing.cs
 !/download_models.py
 !/download_torch.py
 !/Install-Shortcuts.ps1

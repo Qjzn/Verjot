@@ -34,8 +34,23 @@ internal static class MeetingFiles {
     public static readonly string Home = AppDomain.CurrentDomain.BaseDirectory;
     public static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     public static Dictionary<string, object> ReadJson(string path) {
-        if (!File.Exists(path)) return new Dictionary<string, object>();
-        return Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+        bool observed = File.Exists(path);
+        string snapshot;
+        for (int attempt = 0; ; attempt++) {
+            try {
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8)) snapshot = reader.ReadToEnd();
+                break;
+            } catch (IOException error) {
+                if (attempt >= 3) {
+                    if (!observed && (error is FileNotFoundException || error is DirectoryNotFoundException))
+                        return new Dictionary<string, object>();
+                    throw;
+                }
+                Thread.Sleep(10);
+            }
+        }
+        return Json.Deserialize<Dictionary<string, object>>(snapshot);
     }
     public static string Text(Dictionary<string, object> data, string key, string fallback) {
         object value;
@@ -168,6 +183,8 @@ internal sealed class TimelineWriter : IDisposable {
     readonly WaveFileWriter writer;
     readonly int byteRate;
     readonly int blockAlign;
+    readonly int sampleRate, channels, bits;
+    readonly bool floatSamples;
     readonly byte[] silence;
     readonly string path;
     readonly List<long[]> pausedRanges = new List<long[]>();
@@ -178,7 +195,32 @@ internal sealed class TimelineWriter : IDisposable {
     bool hadCallback;
     bool paused;
     float peak;
+    byte[] pendingPacket;
+    int pendingCount;
+    long pendingPosition;
+    double pendingStartMs;
+    double pendingQpcMs;
+    double millisecondsPerFrame;
+    sealed class ClockPoint {
+        public double Position;
+        public double TimeMs;
+        public ClockPoint(double position, double timeMs) { Position = position; TimeMs = timeMs; }
+    }
+    readonly Queue<ClockPoint> clockPoints = new Queue<ClockPoint>();
+    long lastClockPosition;
+    double lastClockTimeMs;
+    int clockWarmupPackets;
+    double previousFitSlope, previousFitTarget;
+    long previousFitPosition;
+    bool hadClockFit;
+    bool clockFitRejected;
+    const double ClockWindowMs = 2000, ClockFitMinimumMs = 500, ClockPhaseCorrectionMs = 1000;
+    // Below this bound a continuous sample counter cannot distinguish timestamp
+    // jitter from a tiny unreported counter suspension. Never stretch a larger
+    // interval, a counter jump, or a driver-reported discontinuity over speech.
+    const double ContinuousTimestampUncertaintyMs = 2;
     public float Peak { get { lock (gate) return peak; } }
+    public bool ClockFitRejected { get { lock (gate) return clockFitRejected; } }
     public WaveFormat Format { get { return writer.WaveFormat; } }
 
     public TimelineWriter(string path, WaveFormat format) {
@@ -186,6 +228,8 @@ internal sealed class TimelineWriter : IDisposable {
         writer = new WaveFileWriter(path, format);
         byteRate = format.AverageBytesPerSecond;
         blockAlign = format.BlockAlign;
+        sampleRate = format.SampleRate; channels = format.Channels; bits = format.BitsPerSample; floatSamples = IsFloat(format);
+        millisecondsPerFrame = 1000.0 / format.SampleRate;
         silence = new byte[Math.Max(blockAlign, byteRate / blockAlign / 4 * blockAlign)];
     }
     long Bytes(double milliseconds) {
@@ -241,6 +285,144 @@ internal sealed class TimelineWriter : IDisposable {
             hadCallback = true;
             peak = paused ? 0 : MeasurePeak(audio, count, writer.WaveFormat);
         }
+    }
+    void ResetClock(long position, double timeMs) {
+        clockPoints.Clear(); lastClockPosition = position; lastClockTimeMs = timeMs; clockWarmupPackets = 0;
+        millisecondsPerFrame = 1000.0 / sampleRate;
+        hadClockFit = false;
+    }
+    double ClockTarget(long position, double timeMs) {
+        // Adjacent-point averaging suppresses packet-period timestamp jitter.
+        // The very first interval is excluded from the fit because startup
+        // timestamps can carry a different bias from an established stream.
+        double pointPosition = position / 2.0 + lastClockPosition / 2.0;
+        double pointTimeMs = timeMs / 2.0 + lastClockTimeMs / 2.0;
+        lastClockPosition = position; lastClockTimeMs = timeMs;
+        if (clockWarmupPackets++ == 0) return double.NaN;
+        clockPoints.Enqueue(new ClockPoint(pointPosition, pointTimeMs));
+        while (clockPoints.Count > 2 && (clockPoints.Count > 512 || (position - clockPoints.Peek().Position) * 1000.0 / sampleRate > ClockWindowMs))
+            clockPoints.Dequeue();
+        if ((position - clockPoints.Peek().Position) * 1000.0 / sampleRate < ClockFitMinimumMs)
+            return double.NaN;
+        // Fit in a local coordinate system so multi-hour recordings do not lose
+        // precision. QPC jitter affects the regression, never a packet boundary.
+        double x = 0, y = 0, xx = 0, xy = 0;
+        foreach (ClockPoint point in clockPoints) {
+            double px = point.Position - position, py = point.TimeMs - timeMs;
+            x += px; y += py; xx += px * px; xy += px * py;
+        }
+        double count = clockPoints.Count, denominator = xx - x * x / count;
+        if (denominator <= 0) return double.NaN;
+        double slope = (xy - x * y / count) / denominator;
+        // A sustained percent-scale change is not normal sample-clock drift.
+        // Keep the prior estimate rather than treating a suspect fit as audio.
+        if (slope <= 0 || Math.Abs(slope * sampleRate / 1000.0 - 1) > .005) {
+            clockFitRejected = true;
+            return double.NaN;
+        }
+        double target = timeMs + (y - slope * x) / count;
+        // Adjacent overlapping fits have opposite endpoint bias for alternating
+        // timestamp jitter. Average their predictions at the same device frame.
+        double mappedTarget = hadClockFit ? (target + previousFitTarget + (position - previousFitPosition) * previousFitSlope) / 2 : target;
+        millisecondsPerFrame = hadClockFit ? (slope + previousFitSlope) / 2 : slope;
+        previousFitSlope = slope; previousFitTarget = target; previousFitPosition = position; hadClockFit = true;
+        return mappedTarget;
+    }
+    // Acquisition QPC determines the initial/global position. Continuous device
+    // frames retain continuous resampling phase; a rolling fit estimates slow
+    // clock drift without turning short QPC jitter into zero holes or cuts.
+    // True reports a segment boundary, including an unflagged device/time gap.
+    public bool AddTimestamped(byte[] buffer, int count, double startMs, long devicePosition, bool discontinuity) {
+        lock (gate) {
+            if (closed || count <= 0) return false;
+            if (double.IsNaN(startMs) || double.IsInfinity(startMs)) throw new InvalidDataException("音频包时间戳无效。");
+            count -= count % blockAlign;
+            if (count == 0) return false;
+            clockFitRejected = false;
+            double mappedStartMs = startMs;
+            bool segmented = false;
+            if (pendingPacket != null) {
+                long distance = devicePosition - pendingPosition;
+                if (distance == 0 && Math.Abs(startMs - pendingQpcMs) < .001) return false; // duplicate packet
+                if (distance < 0 || startMs < pendingQpcMs) throw new InvalidDataException("音频设备时间戳倒退，已保留此前录音。");
+                int pendingFrames = pendingCount / blockAlign;
+                double intervalErrorMs = startMs - pendingQpcMs - distance * millisecondsPerFrame;
+                bool adjacent = distance == pendingFrames && !discontinuity && Math.Abs(intervalErrorMs) <= ContinuousTimestampUncertaintyMs;
+                double endMs;
+                if (adjacent) {
+                    double target = ClockTarget(devicePosition, startMs);
+                    mappedStartMs = pendingStartMs + pendingFrames * millisecondsPerFrame;
+                    if (!double.IsNaN(target)) {
+                        double portion = Math.Min(1, pendingFrames * millisecondsPerFrame / ClockPhaseCorrectionMs);
+                        mappedStartMs += (target - mappedStartMs) * portion;
+                    }
+                    endMs = mappedStartMs;
+                } else {
+                    segmented = true;
+                    endMs = Math.Min(startMs, pendingStartMs + pendingFrames * millisecondsPerFrame);
+                    ResetClock(devicePosition, startMs);
+                }
+                WriteTimestampedPacket(pendingPacket, pendingCount, pendingStartMs, endMs,
+                    adjacent ? buffer : null);
+            } else ResetClock(devicePosition, startMs);
+            pendingPacket = new byte[count];
+            Buffer.BlockCopy(buffer, 0, pendingPacket, 0, count);
+            pendingCount = count; pendingStartMs = mappedStartMs; pendingQpcMs = startMs; pendingPosition = devicePosition;
+            return segmented;
+        }
+    }
+    static bool IsFloat(WaveFormat format) {
+        WaveFormatExtensible extended = format as WaveFormatExtensible;
+        return format.Encoding == WaveFormatEncoding.IeeeFloat || (extended != null && extended.SubFormat == new Guid("00000003-0000-0010-8000-00aa00389b71"));
+    }
+    double ReadSample(byte[] data, int frame, int channel) {
+        int index = frame * blockAlign + channel * bits / 8;
+        if (floatSamples) return BitConverter.ToSingle(data, index);
+        if (bits == 16) return BitConverter.ToInt16(data, index) / 32768.0;
+        if (bits == 24) {
+            int value = data[index] | data[index + 1] << 8 | data[index + 2] << 16;
+            if ((value & 0x800000) != 0) value |= unchecked((int)0xff000000);
+            return value / 8388608.0;
+        }
+        if (bits == 32) return BitConverter.ToInt32(data, index) / 2147483648.0;
+        throw new InvalidDataException("不支持的录音采样格式。");
+    }
+    void WriteSample(byte[] data, int frame, int channel, double value) {
+        int index = frame * blockAlign + channel * bits / 8;
+        if (floatSamples) { Buffer.BlockCopy(BitConverter.GetBytes((float)value), 0, data, index, 4); return; }
+        long maximum = (1L << (bits - 1)) - 1;
+        long sample = Math.Max(-maximum - 1, Math.Min(maximum, (long)Math.Round(value * (maximum + 1))));
+        for (int part = 0; part < bits / 8; part++) data[index + part] = (byte)(sample >> (part * 8));
+    }
+    void WriteTimestampedPacket(byte[] data, int count, double startMs, double endMs, byte[] following) {
+        if (endMs <= startMs) return;
+        double startFrame = startMs * sampleRate / 1000.0;
+        double endFrame = endMs * sampleRate / 1000.0;
+        long first = Math.Max(written / blockAlign, Math.Max(0, (long)Math.Round(startFrame)));
+        long last = Math.Min(endByteBudget / blockAlign, Math.Max(0, (long)Math.Round(endFrame)));
+        if (last <= first) return;
+        PadTo(first * blockAlign);
+        int frames = count / blockAlign;
+        byte[] output = new byte[checked((int)(last - first) * blockAlign)];
+        if (Math.Abs(endFrame - startFrame - frames) < .000001 && Math.Abs(startFrame - Math.Round(startFrame)) < .000001) {
+            Buffer.BlockCopy(data, checked((int)(first - (long)Math.Round(startFrame)) * blockAlign), output, 0, output.Length);
+        } else {
+            // Continuous fractional phase avoids periodic dropped/duplicated
+            // whole samples when clocks differ. No extra resampling dependency.
+            for (int frame = 0; frame < output.Length / blockAlign; frame++) {
+                double location = Math.Max(0, (first + frame - startFrame) * frames / (endFrame - startFrame));
+                int left = Math.Min(frames - 1, (int)location);
+                double fraction = Math.Min(1, location - left);
+                for (int channel = 0; channel < channels; channel++) {
+                    double a = ReadSample(data, left, channel);
+                    double b = left + 1 < frames ? ReadSample(data, left + 1, channel) : following == null ? a : ReadSample(following, 0, channel);
+                    WriteSample(output, frame, channel, a + (b - a) * fraction);
+                }
+            }
+        }
+        byte[] masked = MaskPausedAudio(output, output.Length);
+        writer.Write(masked, 0, masked.Length); written += masked.Length;
+        peak = paused ? 0 : MeasurePeak(masked, masked.Length, Format);
     }
     public void SetEndBoundary(double elapsedMs) {
         lock (gate) endByteBudget = Math.Min(endByteBudget, Bytes(elapsedMs));
@@ -306,6 +488,11 @@ internal sealed class TimelineWriter : IDisposable {
         lock (gate) {
             if (closed) return;
             endByteBudget = Math.Min(endByteBudget, Bytes(elapsedMs));
+            if (pendingPacket != null) {
+                WriteTimestampedPacket(pendingPacket, pendingCount, pendingStartMs,
+                    pendingStartMs + pendingCount / blockAlign * millisecondsPerFrame, null);
+                pendingPacket = null;
+            }
             PadTo(endByteBudget);
             closed = true;
             writer.Dispose();
@@ -343,14 +530,32 @@ internal sealed class CaptureTrack : IDisposable {
     readonly WasapiCapture capture;
     readonly TimelineWriter writer;
     readonly Stopwatch clock;
+    readonly string deviceId;
+    readonly bool loopback;
+    readonly double qpcOrigin100ns;
+    readonly List<Dictionary<string, object>> diagnostics = new List<Dictionary<string, object>>();
+    Thread captureThread;
+    double drainUntilMs;
+    Exception startupError;
+    readonly ManualResetEvent ready = new ManualResetEvent(false);
     readonly ManualResetEvent stopped = new ManualResetEvent(false);
     readonly Action<Exception> failed;
     volatile bool requestedStop;
     bool started;
     bool disposed;
+    volatile bool ended;
     public readonly string DeviceName;
     public readonly string PathName;
     public double OffsetMs;
+    public string DeviceId { get { return deviceId; } }
+    public bool Running { get { return started && !ended; } }
+    public object[] Diagnostics { get {
+        lock (diagnostics) {
+            var snapshot = new List<object>();
+            foreach (Dictionary<string, object> entry in diagnostics) snapshot.Add(new Dictionary<string, object>(entry));
+            return snapshot.ToArray();
+        }
+    } }
     public float Peak { get { return writer.ReadPeak(); } }
     public CaptureTrack(WasapiCapture source, string name, string path, Stopwatch sessionClock, Action<Exception> onFailed) {
         capture = source;
@@ -364,18 +569,103 @@ internal sealed class CaptureTrack : IDisposable {
             catch (Exception error) { failed(error); }
         };
         capture.RecordingStopped += delegate(object sender, StoppedEventArgs args) {
+            ended = true;
             stopped.Set();
             if (!requestedStop) failed(args.Exception ?? new IOException("音频设备停止，已结束录音并保留音频。"));
         };
     }
+    public CaptureTrack(MMDevice source, bool isLoopback, string path, Stopwatch sessionClock, Action<Exception> onFailed) {
+        deviceId = source.ID; loopback = isLoopback;
+        DeviceName = source.FriendlyName; PathName = path; clock = sessionClock; failed = onFailed;
+        // Both clocks use QueryPerformanceCounter. WASAPI returns its value in
+        // 100 ns units; calibrate the shared session zero without DateTime.
+        long before = Stopwatch.GetTimestamp();
+        double elapsed = sessionClock.Elapsed.TotalMilliseconds;
+        long after = Stopwatch.GetTimestamp();
+        qpcOrigin100ns = (before / 2.0 + after / 2.0) * 10000000.0 / Stopwatch.Frequency - elapsed * 10000.0;
+        writer = new TimelineWriter(path, source.AudioClient.MixFormat);
+    }
+    void Diagnostic(string message, double atMs, bool uncertain) {
+        lock (diagnostics) {
+            foreach (Dictionary<string, object> entry in diagnostics) if ((string)entry["message"] == message) {
+                entry["last_at_seconds"] = atMs / 1000.0; entry["count"] = (int)entry["count"] + 1; return;
+            }
+            diagnostics.Add(new Dictionary<string, object> {
+                { "at_seconds", atMs / 1000.0 }, { "last_at_seconds", atMs / 1000.0 }, { "count", 1 },
+                { "message", message }, { "timing_uncertain", uncertain }
+            });
+        }
+    }
+    void CaptureTimestamped() {
+        try {
+            using (var enumerator = new MMDeviceEnumerator())
+            using (var device = enumerator.GetDevice(deviceId))
+            using (var client = device.AudioClient) {
+                WaveFormat format = client.MixFormat;
+                if (format.SampleRate != writer.Format.SampleRate || format.Channels != writer.Format.Channels || format.BitsPerSample != writer.Format.BitsPerSample)
+                    throw new IOException("音频设备格式在启动时变化，请重新连接设备。");
+                client.Initialize(AudioClientShareMode.Shared, loopback ? AudioClientStreamFlags.Loopback : AudioClientStreamFlags.None,
+                    1000000, 0, format, Guid.Empty);
+                using (var packets = client.AudioCaptureClient) {
+                    double lastStartMs = double.NaN;
+                    long lastPosition = 0;
+                    int lastFrames = 0;
+                    OffsetMs = clock.Elapsed.TotalMilliseconds;
+                    client.Start(); ready.Set();
+                    while (!requestedStop || clock.Elapsed.TotalMilliseconds < drainUntilMs) {
+                        while (packets.GetNextPacketSize() > 0) {
+                            int frames; AudioClientBufferFlags flags; long position, qpc;
+                            IntPtr address = packets.GetBuffer(out frames, out flags, out position, out qpc);
+                            if (frames <= 0) break;
+                            byte[] buffer = new byte[checked(frames * format.BlockAlign)];
+                            try { if ((flags & AudioClientBufferFlags.Silent) == 0) Marshal.Copy(address, buffer, 0, buffer.Length); }
+                            finally { packets.ReleaseBuffer(frames); }
+                            double startMs = (qpc - qpcOrigin100ns) / 10000.0;
+                            bool timestampError = (flags & AudioClientBufferFlags.TimestampError) != 0 || qpc <= 0;
+                            bool discontinuity = (flags & AudioClientBufferFlags.DataDiscontinuity) != 0;
+                            if (timestampError) {
+                                Diagnostic("设备包时间戳无效，使用已知连续帧位置估计；本段时间精度需核对。", clock.Elapsed.TotalMilliseconds, true);
+                                if (!double.IsNaN(lastStartMs)) { position = lastPosition + lastFrames; startMs = lastStartMs + lastFrames * 1000.0 / format.SampleRate; }
+                                else startMs = Math.Max(0, clock.Elapsed.TotalMilliseconds - frames * 1000.0 / format.SampleRate - client.StreamLatency / 10000.0);
+                            }
+                            if (discontinuity && !double.IsNaN(lastStartMs)) Diagnostic("设备报告数据间断（静音或采集缺口），已保留硬件时间线。", startMs, true);
+                            bool segmented = writer.AddTimestamped(buffer, buffer.Length, startMs, position, discontinuity || timestampError);
+                            if (segmented && !discontinuity && !timestampError)
+                                Diagnostic("设备采样位置或时间戳出现未标记的缺口，已分段保留；本段时间精度需核对。", startMs, true);
+                            if (writer.ClockFitRejected)
+                                Diagnostic("设备采样时钟拟合超出可校正范围，未按可疑时钟拉伸音频；本段时间精度需核对。", startMs, true);
+                            lastStartMs = startMs; lastPosition = position; lastFrames = frames;
+                        }
+                        Thread.Sleep(10);
+                    }
+                    client.Stop();
+                }
+            }
+        } catch (Exception error) {
+            startupError = error;
+            Diagnostic(error.Message, clock.Elapsed.TotalMilliseconds, true);
+            if (!requestedStop) failed(error);
+        } finally { ended = true; ready.Set(); stopped.Set(); }
+    }
     public void Start() {
         OffsetMs = clock.Elapsed.TotalMilliseconds;
+        if (deviceId != null) {
+            captureThread = new Thread(CaptureTimestamped) { IsBackground = true, Name = "Tingji audio " + DeviceName };
+            captureThread.SetApartmentState(ApartmentState.STA);
+            started = true; captureThread.Start();
+            if (!ready.WaitOne(5000)) throw new TimeoutException("启动录音设备超时：" + DeviceName);
+            if (startupError != null) throw new IOException("无法启动录音设备：" + DeviceName, startupError);
+            return;
+        }
         try { capture.StartRecording(); started = true; }
         catch { stopped.Set(); throw; }
     }
     public void RequestStop() {
+        if (requestedStop) return;
+        drainUntilMs = clock.Elapsed.TotalMilliseconds + 250;
         requestedStop = true;
         if (!started) { stopped.Set(); return; }
+        if (deviceId != null) return;
         try { capture.StopRecording(); }
         catch (Exception error) { MeetingFiles.Log(error); stopped.Set(); }
     }
@@ -383,217 +673,330 @@ internal sealed class CaptureTrack : IDisposable {
     public void SetPaused(bool value, double elapsedMs) { writer.SetPaused(value, elapsedMs); }
     public void Finish(double stopMs) {
         // The writer must outlive the recording thread's last DataAvailable event.
-        if (!stopped.WaitOne(5000)) MeetingFiles.Log(new TimeoutException("等待录音设备停止超时：" + DeviceName));
-        capture.Dispose();
+        if (!requestedStop) RequestStop();
+        if (!stopped.WaitOne(5000)) throw new TimeoutException("等待录音设备停止超时，原始轨道保留：" + DeviceName);
+        if (capture != null) capture.Dispose();
         writer.Finish(Math.Max(0, stopMs));
     }
     public void Dispose() {
         if (disposed) return;
         disposed = true;
-        try { capture.Dispose(); }
-        finally { try { writer.Dispose(); } finally { stopped.Dispose(); } }
+        if (deviceId != null) {
+            if (!requestedStop) RequestStop();
+            if (!stopped.WaitOne(5000)) throw new TimeoutException("录音线程未停止，已保留轨道而不关闭正在写入的文件。");
+        }
+        try { if (capture != null) capture.Dispose(); }
+        finally { try { writer.Dispose(); } finally { stopped.Dispose(); ready.Dispose(); } }
+    }
+}
+
+internal static class CaptureEndpointSelection {
+    public static string[] Outputs(string mode, string configured, string defaultId, IEnumerable<string> active) {
+        if (!string.IsNullOrWhiteSpace(configured)) return new string[] { configured };
+        if (mode == "default") return string.IsNullOrEmpty(defaultId) ? new string[0] : new string[] { defaultId };
+        return new List<string>(active).ToArray();
     }
 }
 
 internal sealed class RecordingSession : IDisposable {
+    sealed class Source {
+        public string Key, Kind, DeviceId, Name, EndReason = "";
+        public CaptureTrack Track;
+        public double RequestedMs, EndMs;
+        public bool Ended, Finished;
+        public string Error = "";
+    }
+    sealed class EndpointListener : NAudio.CoreAudioApi.Interfaces.IMMNotificationClient {
+        readonly Action<string> changed;
+        public EndpointListener(Action<string> callback) { changed = callback; }
+        public void OnDeviceStateChanged(string id, DeviceState state) { changed(id); }
+        public void OnDeviceAdded(string id) { changed(id); }
+        public void OnDeviceRemoved(string id) { changed(id); }
+        public void OnDefaultDeviceChanged(DataFlow flow, Role role, string id) { changed(id); }
+        public void OnPropertyValueChanged(string id, PropertyKey key) { }
+    }
+    readonly object gate = new object();
     readonly Stopwatch clock = new Stopwatch();
     readonly DateTimeOffset started = DateTimeOffset.Now;
     readonly Dictionary<string, object> metadata;
+    readonly Dictionary<string, object> config;
     readonly MMDeviceEnumerator devices = new MMDeviceEnumerator();
-    MMDevice microphone;
-    MMDevice output;
-    bool followsDefaultMicrophone;
-    bool followsDefaultOutput;
-    string observedMicrophoneId;
-    string observedOutputId;
-    CaptureTrack mic;
-    CaptureTrack system;
-    volatile bool stopping;
-    volatile bool microphonePaused;
-    volatile bool recordingPaused;
+    readonly List<Source> sources = new List<Source>();
+    readonly Dictionary<string, Source> active = new Dictionary<string, Source>(StringComparer.OrdinalIgnoreCase);
+    readonly HashSet<string> failedDevices = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, double> notificationsAt = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+    readonly Queue<string> notices = new Queue<string>();
+    readonly List<string> captureProblems = new List<string>();
+    readonly AutoResetEvent devicesChanged = new AutoResetEvent(false);
     readonly List<Dictionary<string, object>> microphonePauses = new List<Dictionary<string, object>>();
     readonly List<Dictionary<string, object>> recordingPauses = new List<Dictionary<string, object>>();
     readonly List<Dictionary<string, object>> bookmarks = new List<Dictionary<string, object>>();
-    int failureSignalled;
+    EndpointListener listener;
+    Thread deviceThread;
+    volatile bool stopping, microphonePaused, recordingPaused;
+    int microphoneCount, outputCount, inventoryVersion, observedInventoryVersion;
+    double stopBoundaryMs;
+    bool disposed;
+    bool initializing = true;
     string captureError;
     public readonly string DirectoryPath;
     public bool Stopping { get { return stopping; } }
     public bool MicrophonePaused { get { return microphonePaused; } }
     public bool RecordingPaused { get { return recordingPaused; } }
     public TimeSpan Elapsed { get { return clock.Elapsed; } }
-    public float MicrophonePeak { get { return mic == null ? 0 : mic.Peak; } }
-    public float SystemPeak { get { return system == null ? 0 : system.Peak; } }
-    public string MicrophoneName { get { return mic == null ? "未启动" : mic.DeviceName; } }
-    public string SystemDeviceName { get { return system == null ? "未启动" : system.DeviceName; } }
-    readonly Action<Exception> onFailure;
+    float Peak(string kind) {
+        float peak = 0;
+        lock (gate) foreach (Source source in sources) if (!source.Ended && source.Kind == kind && source.Track != null) peak = Math.Max(peak, source.Track.Peak);
+        return peak;
+    }
+    public float MicrophonePeak { get { return Peak("microphone"); } }
+    public float SystemPeak { get { return Peak("loopback"); } }
+    string Names(string kind) {
+        var names = new List<string>();
+        lock (gate) foreach (Source source in sources) if (!source.Ended && source.Kind == kind && source.Track != null) names.Add(source.Name);
+        return names.Count == 0 ? "等待可用设备" : string.Join("；", names.ToArray());
+    }
+    public string MicrophoneName { get { return Names("microphone"); } }
+    public string SystemDeviceName { get { return Names("loopback"); } }
 
-    public RecordingSession(Dictionary<string, object> config, Action<Exception> failed) {
-        onFailure = failed;
+    public RecordingSession(Dictionary<string, object> settings, Action<Exception> failed) {
+        config = settings;
         clock.Start();
-        string vaultRoot = MeetingFiles.VaultRoot(config);
-        string audioFolder = Path.Combine(vaultRoot, MeetingFiles.Text(config, "meeting_folder", "会议记录"), "附件");
+        string audioFolder = Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"), "附件");
         string folder = Path.Combine(MeetingFiles.Home, "work");
-        MeetingConfig.CheckOrdinaryPath(folder);
-        Directory.CreateDirectory(folder);
-        MeetingConfig.CheckOrdinaryPath(folder);
+        MeetingConfig.CheckOrdinaryPath(folder); Directory.CreateDirectory(folder); MeetingConfig.CheckOrdinaryPath(folder);
         DirectoryPath = Path.Combine(folder, started.ToString("yyyyMMdd-HHmmss"));
         if (Directory.Exists(DirectoryPath) || Directory.Exists(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))))
             DirectoryPath += "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        Directory.CreateDirectory(DirectoryPath);
-        MeetingConfig.CheckOrdinaryPath(DirectoryPath);
+        Directory.CreateDirectory(DirectoryPath); MeetingConfig.CheckOrdinaryPath(DirectoryPath);
         metadata = new Dictionary<string, object> {
-            { "schema_version", 1 }, { "start_time", started.ToString("o") }, { "state", "recording" },
+            { "schema_version", 2 }, { "start_time", started.ToString("o") }, { "state", "recording" },
             { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
-            { "transcription_mode", config["transcription_mode"] },
-            { "asr_denoise", config["asr_denoise"] },
+            { "transcription_mode", config["transcription_mode"] }, { "asr_denoise", config["asr_denoise"] },
+            { "asr_echo_filter", config.ContainsKey("asr_echo_filter") ? config["asr_echo_filter"] : true },
             { "transcription_model", (string)config["transcription_mode"] == "api" ? config["api_model"] : "Qwen3-ASR-1.7B" },
             { "transcription_api_base_url", (string)config["transcription_mode"] == "api" ? ((string)config["api_base_url"]).TrimEnd('/') : "" },
-            { "session_dir", DirectoryPath }, { "capture_offsets_ms", new Dictionary<string, object> { { "mic", 0 }, { "system", 0 } } },
-            { "device_start_offsets_ms", new Dictionary<string, object>() },
+            { "system_capture_mode", MeetingFiles.Text(config, "system_capture_mode", "all_active") },
+            { "timeline", "wasapi_device_qpc_100ns" }, { "session_dir", DirectoryPath },
             { "microphone_pauses", microphonePauses }, { "microphone_paused", false },
-            { "recording_pauses", recordingPauses }, { "recording_paused", false },
-            { "bookmarks", bookmarks },
-            { "device_names", new Dictionary<string, object>() }, { "audio_files", new Dictionary<string, object>() }
+            { "recording_pauses", recordingPauses }, { "recording_paused", false }, { "bookmarks", bookmarks }
         };
         Save();
         try {
-            string micId = MeetingFiles.Text(config, "mic_device_id", "");
-            string outputId = MeetingFiles.Text(config, "system_device_id", "");
-            followsDefaultMicrophone = string.IsNullOrWhiteSpace(micId);
-            followsDefaultOutput = string.IsNullOrWhiteSpace(outputId);
-            microphone = string.IsNullOrWhiteSpace(micId) ? devices.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console) : devices.GetDevice(micId);
-            output = string.IsNullOrWhiteSpace(outputId) ? devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia) : devices.GetDevice(outputId);
-            observedMicrophoneId = microphone.ID;
-            observedOutputId = output.ID;
-            mic = new CaptureTrack(new WasapiCapture(microphone), microphone.FriendlyName, Path.Combine(DirectoryPath, "mic.wav"), clock, SignalFailure);
-            system = new CaptureTrack(new WasapiLoopbackCapture(output), output.FriendlyName, Path.Combine(DirectoryPath, "system.wav"), clock, SignalFailure);
-            metadata["device_names"] = new Dictionary<string, object> { { "mic", mic.DeviceName }, { "system", system.DeviceName } };
-            metadata["audio_files"] = new Dictionary<string, object> { { "mic", mic.PathName }, { "system", system.PathName } };
-            mic.Start();
-            system.Start();
-            metadata["device_start_offsets_ms"] = new Dictionary<string, object> { { "mic", mic.OffsetMs }, { "system", system.OffsetMs } };
-            Save();
-        } catch (Exception error) {
-            captureError = error.Message;
+            listener = new EndpointListener(delegate(string id) {
+                if (stopping) return;
+                lock (gate) if (!string.IsNullOrEmpty(id)) notificationsAt[id] = clock.Elapsed.TotalMilliseconds;
+                Interlocked.Increment(ref inventoryVersion);
+                try { devicesChanged.Set(); } catch (ObjectDisposedException) { }
+            });
+            int registered = devices.RegisterEndpointNotificationCallback(listener);
+            if (registered != 0) Marshal.ThrowExceptionForHR(registered);
+            RefreshDevices(devices);
+            if (active.Count == 0) throw new IOException("没有可捕获的音频设备，请检查 Windows 声音设置。");
+            initializing = false;
+            deviceThread = new Thread(DeviceLoop) { IsBackground = true, Name = "Tingji audio devices" };
+            deviceThread.SetApartmentState(ApartmentState.STA); deviceThread.Start();
+        } catch {
             stopping = true;
-            if (mic != null) mic.RequestStop();
-            if (system != null) system.RequestStop();
-            try { FinalizeAudio(); } catch (Exception cleanupError) { MeetingFiles.Log(cleanupError); }
-            Dispose();
+            try { FinalizeAudio(clock.Elapsed.TotalMilliseconds); } finally { Dispose(); }
             throw;
         }
     }
-    public string CheckDefaultDeviceChanges() {
-        if (stopping) return null;
-        var changes = new List<string>();
-        if (followsDefaultMicrophone) {
-            string change = CheckDefaultDevice(DataFlow.Capture, Role.Console, ref observedMicrophoneId, "麦克风");
-            if (change != null) changes.Add(change);
+    bool Problem(string message) {
+        lock (gate) {
+            if (captureProblems.Contains(message)) return false;
+            captureProblems.Add(message); return true;
         }
-        if (followsDefaultOutput) {
-            string change = CheckDefaultDevice(DataFlow.Render, Role.Multimedia, ref observedOutputId, "电脑声音设备");
-            if (change != null) changes.Add(change);
-        }
-        if (changes.Count == 0) return null;
-        return string.Join("；", changes.ToArray()) + "。本场仍捕获麦克风：" + MicrophoneName + "；电脑声音：" + SystemDeviceName + "。下一场将重新选择默认设备。";
     }
-    string CheckDefaultDevice(DataFlow flow, Role role, ref string observedId, string label) {
-        string currentId, currentName;
+    void MissingDevice(string message) { if (Problem(message)) lock (gate) notices.Enqueue(message); }
+    Source[] Snapshot() { lock (gate) return sources.ToArray(); }
+    static string EndpointKey(string kind, string id) { return kind + ":" + id; }
+    void CaptureFailed(Source source, string endpointKey, Exception error) {
+        lock (gate) {
+            source.Error = error.Message; source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
+            source.EndReason = "capture_error"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
+            notices.Enqueue("音频设备采集中断：" + source.Name + "；其他设备继续录制。");
+        }
+        Problem(source.Name + "：" + error.Message);
+        try { devicesChanged.Set(); } catch (ObjectDisposedException) { }
+    }
+    void OpenSource(MMDevice device, string kind) {
+        string endpointKey = EndpointKey(kind, device.ID);
+        Source source;
+        lock (gate) {
+            if (stopping || active.ContainsKey(endpointKey) || failedDevices.Contains(endpointKey)) return;
+            int number = kind == "microphone" ? ++microphoneCount : ++outputCount;
+            string key = (kind == "microphone" ? "mic" : "system") + (number == 1 ? "" : "_" + number.ToString("00", CultureInfo.InvariantCulture));
+            double at;
+            source = new Source { Key = key, Kind = kind, DeviceId = device.ID, Name = device.FriendlyName,
+                RequestedMs = notificationsAt.TryGetValue(device.ID, out at) ? at : initializing ? 0 : clock.Elapsed.TotalMilliseconds };
+            sources.Add(source); active[endpointKey] = source;
+        }
         try {
-            using (MMDevice current = devices.GetDefaultAudioEndpoint(flow, role)) {
-                currentId = current.ID;
-                currentName = current.FriendlyName;
+            var track = new CaptureTrack(device, kind == "loopback", Path.Combine(DirectoryPath, source.Key + ".wav"), clock, delegate(Exception error) {
+                CaptureFailed(source, endpointKey, error);
+            });
+            lock (gate) {
+                source.Track = track;
+                track.SetPaused(recordingPaused || (kind == "microphone" && microphonePaused), clock.Elapsed.TotalMilliseconds);
             }
-        } catch (COMException) {
-            currentId = "";
-            currentName = "暂不可用";
+            source.Track.Start();
+            if (stopping) source.Track.SetEndBoundary(stopBoundaryMs);
+            lock (gate) if (!initializing) notices.Enqueue((kind == "microphone" ? "麦克风已接入：" : "已覆盖电脑输出：") + source.Name);
+        } catch (Exception error) {
+            lock (gate) {
+                source.Error = error.Message; source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
+                source.EndReason = "open_failed"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
+                notices.Enqueue("暂时无法捕获设备：" + source.Name + "；其他设备继续录制。");
+            }
+            Problem(source.Name + "：" + error.Message);
         }
-        if (string.Equals(observedId, currentId, StringComparison.Ordinal)) return null;
-        observedId = currentId;
-        return "默认" + label + "已变化：" + currentName;
     }
-    void SignalFailure(Exception error) {
-        if (stopping || Interlocked.Exchange(ref failureSignalled, 1) != 0) return;
-        captureError = error.Message;
-        MeetingFiles.Log(error);
-        onFailure(error);
+    void EndSource(Source source, double atMs, string reason) {
+        lock (gate) {
+            if (source.Ended) return;
+            source.Ended = true; source.EndMs = atMs; source.EndReason = reason;
+            active.Remove(EndpointKey(source.Kind, source.DeviceId));
+            notices.Enqueue("音频设备已断开或切换：" + source.Name + "；其他设备继续录制。");
+        }
+        if (source.Track != null) { source.Track.SetEndBoundary(atMs); source.Track.RequestStop(); }
     }
-    void Save() { MeetingFiles.WriteJson(Path.Combine(DirectoryPath, "session.json"), metadata); }
+    void FinishEndedSources() {
+        foreach (Source source in Snapshot()) if (source.Ended && !source.Finished && source.Track != null) {
+            try { source.Track.SetEndBoundary(source.EndMs); source.Track.RequestStop(); source.Track.Finish(source.EndMs); }
+            catch (Exception error) { Problem(source.Name + "：" + error.Message); }
+            source.Finished = true;
+        }
+    }
+    void RefreshDevices(MMDeviceEnumerator enumerator) {
+        var desired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string micId = MeetingFiles.Text(config, "mic_device_id", "");
+        try {
+            using (var microphone = string.IsNullOrWhiteSpace(micId) ? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console) : enumerator.GetDevice(micId)) {
+                if (microphone.State == DeviceState.Active) { desired.Add(EndpointKey("microphone", microphone.ID)); OpenSource(microphone, "microphone"); }
+                else MissingDevice("麦克风不可用，正在等待设备；电脑声音继续录制。");
+            }
+        } catch (COMException) { MissingDevice("麦克风不可用，正在等待设备；电脑声音继续录制。"); }
+        var available = new Dictionary<string, MMDevice>(StringComparer.OrdinalIgnoreCase);
+        try {
+            foreach (MMDevice output in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)) available[output.ID] = output;
+            string defaultId = "";
+            if (enumerator.HasDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)) using (var current = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)) defaultId = current.ID;
+            string[] targetOutputs = CaptureEndpointSelection.Outputs(MeetingFiles.Text(config, "system_capture_mode", "all_active"), MeetingFiles.Text(config, "system_device_id", ""), defaultId, available.Keys);
+            if (targetOutputs.Length == 0) MissingDevice("没有可用的电脑声音输出设备，正在等待设备；麦克风继续录制。");
+            foreach (string id in targetOutputs) {
+                MMDevice output;
+                if (available.TryGetValue(id, out output)) { desired.Add(EndpointKey("loopback", id)); OpenSource(output, "loopback"); }
+                else MissingDevice("指定的电脑声音输出设备不可用，正在等待设备；麦克风继续录制。");
+            }
+        } finally { foreach (MMDevice device in available.Values) device.Dispose(); }
+        // Open replacements first. Shared QPC timestamps keep already-running
+        // endpoints undisturbed when the default route changes.
+        foreach (Source source in Snapshot()) if (!source.Ended && !desired.Contains(EndpointKey(source.Kind, source.DeviceId))) EndSource(source, clock.Elapsed.TotalMilliseconds, "device_removed_or_route_changed");
+        FinishEndedSources(); Save();
+    }
+    void DeviceLoop() {
+        try {
+            using (var enumerator = new MMDeviceEnumerator()) while (!stopping) {
+                devicesChanged.WaitOne(2000); if (stopping) break;
+                int version = inventoryVersion;
+                if (version != observedInventoryVersion) { lock (gate) failedDevices.Clear(); observedInventoryVersion = version; }
+                try { RefreshDevices(enumerator); }
+                catch (Exception error) { Problem("重新检测音频设备失败：" + error.Message); }
+            }
+        } catch (Exception error) { Problem("音频设备监测停止：" + error.Message); }
+    }
+    public string CheckDefaultDeviceChanges() {
+        lock (gate) {
+            if (notices.Count == 0) return null;
+            string result = string.Join("；", notices.ToArray()); notices.Clear(); return result;
+        }
+    }
+    void Save() {
+        lock (gate) {
+            var entries = new List<object>(); var offsets = new Dictionary<string, object>();
+            var names = new Dictionary<string, object>(); var files = new Dictionary<string, object>();
+            var starts = new Dictionary<string, object>();
+            foreach (Source source in sources) {
+                if (source.Track == null) continue;
+                offsets[source.Key] = 0; names[source.Key] = source.Name; files[source.Key] = source.Track.PathName; starts[source.Key] = source.Track.OffsetMs;
+                entries.Add(new Dictionary<string, object> {
+                    { "source", source.Key }, { "kind", source.Kind }, { "path", Path.GetFileName(source.Track.PathName) },
+                    { "device_id", source.DeviceId }, { "name", source.Name }, { "requested_at_seconds", source.RequestedMs / 1000.0 },
+                    { "opened_at_seconds", source.Track.OffsetMs / 1000.0 }, { "coverage_gap_seconds", Math.Max(0, source.Track.OffsetMs - source.RequestedMs) / 1000.0 },
+                    { "closed_at_seconds", source.Ended ? (object)(source.EndMs / 1000.0) : null },
+                    { "end_reason", source.EndReason }, { "error", source.Error }, { "diagnostics", source.Track.Diagnostics }
+                });
+            }
+            metadata["sources"] = entries; metadata["capture_offsets_ms"] = offsets;
+            metadata["device_names"] = names; metadata["audio_files"] = files; metadata["device_start_offsets_ms"] = starts;
+            metadata["capture_problems"] = captureProblems.ToArray();
+            MeetingFiles.WriteJson(Path.Combine(DirectoryPath, "session.json"), metadata);
+        }
+    }
     public double AddBookmark() {
         if (stopping) throw new InvalidOperationException("录音已结束，不能继续标记。");
-        double seconds = clock.Elapsed.TotalSeconds;
-        bookmarks.Add(new Dictionary<string, object> { { "time_seconds", seconds }, { "label", "重点 " + (bookmarks.Count + 1) } });
-        try { Save(); } catch { bookmarks.RemoveAt(bookmarks.Count - 1); throw; }
-        return seconds;
+        lock (gate) {
+            double seconds = clock.Elapsed.TotalSeconds;
+            bookmarks.Add(new Dictionary<string, object> { { "time_seconds", seconds }, { "label", "重点 " + (bookmarks.Count + 1) } });
+            try { Save(); } catch { bookmarks.RemoveAt(bookmarks.Count - 1); throw; }
+            return seconds;
+        }
     }
     public void SetMicrophonePaused(bool value) {
-        if (stopping || mic == null || microphonePaused == value) return;
-        double elapsedMs = clock.Elapsed.TotalMilliseconds;
-        mic.SetPaused(value || recordingPaused, elapsedMs);
-        if (value) microphonePauses.Add(new Dictionary<string, object> { { "start_seconds", elapsedMs / 1000.0 }, { "end_seconds", null } });
-        else microphonePauses[microphonePauses.Count - 1]["end_seconds"] = elapsedMs / 1000.0;
-        microphonePaused = value;
-        metadata["microphone_paused"] = value;
-        Save();
+        if (stopping || microphonePaused == value) return;
+        lock (gate) {
+            double at = clock.Elapsed.TotalMilliseconds; microphonePaused = value;
+            foreach (Source source in sources) if (!source.Ended && source.Track != null && source.Kind == "microphone") source.Track.SetPaused(value || recordingPaused, at);
+            if (value) microphonePauses.Add(new Dictionary<string, object> { { "start_seconds", at / 1000.0 }, { "end_seconds", null } });
+            else microphonePauses[microphonePauses.Count - 1]["end_seconds"] = at / 1000.0;
+            metadata["microphone_paused"] = value; Save();
+        }
     }
     public void SetRecordingPaused(bool value) {
         if (stopping || recordingPaused == value) return;
-        double elapsedMs = clock.Elapsed.TotalMilliseconds;
-        mic.SetPaused(value || microphonePaused, elapsedMs);
-        system.SetPaused(value, elapsedMs);
-        if (value) recordingPauses.Add(new Dictionary<string, object> { { "start_seconds", elapsedMs / 1000.0 }, { "end_seconds", null } });
-        else recordingPauses[recordingPauses.Count - 1]["end_seconds"] = elapsedMs / 1000.0;
-        recordingPaused = value;
-        metadata["recording_paused"] = value;
-        Save();
+        lock (gate) {
+            double at = clock.Elapsed.TotalMilliseconds; recordingPaused = value;
+            foreach (Source source in sources) if (!source.Ended && source.Track != null) source.Track.SetPaused(value || (source.Kind == "microphone" && microphonePaused), at);
+            if (value) recordingPauses.Add(new Dictionary<string, object> { { "start_seconds", at / 1000.0 }, { "end_seconds", null } });
+            else recordingPauses[recordingPauses.Count - 1]["end_seconds"] = at / 1000.0;
+            metadata["recording_paused"] = value; Save();
+        }
     }
-    void FinalizeAudio(double? requestedStopMs = null) {
-        double stopMs = requestedStopMs.HasValue ? requestedStopMs.Value : clock.Elapsed.TotalMilliseconds;
-        Exception firstError = null;
-        try { if (mic != null) mic.Finish(stopMs); } catch (Exception error) { firstError = error; MeetingFiles.Log(error); }
-        try { if (system != null) system.Finish(stopMs); } catch (Exception error) { if (firstError == null) firstError = error; MeetingFiles.Log(error); }
-        clock.Stop();
-        if (firstError != null && string.IsNullOrEmpty(captureError)) captureError = firstError.Message;
+    void FinalizeAudio(double stopMs) {
+        foreach (Source source in Snapshot()) if (!source.Ended) EndSource(source, stopMs, "session_stopped");
+        FinishEndedSources(); clock.Stop();
+        foreach (Source source in Snapshot()) if (source.Track != null) foreach (Dictionary<string, object> diagnostic in source.Track.Diagnostics)
+            if (diagnostic.ContainsKey("timing_uncertain") && (bool)diagnostic["timing_uncertain"]) Problem(source.Name + "：" + (string)diagnostic["message"]);
+        captureError = string.Join("；", captureProblems.ToArray());
         metadata["state"] = string.IsNullOrEmpty(captureError) ? "recorded" : "recorded_with_error";
-        metadata["end_time"] = started.AddMilliseconds(stopMs).ToString("o");
-        metadata["duration_seconds"] = stopMs / 1000.0;
+        metadata["end_time"] = started.AddMilliseconds(stopMs).ToString("o"); metadata["duration_seconds"] = stopMs / 1000.0;
         metadata["capture_error"] = captureError;
         if (microphonePaused && microphonePauses.Count > 0) microphonePauses[microphonePauses.Count - 1]["end_seconds"] = stopMs / 1000.0;
         if (recordingPaused && recordingPauses.Count > 0) recordingPauses[recordingPauses.Count - 1]["end_seconds"] = stopMs / 1000.0;
-        metadata["device_start_offsets_ms"] = new Dictionary<string, object> { { "mic", mic == null ? 0 : mic.OffsetMs }, { "system", system == null ? 0 : system.OffsetMs } };
         Save();
     }
     public void StopAsync(Action<Exception> done) {
         if (stopping) return;
-        stopping = true;
-        double stopMs = clock.Elapsed.TotalMilliseconds;
-        if (mic != null) mic.SetEndBoundary(stopMs);
-        if (system != null) system.SetEndBoundary(stopMs);
+        stopping = true; stopBoundaryMs = clock.Elapsed.TotalMilliseconds; devicesChanged.Set();
+        foreach (Source source in Snapshot()) if (source.Track != null && !source.Ended) source.Track.SetEndBoundary(stopBoundaryMs);
         ThreadPool.QueueUserWorkItem(delegate {
             Exception failure = null;
             try {
-                // NAudio's polling stop discards the final unread packet. Keep
-                // two polling intervals to drain it, but enforce the user stop
-                // boundary above so no later audio enters either saved WAV.
-                Thread.Sleep(120);
-                if (mic != null) mic.RequestStop();
-                if (system != null) system.RequestStop();
-                FinalizeAudio(stopMs);
+                if (deviceThread != null && !deviceThread.Join(6000)) throw new TimeoutException("等待设备监测线程停止超时。");
+                FinalizeAudio(stopBoundaryMs);
             } catch (Exception error) { failure = error; MeetingFiles.Log(error); }
-            finally {
-                try { Dispose(); }
-                catch (Exception error) { if (failure == null) failure = error; MeetingFiles.Log(error); }
-            }
+            finally { try { Dispose(); } catch (Exception error) { if (failure == null) failure = error; MeetingFiles.Log(error); } }
             done(failure);
         });
     }
     public void Dispose() {
-        try { if (mic != null) mic.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); } finally { mic = null; }
-        try { if (system != null) system.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); } finally { system = null; }
-        try { if (microphone != null) microphone.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); } finally { microphone = null; }
-        try { if (output != null) output.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); } finally { output = null; }
-        try { devices.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); }
+        if (disposed) return; disposed = true; stopping = true; devicesChanged.Set();
+        if (listener != null) { try { devices.UnregisterEndpointNotificationCallback(listener); } catch (Exception error) { MeetingFiles.Log(error); } }
+        if (deviceThread != null && deviceThread != Thread.CurrentThread) deviceThread.Join(6000);
+        foreach (Source source in Snapshot()) if (source.Track != null) try { source.Track.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); }
+        devices.Dispose(); devicesChanged.Dispose();
     }
 }
 
@@ -1643,7 +2046,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     string warning = recording.CheckDefaultDeviceChanges();
                     if (!string.IsNullOrEmpty(warning)) {
                         panel.SetDeviceWarning(warning);
-                        Notice("默认音频设备已变化", warning, ToolTipIcon.Warning);
+                        Notice("音频设备变化", warning, ToolTipIcon.Warning);
                     }
                 }
             }
@@ -1662,14 +2065,16 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (!workerExited) continue;
                 var record = catalog.Get(job.Session);
                 if (fresh && job.Process.ExitCode == 0 && record != null &&
-                    (record.State == "completed" || record.State == "transcript_only" || record.State == "audio_only" || record.State == "removed")) {
+                    (record.State == "completed" || record.State == "capture_warning" || record.State == "transcript_only" || record.State == "audio_only" || record.State == "removed")) {
                     job.Reported = true;
                     MarkNotifiedSafely(record);
                     if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
                     if (record.State == "completed")
                         Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
+                    else if (record.State == "capture_warning")
+                        Notice("采集异常 · " + record.Label, record.Message + "\n录音：" + record.AudioPath + "\n转录：" + record.NotePath, ToolTipIcon.Warning);
                     // Completing A must never take focus away from meeting B.
-                    if (recording == null && File.Exists(record.NotePath) && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
+                    if (record.State != "capture_warning" && recording == null && File.Exists(record.NotePath) && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
                         try { OpenNote(record.NotePath, true); }
                         catch (Exception openError) { MeetingFiles.Log(openError); Notice("笔记已保存，未能自动打开", "请从最近会议手动打开对应笔记。", ToolTipIcon.Warning); }
                     }
@@ -1738,6 +2143,7 @@ internal sealed class MeetingContext : ApplicationContext {
             case "completed": return "录音与转录已完成";
             case "transcript_only": return "仅保留转录";
             case "audio_only": return "仅保留录音";
+            case "capture_warning": return "采集异常 · 检查录音";
             case "interrupted": return "录音中断 · 检查资料";
             case "failed": return "转写失败 · 可重试";
             case "retry": return "录音已保留 · 可重试";
