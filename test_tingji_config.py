@@ -26,6 +26,17 @@ class ConfigurationTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIs(config[field], True)
 
+    def test_animation_mode_defaults_to_system_and_allows_app_override(self):
+        self.assertEqual(self.validate()["animation_mode"], "auto")
+        for mode in ("auto", "on", "off"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.validate(animation_mode=mode)["animation_mode"], mode)
+
+    def test_animation_mode_rejects_ambiguous_values(self):
+        for value in (True, False, None, "true", "ON", "", 1):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.validate(animation_mode=value)
+
     def test_feedback_can_be_disabled_without_changing_storage_or_recording(self):
         changes = {field: False for field in
                    ("show_processing_window", "notify_device_changes", "auto_open_completed_note")}

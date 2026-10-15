@@ -584,50 +584,131 @@ internal sealed class RecordingSession : IDisposable {
     }
 }
 
+internal static class RecorderMotionPreferences {
+    public static string Mode = "auto";
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool SystemParametersInfo(uint action, uint parameter, out int value, uint flags);
+    public static bool Enabled {
+        get {
+            if (Mode == "on") return true;
+            if (Mode == "off") return false;
+            int enabled;
+            return !SystemInformation.HighContrast && (!SystemParametersInfo(0x1042, 0, out enabled, 0) || enabled != 0);
+        }
+    }
+}
+
 internal sealed class RecorderActionButton : Button {
-    public bool EndsRecording;
-    public bool MicrophoneDisabled;
-    public bool RecordingPaused;
+    readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer { Interval = 33 };
+    readonly Stopwatch transitionClock = new Stopwatch();
+    bool endsRecording, microphoneDisabled, recordingPaused, collapsesWindow;
+    public bool EndsRecording { get { return endsRecording; } set { if (endsRecording == value) return; endsRecording = value; UpdateVisualState(); } }
+    public bool MicrophoneDisabled { get { return microphoneDisabled; } set { if (microphoneDisabled == value) return; microphoneDisabled = value; if (value) { inputLevel = 0; InputActive = false; } UpdateVisualState(); } }
+    public bool RecordingPaused { get { return recordingPaused; } set { if (recordingPaused == value) return; recordingPaused = value; if (value) { inputLevel = 0; InputActive = false; } UpdateVisualState(); } }
+    public bool CollapsesWindow { get { return collapsesWindow; } set { if (collapsesWindow == value) return; collapsesWindow = value; UpdateVisualState(); } }
     public bool InputActive;
     float inputLevel;
-    public bool CollapsesWindow;
-    bool hovering;
+    bool hovering, pressed;
+    Color visualFill, visualInk, visualBorder, startFill, startInk, startBorder, targetFill, targetInk, targetBorder;
+    float visualInputLevel, startInputLevel, targetInputLevel;
+    float visualScale = 1, startScale = 1, targetScale = 1;
     public RecorderActionButton() {
         FlatStyle = FlatStyle.Flat;
         FlatAppearance.BorderSize = 0;
         Cursor = Cursors.Hand;
         TabStop = true;
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        animation.Tick += delegate { AdvanceAnimation(); };
+        UpdateVisualState();
     }
-    protected override void OnMouseEnter(EventArgs e) { hovering = true; Invalidate(); base.OnMouseEnter(e); }
-    protected override void OnMouseLeave(EventArgs e) { hovering = false; Invalidate(); base.OnMouseLeave(e); }
-    protected override void OnEnabledChanged(EventArgs e) { Cursor = Enabled ? Cursors.Hand : Cursors.Default; Invalidate(); base.OnEnabledChanged(e); }
+    protected override void OnMouseEnter(EventArgs e) { hovering = true; pressed = Capture && (MouseButtons & MouseButtons.Left) != 0; UpdateVisualState(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hovering = pressed = false; UpdateVisualState(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { pressed = true; UpdateVisualState(); } base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { pressed = false; UpdateVisualState(); } base.OnMouseUp(e); }
+    protected override void OnMouseCaptureChanged(EventArgs e) { if (!Capture && pressed) { pressed = false; UpdateVisualState(); } base.OnMouseCaptureChanged(e); }
+    protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space) { pressed = true; UpdateVisualState(); } base.OnKeyDown(e); }
+    protected override void OnKeyUp(KeyEventArgs e) { if (e.KeyCode == Keys.Space) { pressed = false; UpdateVisualState(); } base.OnKeyUp(e); }
+    protected override void OnLostFocus(EventArgs e) { pressed = false; UpdateVisualState(); base.OnLostFocus(e); }
+    protected override void OnEnabledChanged(EventArgs e) {
+        Cursor = Enabled ? Cursors.Hand : Cursors.Default;
+        if (!Enabled) { pressed = false; inputLevel = 0; InputActive = false; }
+        UpdateVisualState();
+        base.OnEnabledChanged(e);
+    }
     public void SetInputLevel(float value) {
         inputLevel = !Enabled || MicrophoneDisabled || RecordingPaused ? 0 : Math.Max(0, Math.Min(1, value));
         InputActive = inputLevel > .003f;
-        Invalidate();
+        UpdateVisualState();
+    }
+    static Color Blend(Color from, Color to, double progress) {
+        return Color.FromArgb((int)Math.Round(from.R + (to.R - from.R) * progress), (int)Math.Round(from.G + (to.G - from.G) * progress), (int)Math.Round(from.B + (to.B - from.B) * progress));
+    }
+    void UpdateVisualState() {
+        if (animation == null || IsDisposed) return;
+        if (animation.Enabled) AdvanceAnimation();
+        bool unavailable = !Enabled || (RecordingPaused && !EndsRecording);
+        Color fill = unavailable ? Color.FromArgb(239, 241, 244) : EndsRecording
+            ? (pressed ? Color.FromArgb(171, 34, 45) : hovering ? Color.FromArgb(191, 42, 54) : Color.FromArgb(216, 57, 69))
+            : MicrophoneDisabled ? (pressed ? Color.FromArgb(240, 224, 200) : hovering ? Color.FromArgb(247, 235, 215) : Color.FromArgb(250, 243, 232))
+            : pressed ? Color.FromArgb(205, 226, 253) : (hovering || InputActive ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
+        Color ink = unavailable ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : InputActive ? Color.FromArgb(31, 126, 220) : Color.FromArgb(40, 104, 168);
+        if (CollapsesWindow) ink = !Enabled ? SystemColors.GrayText : pressed ? Color.FromArgb(31, 78, 126) : hovering ? Color.FromArgb(40, 104, 168) : Color.FromArgb(131, 146, 165);
+        Color border = unavailable ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : InputActive ? Color.FromArgb(78, 159, 235) : Color.FromArgb(188, 215, 243);
+        float nextInput = InputActive && !unavailable && !MicrophoneDisabled ? (float)Math.Max(0, Math.Min(1, (Math.Log10(inputLevel) + 2.7) / 2.2)) : 0;
+        float nextScale = pressed && Enabled ? .95f : 1;
+        if (fill == targetFill && ink == targetInk && border == targetBorder && Math.Abs(nextInput - targetInputLevel) < .001f && nextScale == targetScale) return;
+        startFill = visualFill; startInk = visualInk; startBorder = visualBorder;
+        startInputLevel = visualInputLevel; startScale = visualScale;
+        targetFill = fill; targetInk = ink; targetBorder = border;
+        targetInputLevel = nextInput; targetScale = nextScale;
+        if (!IsHandleCreated || !Visible || !RecorderMotionPreferences.Enabled) { CompleteAnimation(); return; }
+        transitionClock.Restart();
+        animation.Start();
+    }
+    void AdvanceAnimation() {
+        if (!Visible || !IsHandleCreated || !RecorderMotionPreferences.Enabled || transitionClock.ElapsedMilliseconds >= 150) { CompleteAnimation(); return; }
+        double remaining = 1 - transitionClock.Elapsed.TotalMilliseconds / 150.0;
+        double progress = 1 - remaining * remaining * remaining;
+        visualFill = Blend(startFill, targetFill, progress);
+        visualInk = Blend(startInk, targetInk, progress);
+        visualBorder = Blend(startBorder, targetBorder, progress);
+        visualInputLevel = startInputLevel + (targetInputLevel - startInputLevel) * (float)progress;
+        visualScale = startScale + (targetScale - startScale) * (float)progress;
+        Invalidate(ClientRectangle);
+    }
+    void CompleteAnimation() {
+        animation.Stop();
+        transitionClock.Stop();
+        visualFill = targetFill; visualInk = targetInk; visualBorder = targetBorder;
+        visualInputLevel = targetInputLevel; visualScale = targetScale;
+        Invalidate(ClientRectangle);
+    }
+    protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); CompleteAnimation(); }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); CompleteAnimation(); }
+    protected override void OnHandleDestroyed(EventArgs e) { animation.Stop(); transitionClock.Stop(); base.OnHandleDestroyed(e); }
+    protected override void Dispose(bool disposing) {
+        if (disposing) { animation.Stop(); animation.Dispose(); transitionClock.Stop(); }
+        base.Dispose(disposing);
     }
     protected override void OnPaint(PaintEventArgs e) {
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.Clear(BackColor);
         if (CollapsesWindow) {
-            float scale = Height / 16f;
+            float scale = Height / 16f * visualScale;
             float x = Width / 2f, y = Height / 2f;
-            using (var pen = new Pen(hovering ? Color.FromArgb(40, 104, 168) : Color.FromArgb(131, 146, 165), 1.6f * scale)) {
+            using (var pen = new Pen(visualInk, 1.6f * scale)) {
                 pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
                 g.DrawLines(pen, new PointF[] { new PointF(x - 4 * scale, y - 2 * scale), new PointF(x, y + 2 * scale), new PointF(x + 4 * scale, y - 2 * scale) });
             }
             if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(g, new Rectangle(1, 1, Width - 2, Height - 2));
             return;
         }
-        float unit = Math.Min(Width, Height) / 36f;
+        float unit = Math.Min(Width, Height) / 36f * visualScale;
         g.TranslateTransform((Width - 36 * unit) / 2, (Height - 36 * unit) / 2);
         g.ScaleTransform(unit, unit);
-        Color fill = !Enabled || (RecordingPaused && !EndsRecording) ? Color.FromArgb(239, 241, 244) : EndsRecording
-            ? (hovering ? Color.FromArgb(191, 42, 54) : Color.FromArgb(216, 57, 69))
-            : MicrophoneDisabled ? Color.FromArgb(250, 243, 232) : (hovering || InputActive ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
-        Color ink = !Enabled || (RecordingPaused && !EndsRecording) ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : InputActive ? Color.FromArgb(31, 126, 220) : Color.FromArgb(40, 104, 168);
+        Color fill = visualFill;
+        Color ink = visualInk;
         using (var brush = new SolidBrush(fill)) {
             if (EndsRecording) using (var block = new System.Drawing.Drawing2D.GraphicsPath()) {
                 block.AddArc(3, 3, 8, 8, 180, 90);
@@ -639,11 +720,11 @@ internal sealed class RecorderActionButton : Button {
             }
             else g.FillEllipse(brush, 1, 1, 34, 34);
         }
-        if (!EndsRecording) using (var border = new Pen(!Enabled || RecordingPaused ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : InputActive ? Color.FromArgb(78, 159, 235) : Color.FromArgb(188, 215, 243), InputActive ? 1.6f : 1.1f))
+        if (!EndsRecording) using (var border = new Pen(visualBorder, 1.1f + .5f * visualInputLevel))
             g.DrawEllipse(border, 1.6f, 1.6f, 32.8f, 32.8f);
-        if (!EndsRecording && InputActive) {
-            float height = 3 + 7 * (float)Math.Min(1, (Math.Log10(inputLevel) + 2.7) / 2.2);
-            using (var brush = new SolidBrush(Color.FromArgb(139, 196, 248)))
+        if (!EndsRecording && visualInputLevel > .001f) {
+            float height = 3 + 7 * visualInputLevel;
+            using (var brush = new SolidBrush(Color.FromArgb((int)(180 * visualInputLevel), 139, 196, 248)))
                 g.FillRectangle(brush, 16, 20 - height, 4, height);
         }
         if (!EndsRecording) using (var pen = new Pen(ink, 1.8f)) {
@@ -673,29 +754,49 @@ internal sealed class RecorderActionButton : Button {
 }
 
 internal sealed class RecordingLevelIndicator : Control {
-    readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer { Interval = 100 };
-    double level;
+    readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer { Interval = 33 };
+    readonly Stopwatch frameClock = new Stopwatch();
+    double level, targetLevel;
     bool recording;
     public RecordingLevelIndicator() {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        animation.Tick += delegate { level *= .78; if (level < .01) level = 0; Invalidate(); };
+        animation.Tick += delegate { AdvanceAnimation(); };
         TabStop = false;
         AccessibleName = Text = "录音输入：暂无明显声音";
     }
     public void SetRecording(bool value) {
         recording = value;
-        if (!value) level = 0;
-        if (!value) AccessibleName = Text = "录音输入：整场已暂停";
-        animation.Enabled = value && Visible;
-        Invalidate();
+        if (!value) { level = targetLevel = 0; animation.Stop(); frameClock.Stop(); }
+        AccessibleName = Text = value ? "录音输入：暂无明显声音" : "录音输入：整场已暂停";
+        Invalidate(ClientRectangle);
     }
     public void SetLevels(float microphone, float system) {
         double peak = recording ? Math.Max(microphone, system) : 0;
         double next = peak <= .002 ? 0 : Math.Min(1, (Math.Log10(peak) + 2.7) / 2.2);
-        level = Math.Max(level, next);
+        targetLevel = next;
         AccessibleName = Text = !recording ? "录音输入：整场已暂停" : peak > .003 ? "录音输入：有声音" : "录音输入：暂无明显声音";
+        if (!recording || !Visible || !IsHandleCreated || !RecorderMotionPreferences.Enabled || Math.Abs(targetLevel - level) < .002) { CompleteAnimation(); return; }
+        if (!animation.Enabled) { frameClock.Restart(); animation.Start(); }
     }
-    protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); animation.Enabled = recording && Visible; }
+    void AdvanceAnimation() {
+        if (!recording || !Visible || !IsHandleCreated || !RecorderMotionPreferences.Enabled) { CompleteAnimation(); return; }
+        double elapsed = Math.Min(.25, frameClock.Elapsed.TotalSeconds);
+        frameClock.Restart();
+        // Only interpolate measured samples. Silence has an exact zero target;
+        // attack is quicker than release, without a synthetic ticking waveform.
+        double seconds = targetLevel > level ? .065 : .15;
+        level += (targetLevel - level) * (1 - Math.Exp(-elapsed / seconds));
+        if (Math.Abs(targetLevel - level) < .002) { CompleteAnimation(); return; }
+        Invalidate(ClientRectangle);
+    }
+    void CompleteAnimation() {
+        animation.Stop(); frameClock.Stop();
+        level = targetLevel;
+        Invalidate(ClientRectangle);
+    }
+    protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); CompleteAnimation(); }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); CompleteAnimation(); }
+    protected override void OnHandleDestroyed(EventArgs e) { animation.Stop(); frameClock.Stop(); base.OnHandleDestroyed(e); }
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);
         var g = e.Graphics;
@@ -710,13 +811,16 @@ internal sealed class RecordingLevelIndicator : Control {
             }
         }
     }
-    protected override void Dispose(bool disposing) { if (disposing) animation.Dispose(); base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { animation.Stop(); animation.Dispose(); frameClock.Stop(); } base.Dispose(disposing); }
 }
 
 internal sealed class RecorderPanel : Form {
     public readonly Label Heading = new Label();
     public readonly Label Time = new Label();
     public readonly Label Detail = new Label();
+    public readonly LinkLabel AudioFile = new LinkLabel();
+    public readonly LinkLabel TranscriptFile = new LinkLabel();
+    public event Action<string, bool> ArtifactRequested;
     public readonly RecorderActionButton MicrophoneButton = new RecorderActionButton();
     public readonly RecorderActionButton StopButton = new RecorderActionButton { EndsRecording = true };
     public readonly RecorderActionButton CollapseButton = new RecorderActionButton { CollapsesWindow = true };
@@ -726,6 +830,11 @@ internal sealed class RecorderPanel : Form {
     readonly Font timeLong = new Font("Segoe UI Semibold", 8);
     readonly Font recordingHeadingFont = new Font("Microsoft YaHei UI", 7.5f);
     readonly Font processingHeadingFont = new Font("Microsoft YaHei UI", 9);
+    readonly Font artifactFont = new Font("Microsoft YaHei UI", 8);
+    readonly System.Windows.Forms.Timer processingAnimation = new System.Windows.Forms.Timer { Interval = 33 };
+    readonly Stopwatch processingClock = new Stopwatch();
+    bool processingBusy;
+    string resultSession;
     public bool AllowClose;
     bool showingRecording;
     bool microphonePaused;
@@ -769,6 +878,29 @@ internal sealed class RecorderPanel : Form {
         Detail.ForeColor = Color.FromArgb(100, 116, 135);
         Detail.AutoEllipsis = true;
         Detail.TextAlign = ContentAlignment.MiddleCenter;
+        foreach (var link in new LinkLabel[] { AudioFile, TranscriptFile }) {
+            link.Font = artifactFont;
+            link.Visible = false;
+            link.AutoEllipsis = true;
+            link.TextAlign = ContentAlignment.MiddleLeft;
+            link.LinkBehavior = LinkBehavior.HoverUnderline;
+            link.LinkColor = Color.FromArgb(42, 94, 150);
+            link.ActiveLinkColor = Color.FromArgb(25, 63, 110);
+            var copyMenu = new ContextMenuStrip();
+            LinkLabel captured = link;
+            copyMenu.Items.Add("复制完整路径", null, delegate {
+                string path = captured.Tag as string;
+                if (!string.IsNullOrEmpty(path)) try { Clipboard.SetText(path); }
+                catch (Exception error) { MeetingFiles.Log(error); }
+            });
+            link.ContextMenuStrip = copyMenu;
+        }
+        AudioFile.LinkClicked += delegate { if (ArtifactRequested != null && resultSession != null) ArtifactRequested(resultSession, true); };
+        TranscriptFile.LinkClicked += delegate { if (ArtifactRequested != null && resultSession != null) ArtifactRequested(resultSession, false); };
+        processingAnimation.Tick += delegate {
+            if (!processingBusy || !Visible || !RecorderMotionPreferences.Enabled) { UpdateProcessingAnimation(); return; }
+            Invalidate();
+        };
         AudioLevel.SetBounds(66, 26, 18, 18);
         MicrophoneButton.SetBounds(91, 19, 32, 32);
         StopButton.SetBounds(148, 21, 28, 28);
@@ -780,7 +912,7 @@ internal sealed class RecorderPanel : Form {
         DevicesTip.SetToolTip(Time, "本场会议时长；拖动可移动浮窗");
         DevicesTip.SetToolTip(AudioLevel, "麦克风或电脑声音的实际输入音量");
         DevicesTip.SetToolTip(CollapseButton, "收起浮窗，继续录音；从托盘可恢复");
-        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, MicrophoneButton, StopButton, CollapseButton });
+        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton });
         CollapseButton.Click += delegate { Hide(); };
         MouseDown += Drag;
         Time.MouseDown += Drag;
@@ -796,6 +928,8 @@ internal sealed class RecorderPanel : Form {
         SendMessage(Handle, 0x00A1, new IntPtr(2), IntPtr.Zero);
     }
     public void ShowRecording(string microphone, string system) {
+        SetProcessingBusy(false);
+        HideArtifacts();
         showingRecording = true;
         recordingPaused = false;
         micName = microphone;
@@ -868,6 +1002,8 @@ internal sealed class RecorderPanel : Form {
         ShowProcessing(title, detail);
     }
     public void ShowProcessing(string title, string detail) {
+        SetProcessingBusy(false);
+        HideArtifacts();
         showingRecording = false;
         AudioLevel.SetRecording(false);
         MicrophoneButton.SetInputLevel(0);
@@ -886,6 +1022,65 @@ internal sealed class RecorderPanel : Form {
         DevicesTip.SetToolTip(Heading, title + "\n" + detail);
         DevicesTip.SetToolTip(Detail, title + "\n" + detail);
         Invalidate();
+    }
+    public void ShowWorking(string title, string detail) {
+        bool continuing = processingBusy;
+        // Repeated status polling must not restart the animation every 500 ms.
+        ShowProcessing(title, detail);
+        if (!continuing) processingClock.Reset();
+        SetProcessingBusy(true);
+    }
+    void HideArtifacts() {
+        AudioFile.Visible = TranscriptFile.Visible = false;
+        AudioFile.Tag = TranscriptFile.Tag = null;
+        resultSession = null;
+    }
+    public void ShowResult(string session, string audio, string note, string root) {
+        if (!showingRecording && !processingBusy && resultSession == session && (AudioFile.Tag as string) == audio && (TranscriptFile.Tag as string) == note) return;
+        ShowProcessing("", "");
+        Heading.Visible = Detail.Visible = false;
+        resultSession = session;
+        SetArtifact(AudioFile, "录音", audio, root, 23);
+        SetArtifact(TranscriptFile, "转录", note, root, 43);
+    }
+    void SetArtifact(LinkLabel link, string kind, string path, string root, int top) {
+        string prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string display = path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path.Substring(prefix.Length) : path;
+        link.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(top * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(18 * ClientSize.Height / 68f));
+        link.Text = CompactArtifactPath(kind + "：", display, link.Font, link.Width - 2);
+        link.Tag = path;
+        link.AccessibleName = kind + "文件：" + path + "；点击在文件夹中定位";
+        DevicesTip.SetToolTip(link, kind + "：" + path + "\n点击在文件夹中定位；右键复制完整路径");
+        link.Visible = true;
+    }
+    static string CompactArtifactPath(string caption, string path, Font font, int width) {
+        TextFormatFlags flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+        if (TextRenderer.MeasureText(caption + path, font, new Size(int.MaxValue, int.MaxValue), flags).Width <= width) return caption + path;
+        string filename = Path.GetFileName(path);
+        string compact = caption + "…\\" + filename;
+        if (TextRenderer.MeasureText(compact, font, new Size(int.MaxValue, int.MaxValue), flags).Width <= width) return compact;
+        string extension = Path.GetExtension(filename);
+        string stem = Path.GetFileNameWithoutExtension(filename);
+        for (int keep = stem.Length - 1; keep > 0; keep--) {
+            int head = (keep + 1) / 2, tail = keep / 2;
+            compact = caption + stem.Substring(0, head) + "…" + stem.Substring(stem.Length - tail) + extension;
+            if (TextRenderer.MeasureText(compact, font, new Size(int.MaxValue, int.MaxValue), flags).Width <= width) return compact;
+        }
+        return caption + "…" + extension;
+    }
+    void SetProcessingBusy(bool busy) {
+        processingBusy = busy;
+        UpdateProcessingAnimation();
+    }
+    void UpdateProcessingAnimation() {
+        bool animate = processingBusy && Visible && RecorderMotionPreferences.Enabled;
+        processingAnimation.Enabled = animate;
+        if (animate) processingClock.Start(); else processingClock.Stop();
+        Invalidate();
+    }
+    protected override void OnVisibleChanged(EventArgs e) {
+        base.OnVisibleChanged(e);
+        if (processingAnimation != null) UpdateProcessingAnimation();
     }
     static System.Drawing.Drawing2D.GraphicsPath Rounded(RectangleF bounds, float radius) {
         var path = new System.Drawing.Drawing2D.GraphicsPath();
@@ -912,6 +1107,19 @@ internal sealed class RecorderPanel : Form {
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         using (var path = Rounded(new RectangleF(.5f, .5f, ClientSize.Width - 1, ClientSize.Height - 1), ClientSize.Height / 6f))
         using (var pen = new Pen(Color.FromArgb(224, 231, 240), 1)) g.DrawPath(pen, path);
+        if (processingBusy) {
+            float scaleX = ClientSize.Width / 186f, scaleY = ClientSize.Height / 68f;
+            float left = 14 * scaleX, width = 158 * scaleX, y = 62 * scaleY;
+            using (var track = new Pen(Color.FromArgb(232, 239, 247), 2 * scaleY)) g.DrawLine(track, left, y, left + width, y);
+            float travel = width - 30 * scaleX;
+            float phase = RecorderMotionPreferences.Enabled ? (float)(processingClock.Elapsed.TotalMilliseconds % 1500 / 1500) : .5f;
+            // Indeterminate activity, never a fabricated percentage.
+            float offset = (float)((1 - Math.Cos(phase * Math.PI * 2)) * .5) * travel;
+            using (var ink = new Pen(Color.FromArgb(67, 128, 192), 2 * scaleY)) {
+                ink.StartCap = ink.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                g.DrawLine(ink, left + offset, y, left + offset + 30 * scaleX, y);
+            }
+        }
     }
     protected override void OnFormClosing(FormClosingEventArgs e) {
         if (!AllowClose && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); }
@@ -924,7 +1132,11 @@ internal sealed class RecorderPanel : Form {
     }
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override void Dispose(bool disposing) {
-        if (disposing) { DevicesTip.Dispose(); timeNormal.Dispose(); timeLong.Dispose(); recordingHeadingFont.Dispose(); processingHeadingFont.Dispose(); }
+        if (disposing) {
+            processingAnimation.Dispose(); processingClock.Stop();
+            foreach (var link in new LinkLabel[] { AudioFile, TranscriptFile }) if (link.ContextMenuStrip != null) link.ContextMenuStrip.Dispose();
+            DevicesTip.Dispose(); timeNormal.Dispose(); timeLong.Dispose(); recordingHeadingFont.Dispose(); processingHeadingFont.Dispose(); artifactFont.Dispose();
+        }
         base.Dispose(disposing);
     }
 }
@@ -993,6 +1205,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly SessionCatalog catalog;
     readonly Func<string, Process> workerLauncher;
     readonly Action<string, bool> noteOpener;
+    Action<string> artifactLocator = null;
     RecordingSession recording;
     string lastSession;
     string focusedSession;
@@ -1007,6 +1220,7 @@ internal sealed class MeetingContext : ApplicationContext {
     // capturing audio, loading a model, or opening the user's applications.
     internal MeetingContext(Dictionary<string, object> settings, Func<string, Process> launcher, Action<string, bool> opener) {
         config = MeetingConfig.Validate(settings);
+        RecorderMotionPreferences.Mode = (string)config["animation_mode"];
         workerLauncher = launcher;
         noteOpener = opener;
         catalog = new SessionCatalog(MeetingFiles.Home, MeetingFiles.VaultRoot(config));
@@ -1046,6 +1260,7 @@ internal sealed class MeetingContext : ApplicationContext {
         tray.DoubleClick += delegate { RefreshFeedback(); panel.Show(); panel.Activate(); };
         panel.StopButton.Click += delegate { Stop(); };
         panel.MicrophoneButton.Click += delegate { ToggleMicrophone(); };
+        panel.ArtifactRequested += LocateArtifactForSession;
         panel.Time.Text = "00:00";
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
         panel.ShowStatus("听记已就绪", StartHotkey + " 开始录制");
@@ -1315,7 +1530,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     job.Reported = true;
                     MarkNotifiedSafely(record);
                     if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
-                    Notice("会议笔记已生成 · " + record.Label, "录音与转录已保存；托盘 → 最近会议可打开这场笔记。", ToolTipIcon.Info);
+                    Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
                     // Completing A must never take focus away from meeting B.
                     if (recording == null && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
                         try { OpenNote(record.NotePath, true); }
@@ -1345,14 +1560,14 @@ internal sealed class MeetingContext : ApplicationContext {
         if (focusedSession != null) {
             foreach (var job in jobs) {
                 if (string.Equals(job.Session, focusedSession, StringComparison.OrdinalIgnoreCase) && !job.Reported) {
-                    string title = string.IsNullOrEmpty(job.LastMessage) ? "录音已保存 · 转写中" : job.LastMessage;
+                    string title = string.IsNullOrEmpty(job.LastMessage) ? "准备转写" : job.LastMessage == "转写完成" ? "正在整理文件" : job.LastMessage;
                     string label = focusedRecord == null ? Path.GetFileName(focusedSession) : focusedRecord.Label;
-                    panel.ShowProcessing(title, label + " · 托盘查看对应会议");
+                    panel.ShowWorking(title, label);
                     summary.Text = label + " · " + title + (jobs.Count > 1 ? " · 后台 " + jobs.Count + " 场" : "");
                     SetTrayText("听记 · " + summary.Text); return;
                 }
             }
-            if (focusedRecord == null || !string.Equals(focusedRecord.DirectoryPath, focusedSession, StringComparison.OrdinalIgnoreCase)) {
+            {
                 try { focusedRecord = catalog.Get(focusedSession); }
                 catch (Exception error) {
                     MeetingFiles.Log(error);
@@ -1363,7 +1578,9 @@ internal sealed class MeetingContext : ApplicationContext {
             }
             if (focusedRecord != null) {
                 string title = StateLabel(focusedRecord);
-                panel.ShowProcessing(title, focusedRecord.Label + " · " + focusedRecord.Message);
+                if (focusedRecord.State == "completed") panel.ShowResult(focusedRecord.DirectoryPath, focusedRecord.AudioPath, focusedRecord.NotePath, MeetingFiles.VaultRoot(config));
+                else if (focusedRecord.WorkerAlive) panel.ShowWorking(title, focusedRecord.Label + " · " + focusedRecord.Message);
+                else panel.ShowProcessing(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
                 SetTrayText("听记 · " + summary.Text); return;
             }
@@ -1402,6 +1619,10 @@ internal sealed class MeetingContext : ApplicationContext {
                 item.DropDownItems.Add("查看状态", null, delegate { FocusSession(session, true); });
                 if (!string.IsNullOrEmpty(record.NotePath) && File.Exists(record.NotePath))
                     item.DropDownItems.Add("打开转录笔记", null, delegate { OpenNoteForSession(session); });
+                if (!string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath))
+                    item.DropDownItems.Add("定位录音文件", null, delegate { LocateArtifactForSession(session, true); });
+                if (!string.IsNullOrEmpty(record.NotePath) && File.Exists(record.NotePath))
+                    item.DropDownItems.Add("定位转录文件", null, delegate { LocateArtifactForSession(session, false); });
                 if (!current && record.CanRetry) item.DropDownItems.Add("重试这场转写", null, delegate { RetrySession(session); });
                 item.DropDownItems.Add("查看录音资料", null, delegate { OpenSessionFolder(session); });
                 recent.DropDownItems.Add(item);
@@ -1417,6 +1638,22 @@ internal sealed class MeetingContext : ApplicationContext {
             string folder = !string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath) ? Path.GetDirectoryName(record.AudioPath) : record.DirectoryPath;
             OpenFolder(folder);
         } catch (Exception error) { Notice("无法打开这场资料", error.Message, ToolTipIcon.Warning); }
+    }
+    void LocateArtifactForSession(string session, bool audio) {
+        try {
+            // Re-read this exact session at click time: never infer a file from
+            // the latest-meeting pointer or the ellipsized display label.
+            var record = catalog.Get(session);
+            string path = record == null ? "" : audio ? record.AudioPath : record.NotePath;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) throw new IOException((audio ? "录音" : "转录") + "文件已移动或删除，请检查原保存位置。");
+            MeetingConfig.CheckOrdinaryPath(path);
+            if (artifactLocator != null) artifactLocator(path);
+            else Process.Start(new ProcessStartInfo("explorer.exe", "/select," + Quote(path)) { UseShellExecute = true });
+        } catch (Exception error) {
+            MeetingFiles.Log(error);
+            Notice("无法定位这场文件", error.Message, ToolTipIcon.Warning);
+            if (recording == null && string.Equals(focusedSession, session, StringComparison.OrdinalIgnoreCase)) FocusSession(session, false);
+        }
     }
     void OpenNoteForSession(string session) {
         try {

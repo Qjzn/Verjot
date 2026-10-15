@@ -9,6 +9,7 @@
   "pause_hotkey": "Alt+Space",
   "open_in_obsidian": false,
   "show_processing_window": true,
+  "animation_mode": "auto",
   "notify_device_changes": true,
   "auto_open_completed_note": true,
   "transcription_mode": "local",

@@ -20,6 +20,8 @@
 !/SessionCatalog.cs
 !/TestSessionCatalog.cs
 !/TestRecorderPanel.cs
+!/TestRecorderMotion.cs
+!/TestCompletionFeedback.cs
 !/TestMeetingExperience.cs
 !/Test.ps1
 !/meeting_worker.py

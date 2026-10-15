@@ -8,7 +8,7 @@ if (-not (Test-Path -LiteralPath $taskCompiler)) { $taskCompiler = Join-Path $en
 if (-not (Test-Path -LiteralPath $taskCompiler)) { throw '.NET Framework C# compiler was not found.' }
 $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($taskOutput) | Out-Null
-foreach ($taskTest in @('TestSessionCatalog', 'TestRecorderPanel', 'TestMeetingExperience')) {
+foreach ($taskTest in @('TestSessionCatalog', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
