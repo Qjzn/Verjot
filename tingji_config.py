@@ -74,20 +74,21 @@ def validate_config(config: dict, *, check_directory: bool = True) -> dict:
     root = ordinary_path(Path(result["vault_root"]))
     if check_directory and not root.is_dir():
         raise ValueError("vault_root 目录不存在；请先创建目录，或运行 Install.ps1 -NotesPath")
-    folder = result["meeting_folder"]
-    if ntpath.isabs(folder) or ntpath.splitdrive(folder)[0]:
-        raise ValueError("meeting_folder 必须为保存目录内的相对路径")
-    for part in re.split(r"[\\/]", folder):
-        if not part or part in (".", "..") or re.search(r'[<>:"|?*\x00-\x1f]', part) or part.endswith((".", " ")):
-            raise ValueError("meeting_folder 包含空段、路径穿越或 Windows 非法名称")
-        if re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?", part, re.I):
-            raise ValueError("meeting_folder 不能使用 Windows 保留设备名称")
-    output = ordinary_path(root / folder)
-    if output.is_file():
-        raise ValueError("meeting_folder 已被同名文件占用，请改用目录")
-    shortcuts = [parse_hotkey(result[key]) for key in ("hotkey", "pause_hotkey", "bookmark_hotkey")]
+    for field in ("meeting_folder", "quick_note_folder"):
+        folder = result[field]
+        if ntpath.isabs(folder) or ntpath.splitdrive(folder)[0]:
+            raise ValueError(f"{field} 必须为保存目录内的相对路径")
+        for part in re.split(r"[\\/]", folder):
+            if not part or part in (".", "..") or re.search(r'[<>:"|?*\x00-\x1f]', part) or part.endswith((".", " ")):
+                raise ValueError(f"{field} 包含空段、路径穿越或 Windows 非法名称")
+            if re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?", part, re.I):
+                raise ValueError(f"{field} 不能使用 Windows 保留设备名称")
+        output = ordinary_path(root / folder)
+        if output.is_file():
+            raise ValueError(f"{field} 已被同名文件占用，请改用目录")
+    shortcuts = [parse_hotkey(result[key]) for key in ("hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey")]
     if len(set(shortcuts)) != len(shortcuts):
-        raise ValueError("开始/结束、暂停和标记重点快捷键必须各不相同")
+        raise ValueError("开始/结束、暂停、标记重点和速记快捷键必须各不相同")
     if result["transcription_mode"] == "api":
         try:
             url = urlsplit(result["api_base_url"])

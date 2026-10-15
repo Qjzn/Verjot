@@ -8,14 +8,18 @@ if (-not (Test-Path -LiteralPath $taskCompiler)) { $taskCompiler = Join-Path $en
 if (-not (Test-Path -LiteralPath $taskCompiler)) { throw '.NET Framework C# compiler was not found.' }
 $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($taskOutput) | Out-Null
-foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline')) {
+foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestQuickNoteEditor')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
     $taskArguments = @('/nologo', '/utf8output', '/target:exe', "/main:$taskTest", "/out:$taskBinary", '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Web.Extensions.dll',
         ('/r:' + (Join-Path $taskRoot 'lib\NAudio.dll')), ('/resource:' + (Join-Path $taskRoot 'assets\tingji.ico') + ',Tingji.Idle.ico'),
         ('/resource:' + (Join-Path $taskRoot 'assets\tingji-recording.ico') + ',Tingji.Recording.ico'), (Join-Path $taskRoot 'ObsidianMeeting.cs'),
-        (Join-Path $taskRoot 'SessionCatalog.cs'), (Join-Path $taskRoot 'MeetingActions.cs'), ('/win32manifest:' + (Join-Path $taskRoot 'app.manifest')), (Join-Path $taskRoot ($taskTest + '.cs')))
+        (Join-Path $taskRoot 'SessionCatalog.cs'), (Join-Path $taskRoot 'MeetingActions.cs'), (Join-Path $taskRoot 'QuickNoteStore.cs'), (Join-Path $taskRoot 'QuickNoteWindow.cs'),
+        '/r:System.Xaml.dll', ('/win32manifest:' + (Join-Path $taskRoot 'app.manifest')), (Join-Path $taskRoot ($taskTest + '.cs')))
+    foreach ($taskAssembly in @('PresentationCore', 'PresentationFramework', 'WindowsBase', 'WindowsFormsIntegration')) {
+        $taskArguments += '/r:' + (Join-Path (Split-Path $taskCompiler -Parent) ('WPF\' + $taskAssembly + '.dll'))
+    }
     & $taskCompiler @taskArguments
     if ($LASTEXITCODE -ne 0) { throw "$taskTest compilation failed: $LASTEXITCODE" }
     Copy-Item -LiteralPath (Join-Path $taskRoot 'lib\NAudio.dll') -Destination $taskFolder

@@ -52,6 +52,10 @@
 !/mp3_audio.py
 !/test_mp3_audio.py
 !/TestSegmentedTimeline.cs
+!/QuickNoteStore.cs
+!/QuickNoteWindow.cs
+!/TestQuickNoteStore.cs
+!/TestQuickNoteEditor.cs
 
 # Reviewed artwork only. Runtime libraries are restored as documented in README.
 !/assets/

@@ -116,7 +116,7 @@ internal static class TestCompletionFeedback {
                 panel.AllowClose = true; panel.Close();
             }
             var config = new Dictionary<string, object> { { "vault_root", Path.Combine(MeetingFiles.Home, "notes") }, { "hotkey", "Ctrl+Alt+Shift+F20" },
-                { "pause_hotkey", "Ctrl+Alt+Shift+F21" }, { "show_processing_window", false }, { "open_in_obsidian", false }, { "auto_open_completed_note", false } };
+                { "pause_hotkey", "Ctrl+Alt+Shift+F21" }, { "quick_note_hotkey", "Ctrl+Alt+Shift+F24" }, { "show_processing_window", false }, { "open_in_obsidian", false }, { "auto_open_completed_note", false } };
             string a = Path.Combine(MeetingFiles.Home, "work", "20261015-120000-a"), b = Path.Combine(MeetingFiles.Home, "work", "20261015-120000-b");
             string rootPath = (string)config["vault_root"], noteA = Path.Combine(rootPath, "会议记录", "a.md"), audioA = Path.Combine(rootPath, "会议记录", "附件", "a", "meeting.wav");
             string noteB = Path.Combine(rootPath, "会议记录", "b.md"), audioB = Path.Combine(rootPath, "会议记录", "附件", "b", "meeting.wav");

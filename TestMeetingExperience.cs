@@ -90,7 +90,7 @@ internal static class TestMeetingExperience {
             var ctor = typeof(MeetingContext).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null,
                 new Type[] { typeof(Dictionary<string, object>), typeof(Func<string, Process>), typeof(Action<string, bool>) }, null);
             var config = new Dictionary<string, object> { { "vault_root", Path.Combine(MeetingFiles.Home, "notes") }, { "hotkey", "Ctrl+Alt+Shift+F22" },
-                { "pause_hotkey", "Ctrl+Alt+Shift+F23" }, { "show_processing_window", false }, { "open_in_obsidian", true }, { "auto_open_completed_note", true } };
+                { "pause_hotkey", "Ctrl+Alt+Shift+F23" }, { "quick_note_hotkey", "Ctrl+Alt+Shift+F24" }, { "show_processing_window", false }, { "open_in_obsidian", true }, { "auto_open_completed_note", true } };
             Directory.CreateDirectory((string)config["vault_root"]);
             if (ctor == null) {
                 // Exercise the original controller's actual retry route as RED.

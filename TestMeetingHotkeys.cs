@@ -9,6 +9,7 @@ internal static class TestMeetingHotkeys {
     const string StartKey = "Ctrl+Alt+Shift+F21";
     const string PauseKey = "Ctrl+Alt+Shift+F22";
     const string BookmarkKey = "Ctrl+Alt+Shift+F23";
+    const string QuickNoteKey = "Ctrl+Alt+Shift+F24";
     static int assertions;
     [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr window, int id);
@@ -93,6 +94,65 @@ internal static class TestMeetingHotkeys {
         using (var released = new OccupiedKey(blocked)) { Check(true, "Fixture and controller must release the conflicted key"); }
         using (var released = new OccupiedKey(StartKey)) { Check(true, "Controller disposal must release the required main key"); }
     }
+    static void QuickNoteLifetime() {
+        MeetingHotkey disposed;
+        using (var hotkey = new MeetingHotkey(StartKey, PauseKey, BookmarkKey, QuickNoteKey)) {
+            disposed = hotkey;
+            int quickNotes = 0, starts = 0;
+            hotkey.QuickNotePressed += delegate { quickNotes++; };
+            hotkey.Pressed += delegate { starts++; };
+            Check(hotkey.QuickNoteRegistered, "The quick-note key must register before any recording starts");
+            Check(hotkey.QuickNoteWarning.Length == 0, "An available quick-note key must have no warning");
+            Check(!hotkey.PauseRegistered && !hotkey.BookmarkRegistered, "Quick note must not register recording-only keys while idle");
+            Press(0x87);
+            Receive(delegate { return quickNotes == 1; });
+            Press(0x84);
+            Receive(delegate { return starts == 1; });
+            hotkey.EnablePause(true);
+            Check(hotkey.QuickNoteRegistered && hotkey.PauseRegistered && hotkey.BookmarkRegistered, "Quick note must remain registered alongside both recording-only keys");
+            hotkey.EnablePause(false);
+            Check(hotkey.QuickNoteRegistered, "Disabling recording-only keys must keep quick note registered");
+            Check(!hotkey.PauseRegistered && !hotkey.BookmarkRegistered, "Recording-only keys must still be released");
+            Check(hotkey.QuickNoteWarning.Length == 0, "Recording lifecycle must not invent a quick-note warning");
+            Press(0x87);
+            Receive(delegate { return quickNotes == 2; });
+            Press(0x84);
+            Receive(delegate { return starts == 2; });
+        }
+        Check(!disposed.QuickNoteRegistered, "Disposal must clear quick-note registration state");
+        using (var released = new OccupiedKey(QuickNoteKey)) { Check(true, "Disposal must release the actual quick-note key"); }
+    }
+    static void QuickNoteConflict() {
+        using (var occupied = new OccupiedKey(QuickNoteKey))
+        using (var hotkey = new MeetingHotkey(StartKey, PauseKey, BookmarkKey, QuickNoteKey)) {
+            int starts = 0, pauses = 0, bookmarks = 0, quickNotes = 0;
+            hotkey.Pressed += delegate { starts++; };
+            hotkey.PausePressed += delegate { pauses++; };
+            hotkey.BookmarkPressed += delegate { bookmarks++; };
+            hotkey.QuickNotePressed += delegate { quickNotes++; };
+            Check(!hotkey.QuickNoteRegistered, "A conflicted quick-note key must not appear registered");
+            string warning = hotkey.QuickNoteWarning;
+            Check(warning.Contains(QuickNoteKey) && warning.Contains("quick_note_hotkey") && warning.Contains("1409"), "Quick-note conflict warning must identify its setting, key and real Win32 1409");
+            Check(!warning.Contains(StartKey) && !warning.Contains(PauseKey) && !warning.Contains(BookmarkKey), "Quick-note conflict must not blame unrelated working keys");
+            Check(hotkey.AuxiliaryWarning.Length == 0, "Quick-note conflict must remain separate from recording-key warnings");
+            Press(0x84);
+            Receive(delegate { return starts == 1; });
+            hotkey.EnablePause(true);
+            Check(hotkey.PauseRegistered && hotkey.BookmarkRegistered, "Quick-note conflict must not block either recording-only key");
+            Check(hotkey.AuxiliaryWarning.Length == 0, "Available recording keys must not inherit the quick-note warning");
+            Press(0x85);
+            Receive(delegate { return pauses == 1; });
+            Press(0x86);
+            Receive(delegate { return bookmarks == 1; });
+            hotkey.EnablePause(false);
+            Check(hotkey.QuickNoteWarning == warning && !hotkey.QuickNoteRegistered, "Disabling recording keys must preserve the actionable quick-note conflict warning");
+            Press(0x84);
+            Receive(delegate { return starts == 2; });
+            Check(quickNotes == 0, "Other registered keys must not invoke quick note");
+        }
+        using (var released = new OccupiedKey(StartKey)) { Check(true, "Controller disposal after quick-note conflict must release the start key"); }
+        using (var released = new OccupiedKey(QuickNoteKey)) { Check(true, "Conflict fixture must release its isolated quick-note key"); }
+    }
     [STAThread]
     static int Main() {
         try {
@@ -112,7 +172,9 @@ internal static class TestMeetingHotkeys {
             }
             using (var released = new OccupiedKey(PauseKey)) { Check(true, "Disposal releases pause independently"); }
             using (var released = new OccupiedKey(BookmarkKey)) { Check(true, "Disposal releases bookmark independently"); }
-            Console.WriteLine("PASS TestMeetingHotkeys: " + assertions + " assertions; isolated F21/F22/F23 registration and WM_HOTKEY only; no audio or user windows.");
+            QuickNoteLifetime();
+            QuickNoteConflict();
+            Console.WriteLine("PASS TestMeetingHotkeys: " + assertions + " assertions; isolated F21/F22/F23/F24 registration and WM_HOTKEY only; no audio or user windows.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }

@@ -141,20 +141,22 @@ internal static class MeetingConfig {
             throw new InvalidOperationException("vault_root 必须是完整 Windows 绝对目录。");
         if (!Directory.Exists(root)) throw new IOException("vault_root 保存目录不存在，请先创建目录。");
         CheckOrdinaryPath(root);
-        string folder = (string)config["meeting_folder"];
-        if (Path.IsPathRooted(folder)) throw new InvalidOperationException("meeting_folder 必须为保存目录内的相对路径。");
-        foreach (string part in folder.Split(new char[] { '\\', '/' })) {
-            if (part.Length == 0 || part == "." || part == ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
-                part.EndsWith(".") || part.EndsWith(" ") || Regex.IsMatch(part, @"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$", RegexOptions.IgnoreCase))
-                throw new InvalidOperationException("meeting_folder 包含空段、路径穿越或 Windows 非法名称。");
+        foreach (string field in new string[] { "meeting_folder", "quick_note_folder" }) {
+            string folder = (string)config[field];
+            if (Path.IsPathRooted(folder)) throw new InvalidOperationException(field + " 必须为保存目录内的相对路径。");
+            foreach (string part in folder.Split(new char[] { '\\', '/' })) {
+                if (part.Length == 0 || part == "." || part == ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                    part.EndsWith(".") || part.EndsWith(" ") || Regex.IsMatch(part, @"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$", RegexOptions.IgnoreCase))
+                    throw new InvalidOperationException(field + " 包含空段、路径穿越或 Windows 非法名称。");
+            }
+            CheckOrdinaryPath(Path.Combine(root, folder));
+            if (File.Exists(Path.Combine(root, folder))) throw new IOException(field + " 已被同名文件占用，请改用目录。");
         }
-        CheckOrdinaryPath(Path.Combine(root, folder));
-        if (File.Exists(Path.Combine(root, folder))) throw new IOException("meeting_folder 已被同名文件占用，请改用目录。");
         var shortcuts = new HashSet<string>();
-        foreach (string field in new string[] { "hotkey", "pause_hotkey", "bookmark_hotkey" }) {
+        foreach (string field in new string[] { "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey" }) {
             uint modifiers, key;
             ParseHotkey((string)config[field], out modifiers, out key);
-            if (!shortcuts.Add(modifiers + ":" + key)) throw new InvalidOperationException("开始/结束、暂停和标记重点快捷键必须各不相同。");
+            if (!shortcuts.Add(modifiers + ":" + key)) throw new InvalidOperationException("开始/结束、暂停、标记重点和速记快捷键必须各不相同。");
         }
         if ((string)config["transcription_mode"] == "api") {
             Uri uri;
@@ -1783,22 +1785,29 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
     const int Id = 7411;
     const int PauseId = 7412;
     const int BookmarkId = 7413;
+    const int QuickNoteId = 7414;
     readonly string pauseText;
     readonly string bookmarkText;
     bool pauseRegistered;
     bool bookmarkRegistered;
+    bool quickNoteRegistered;
+    string quickNoteWarning = "";
     string auxiliaryWarning = "";
     public bool PauseRegistered { get { return pauseRegistered; } }
     public bool BookmarkRegistered { get { return bookmarkRegistered; } }
     public string AuxiliaryWarning { get { return auxiliaryWarning; } }
+    public bool QuickNoteRegistered { get { return quickNoteRegistered; } }
+    public string QuickNoteWarning { get { return quickNoteWarning; } }
     public event Action Pressed;
     public event Action PausePressed;
     public event Action BookmarkPressed;
+    public event Action QuickNotePressed;
     public event Action ExitRequested;
     [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr window, int id);
     public MeetingHotkey(string text, string pause) : this(text, pause, "Ctrl+Alt+K") { }
-    public MeetingHotkey(string text, string pause, string bookmark) {
+    public MeetingHotkey(string text, string pause, string bookmark) : this(text, pause, bookmark, null) { }
+    public MeetingHotkey(string text, string pause, string bookmark, string quickNote) {
         pauseText = pause;
         bookmarkText = bookmark;
         uint modifiers, key;
@@ -1808,6 +1817,12 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
             int error = Marshal.GetLastWin32Error();
             DestroyHandle();
             throw new InvalidOperationException(RegistrationError(text, "hotkey", error));
+        }
+        try {
+            if (!string.IsNullOrEmpty(quickNote))
+                quickNoteRegistered = TryRegisterAuxiliary(quickNote, QuickNoteId, "quick_note_hotkey", out quickNoteWarning);
+        } catch {
+            UnregisterHotKey(Handle, Id); DestroyHandle(); throw;
         }
     }
     static string RegistrationError(string text, string setting, int error) {
@@ -1845,10 +1860,16 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == Id && Pressed != null) Pressed();
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == PauseId && PausePressed != null) PausePressed();
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == BookmarkId && BookmarkPressed != null) BookmarkPressed();
+        if (message.Msg == 0x0312 && message.WParam.ToInt32() == QuickNoteId && QuickNotePressed != null) QuickNotePressed();
         if (message.Msg == 0x0010 && ExitRequested != null) ExitRequested();
         base.WndProc(ref message);
     }
-    public void Dispose() { EnablePause(false); UnregisterHotKey(Handle, Id); DestroyHandle(); }
+    public void Dispose() {
+        EnablePause(false);
+        if (quickNoteRegistered) UnregisterHotKey(Handle, QuickNoteId);
+        quickNoteRegistered = false;
+        UnregisterHotKey(Handle, Id); DestroyHandle();
+    }
 }
 
 internal sealed class TranscriptionJob {
@@ -1881,6 +1902,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly Action<string, bool> noteOpener;
     Action<string> artifactLocator = null;
     RecordingSession recording;
+    QuickNoteWindow quickNote;
     string lastSession;
     string focusedSession;
     SessionRecord focusedRecord;
@@ -1889,6 +1911,7 @@ internal sealed class MeetingContext : ApplicationContext {
     string StartHotkey { get { return (string)config["hotkey"]; } }
     string PauseHotkey { get { return (string)config["pause_hotkey"]; } }
     string BookmarkHotkey { get { return (string)config["bookmark_hotkey"]; } }
+    string QuickNoteHotkey { get { return (string)config["quick_note_hotkey"]; } }
 
     public MeetingContext() : this(MeetingConfig.Load(), null, null) { }
     // The two optional operations also allow isolated native regressions without
@@ -1900,14 +1923,17 @@ internal sealed class MeetingContext : ApplicationContext {
         noteOpener = opener;
         catalog = new SessionCatalog(MeetingFiles.Home, MeetingFiles.VaultRoot(config));
         IntPtr dispatchHandle = dispatch.Handle;
-        hotkey = new MeetingHotkey(StartHotkey, PauseHotkey, BookmarkHotkey);
+        hotkey = new MeetingHotkey(StartHotkey, PauseHotkey, BookmarkHotkey, QuickNoteHotkey);
         hotkey.Pressed += Toggle;
         hotkey.PausePressed += ToggleRecordingPause;
         hotkey.BookmarkPressed += MarkBookmark;
+        hotkey.QuickNotePressed += ToggleQuickNote;
         hotkey.ExitRequested += RequestExit;
         var menu = new ContextMenuStrip { Font = new Font("Microsoft YaHei UI", 9), RenderMode = ToolStripRenderMode.System };
         panel.ContextMenuStrip = menu;
         menu.Items.Add(summary);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("速记便签 · " + QuickNoteHotkey, null, delegate { ToggleQuickNote(); });
         menu.Items.Add(new ToolStripSeparator());
         toggle.Click += delegate { Toggle(); };
         toggle.Text = "开始录音 · " + StartHotkey;
@@ -1951,6 +1977,19 @@ internal sealed class MeetingContext : ApplicationContext {
         timer.Tick += delegate { Tick(); };
         RestoreSessions();
         timer.Start();
+        if (hotkey.QuickNoteWarning.Length != 0)
+            dispatch.BeginInvoke(new Action(delegate { Notice("速记快捷键不可用", hotkey.QuickNoteWarning + " 可从托盘打开速记便签。", ToolTipIcon.Warning); }));
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    void ToggleQuickNote() {
+        try {
+            if (quickNote == null || quickNote.IsDisposed) {
+                string stateRoot = Path.Combine(MeetingFiles.Home, "work", "quick-note");
+                var store = new QuickNoteStore(MeetingFiles.VaultRoot(config), (string)config["quick_note_folder"], stateRoot);
+                quickNote = new QuickNoteWindow(store, stateRoot);
+            }
+            quickNote.Toggle();
+        } catch (Exception error) { MeetingFiles.Log(error); Notice("无法打开速记便签", error.Message, ToolTipIcon.Warning); }
     }
     void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "听记 · " + title, message, icon); }
     void OnUi(Action action) { if (!dispatch.IsDisposed) try { dispatch.BeginInvoke(action); } catch (InvalidOperationException) { } }
@@ -2419,11 +2458,13 @@ internal sealed class MeetingContext : ApplicationContext {
         Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
     }
     void RequestExit() {
+        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose()) return;
         exiting = true;
         toggle.Enabled = false;
         if (recording != null) Stop(); else ExitThread();
     }
     protected override void ExitThreadCore() {
+        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose()) return;
         timer.Stop(); timer.Dispose();
         hotkey.Dispose();
         tray.Visible = false; tray.Dispose();

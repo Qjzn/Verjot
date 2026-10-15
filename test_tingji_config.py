@@ -7,6 +7,22 @@ from meeting_worker import audio_link
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_quick_note_defaults_and_customization(self):
+        config = self.validate()
+        self.assertEqual(config["quick_note_hotkey"], "Ctrl+Alt+J")
+        self.assertEqual(config["quick_note_folder"], "速记")
+        custom = self.validate(quick_note_hotkey="Ctrl+Shift+F10", quick_note_folder="资料/速记")
+        self.assertEqual(custom["quick_note_hotkey"], "Ctrl+Shift+F10")
+        self.assertEqual(custom["quick_note_folder"], "资料/速记")
+
+    def test_quick_note_conflicts_and_unsafe_paths_rejected(self):
+        for changes in ({"quick_note_hotkey": "Alt+Ctrl+L"}, {"quick_note_hotkey": "Alt+Space"},
+                        {"quick_note_hotkey": "Ctrl+Alt+K"}, {"quick_note_folder": "../outside"},
+                        {"quick_note_folder": "C:\\outside"}, {"quick_note_folder": "NUL"},
+                        {"quick_note_folder": "folder."}, {"quick_note_folder": ""}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.validate(**changes)
+
     def test_segmented_recording_and_mp3_defaults(self):
         config = self.validate()
         self.assertEqual(config["recording_segment_seconds"], 300)
