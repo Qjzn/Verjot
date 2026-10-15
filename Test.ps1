@@ -15,7 +15,7 @@ $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewG
 $taskDesktopRunner = Join-Path $taskOutput 'TestDesktopRunner.exe'
 & $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskRoot 'TestDesktopRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw "Isolated test desktop runner compilation failed: $LASTEXITCODE" }
-foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness')) {
+foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')

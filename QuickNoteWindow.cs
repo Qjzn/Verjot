@@ -9,6 +9,7 @@ using System.Windows.Forms;
 using System.Windows.Forms.Integration;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using W = System.Windows;
 using WC = System.Windows.Controls;
 using WD = System.Windows.Documents;
@@ -97,6 +98,42 @@ internal static class QuickNoteMarkdown {
     }
 }
 
+internal sealed class QuickNoteInputBox : WC.RichTextBox {
+    int inputDepth;
+
+    static QuickNoteInputBox() {
+        // Derived class handlers run before RichTextBox's typing handler. WPF
+        // queues rich-text input at Background, which can wait behind the host's
+        // native input. Change its scheduling, not its text/IME/undo handling.
+        W.EventManager.RegisterClassHandler(typeof(QuickNoteInputBox), TextCompositionManager.TextInputEvent,
+            new TextCompositionEventHandler(BeginInput), true);
+    }
+
+    internal QuickNoteInputBox() {
+        AddHandler(TextCompositionManager.TextInputEvent, new TextCompositionEventHandler(EndInput), true);
+        Unloaded += delegate { DetachInput(); };
+    }
+
+    static void BeginInput(object sender, TextCompositionEventArgs e) {
+        var editor = (QuickNoteInputBox)sender;
+        if (editor.inputDepth++ == 0) editor.Dispatcher.Hooks.OperationPosted += editor.InputPosted;
+    }
+
+    void EndInput(object sender, TextCompositionEventArgs e) {
+        if (inputDepth > 0 && --inputDepth == 0) Dispatcher.Hooks.OperationPosted -= InputPosted;
+    }
+
+    void InputPosted(object sender, DispatcherHookEventArgs e) {
+        if (Dispatcher.CheckAccess() && !IsReadOnly && e.Operation.Status == DispatcherOperationStatus.Pending &&
+            e.Operation.Priority == DispatcherPriority.Background)
+            e.Operation.Priority = DispatcherPriority.Normal;
+    }
+
+    internal void DetachInput() {
+        Dispatcher.Hooks.OperationPosted -= InputPosted; inputDepth = 0;
+    }
+}
+
 internal sealed class QuickNoteHeaderButton : Button {
     public bool IsPin;
     public bool Pinned;
@@ -134,7 +171,7 @@ internal sealed class QuickNoteWindow : Form {
     readonly QuickNoteStore store;
     readonly string stateRoot;
     readonly ElementHost host;
-    readonly WC.RichTextBox editor;
+    readonly QuickNoteInputBox editor;
     readonly Label dateLabel;
     readonly LinkLabel status;
     readonly QuickNoteHeaderButton pin;
@@ -193,7 +230,7 @@ internal sealed class QuickNoteWindow : Form {
         tips.SetToolTip(pin, "取消置顶"); tips.SetToolTip(hide, "保存并收起 · Esc");
         top.Controls.Add(dateLabel); top.Controls.Add(pin); top.Controls.Add(hide);
         status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = Color.FromArgb(55, 96, 138), ActiveLinkColor = Color.FromArgb(40, 104, 168) };
-        editor = new WC.RichTextBox { BorderThickness = new W.Thickness(0), Background = new WM.SolidColorBrush(WM.Color.FromRgb(250, 250, 248)), Foreground = new WM.SolidColorBrush(WM.Color.FromRgb(36, 49, 68)), Padding = new W.Thickness(14, 8, 14, 8), VerticalScrollBarVisibility = WC.ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = WC.ScrollBarVisibility.Disabled, AcceptsTab = true, AllowDrop = true, UndoLimit = 100 };
+        editor = new QuickNoteInputBox { BorderThickness = new W.Thickness(0), Background = new WM.SolidColorBrush(WM.Color.FromRgb(250, 250, 248)), Foreground = new WM.SolidColorBrush(WM.Color.FromRgb(36, 49, 68)), Padding = new W.Thickness(14, 8, 14, 8), VerticalScrollBarVisibility = WC.ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = WC.ScrollBarVisibility.Disabled, AcceptsTab = true, AllowDrop = true, UndoLimit = 100 };
         System.Windows.Automation.AutomationProperties.SetName(editor, "速记正文");
         System.Windows.Automation.AutomationProperties.SetAutomationId(editor, "quick-note-editor");
         dateLabel.AccessibleName = "速记日期"; status.AccessibleName = "速记保存位置与状态";
@@ -599,7 +636,7 @@ internal sealed class QuickNoteWindow : Form {
     }
 
     protected override void Dispose(bool disposing) {
-        if (disposing) { saveTimer.Dispose(); dayTimer.Dispose(); tips.Dispose(); if (uiFont != null) { uiFont.Dispose(); uiFont = null; } }
+        if (disposing) { editor.DetachInput(); saveTimer.Dispose(); dayTimer.Dispose(); tips.Dispose(); if (uiFont != null) { uiFont.Dispose(); uiFont = null; } }
         base.Dispose(disposing);
     }
 }

@@ -152,6 +152,8 @@ AI 的交付记录至少应说明所选模式、实际保存位置、已有配�
 
 图片与文字粘贴按 `TestQuickNoteEditor.cs` 的方法验证：在内存创建 `System.Windows.DataObject`，放入自建图片或 Unicode 文本，构造 `DataObjectPastingEventArgs`，调用生产 `Paste` 事件处理函数；拖入则使用指向隔离图片的 `DataObject` 和 `DragEventArgs` 调用生产 `Drop` 处理函数。局部 `DataObject.SetData` 不写入系统剪贴板。检查真实编辑器内容、相对图片引用、撤销重做、自动保存及错误状态；快捷键消息分发和 Esc 使用目标控件的本地事件或消息。性能测试使用同类隔离数据，分别记录实际处理耗时与界面响应。这些证据覆盖生产处理函数，不代表真实系统剪贴板、全局按键或用户设备入口已经验收。
 
+逐字符输入使用 `TestQuickNoteInput.cs`：真实 `Application.Run` 消息泵向测试 HWND 定向投递 `WM_CHAR`，在收到消息与 `TextChanged` 事件内计时，核对中英文正文、撤销重做、取消预览输入、关闭落盘和闲时调度；不要用 `AppendText` 或消息泵返回后的计时替代。性能测试串行执行，记录 p50/p95/最大值、实际字符数、投递排队和实际发送间隔，不能同时跑多个界面压力测试。该测试使用生产 manifest 和 `.exe.config`；Unicode 字符输入不等于真实拼音候选组合验证，也不能换算为屏幕帧率。此输入修正不增加配置字段，保留现有用户配置即可。
+
 `TestMeetingHotkeys` 真实调用 `RegisterHotKey` 验证注册、占用与释放，再向测试自身窗口投递 `WM_HOTKEY` 检查事件分发，不注入全局按键。Windows 收到真实按键后能否将其投递给已安装的听记，仍需用户主动按键验证并单独记录；本地 `WM_HOTKEY` 通过不能报告为真实全局按键已经通过。
 
 旧的 `validation/QuickNoteInstalledProbe` 已停用：它曾写入测试图片到系统剪贴板并全局发送粘贴按键，结束后尝试恢复也会干扰用户当时及期间新复制的内容。不要恢复或运行它，后续探针须遵守上述隔离方式。

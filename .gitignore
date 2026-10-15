@@ -57,6 +57,7 @@
 !/TestQuickNoteStore.cs
 !/TestQuickNoteEditor.cs
 !/TestQuickNoteResponsiveness.cs
+!/TestQuickNoteInput.cs
 !/TestDesktopRunner.cs
 
 # Reviewed artwork only. Runtime libraries are restored as documented in README.
