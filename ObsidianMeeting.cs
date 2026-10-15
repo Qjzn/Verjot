@@ -912,8 +912,8 @@ internal sealed class RecorderPanel : Form {
             });
             link.ContextMenuStrip = copyMenu;
         }
-        AudioFile.LinkClicked += delegate { if (ArtifactRequested != null && resultSession != null) ArtifactRequested(resultSession, true); };
-        TranscriptFile.LinkClicked += delegate { if (ArtifactRequested != null && resultSession != null) ArtifactRequested(resultSession, false); };
+        AudioFile.LinkClicked += delegate { if (AudioFile.Enabled && ArtifactRequested != null && resultSession != null) ArtifactRequested(resultSession, true); };
+        TranscriptFile.LinkClicked += delegate { if (TranscriptFile.Enabled && ArtifactRequested != null && resultSession != null) ArtifactRequested(resultSession, false); };
         processingAnimation.Tick += delegate {
             if (!processingBusy || !Visible || !RecorderMotionPreferences.Enabled) { UpdateProcessingAnimation(); return; }
             Invalidate();
@@ -1101,13 +1101,15 @@ internal sealed class RecorderPanel : Form {
         SetArtifact(TranscriptFile, "转录", note, root, 43);
     }
     void SetArtifact(LinkLabel link, string kind, string path, string root, int top) {
+        bool available = !string.IsNullOrEmpty(path);
         string prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         string display = path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path.Substring(prefix.Length) : path;
         link.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(top * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(18 * ClientSize.Height / 68f));
-        link.Text = CompactArtifactPath(kind + "：", display, link.Font, link.Width - 2);
+        link.Text = available ? CompactArtifactPath(kind + "：", display, link.Font, link.Width - 2) : kind + "：已移除";
         link.Tag = path;
-        link.AccessibleName = kind + "文件：" + path + "；点击在文件夹中定位";
-        DevicesTip.SetToolTip(link, kind + "：" + path + "\n点击在文件夹中定位；右键复制完整路径");
+        link.Enabled = available;
+        link.AccessibleName = available ? kind + "文件：" + path + "；点击在文件夹中定位" : kind + "文件已移除";
+        DevicesTip.SetToolTip(link, available ? kind + "：" + path + "\n点击在文件夹中定位；右键复制完整路径" : kind + "文件已移除");
         link.Visible = true;
     }
     static string CompactArtifactPath(string caption, string path, Font font, int width) {
@@ -1659,13 +1661,15 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (fresh) job.LastMessage = SessionCatalog.DisplayTitle(status);
                 if (!workerExited) continue;
                 var record = catalog.Get(job.Session);
-                if (fresh && job.Process.ExitCode == 0 && record != null && record.State == "completed") {
+                if (fresh && job.Process.ExitCode == 0 && record != null &&
+                    (record.State == "completed" || record.State == "transcript_only" || record.State == "audio_only" || record.State == "removed")) {
                     job.Reported = true;
                     MarkNotifiedSafely(record);
                     if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
-                    Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
+                    if (record.State == "completed")
+                        Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
                     // Completing A must never take focus away from meeting B.
-                    if (recording == null && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
+                    if (recording == null && File.Exists(record.NotePath) && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
                         try { OpenNote(record.NotePath, true); }
                         catch (Exception openError) { MeetingFiles.Log(openError); Notice("笔记已保存，未能自动打开", "请从最近会议手动打开对应笔记。", ToolTipIcon.Warning); }
                     }
@@ -1717,7 +1721,9 @@ internal sealed class MeetingContext : ApplicationContext {
             if (focusedRecord != null) {
                 rename.Enabled = focusedRecord.State == "completed" && !focusedRecord.WorkerAlive;
                 string title = StateLabel(focusedRecord);
-                if (focusedRecord.State == "completed") panel.ShowResult(focusedRecord.DirectoryPath, focusedRecord.AudioPath, focusedRecord.NotePath, MeetingFiles.VaultRoot(config));
+                if (focusedRecord.State == "completed" || focusedRecord.State == "transcript_only" || focusedRecord.State == "audio_only")
+                    panel.ShowResult(focusedRecord.DirectoryPath, focusedRecord.State == "transcript_only" ? "" : focusedRecord.AudioPath,
+                        focusedRecord.State == "audio_only" ? "" : focusedRecord.NotePath, MeetingFiles.VaultRoot(config));
                 else if (focusedRecord.WorkerAlive) panel.ShowWorking(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 else panel.ShowProcessing(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
@@ -1730,6 +1736,8 @@ internal sealed class MeetingContext : ApplicationContext {
     static string StateLabel(string state) {
         switch (state) {
             case "completed": return "录音与转录已完成";
+            case "transcript_only": return "仅保留转录";
+            case "audio_only": return "仅保留录音";
             case "interrupted": return "录音中断 · 检查资料";
             case "failed": return "转写失败 · 可重试";
             case "retry": return "录音已保留 · 可重试";
@@ -1749,7 +1757,7 @@ internal sealed class MeetingContext : ApplicationContext {
             var records = catalog.Snapshot();
             // Keep the tray compact while retaining a route to every local folder.
             var displayed = new List<SessionRecord>();
-            foreach (var record in records) if (record.State != "completed" && !record.WorkerAlive && displayed.Count < 10) displayed.Add(record);
+            foreach (var record in records) if (record.State != "completed" && record.State != "transcript_only" && record.State != "audio_only" && !record.WorkerAlive && displayed.Count < 10) displayed.Add(record);
             foreach (var record in records) if (displayed.Count < 20 && !displayed.Contains(record)) displayed.Add(record);
             foreach (var record in displayed) {
                 string session = record.DirectoryPath;

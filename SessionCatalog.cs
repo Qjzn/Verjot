@@ -155,24 +155,42 @@ internal sealed class SessionCatalog {
             object mergedValue;
             if (audio.Length == 0 && status.TryGetValue("merged_audio", out mergedValue)) {
                 var merged = mergedValue as Dictionary<string, object>;
-                if (merged != null) audio = Text(merged, "published_path", Text(merged, "path", ""));
+                if (merged != null) {
+                    audio = Text(merged, "published_path", "");
+                    if (audio.Length == 0) {
+                        audio = Text(merged, "path", "");
+                        // Older minimal-storage releases kept the published
+                        // folder in session metadata and only the WAV basename
+                        // here. Resolve that explicit pair, never guess a folder
+                        // or fall back from an invalid published path.
+                        if (audio.Length != 0 && !Path.IsPathRooted(audio)) {
+                            string output = Text(metadata, "audio_output_dir", "");
+                            if (audio != Path.GetFileName(audio) || !Path.IsPathRooted(output))
+                                throw new IOException("旧会议录音路径缺少明确的保存目录或文件名无效");
+                            audio = Path.Combine(output, audio);
+                        }
+                    }
+                }
             }
             record.AudioPath = ArtifactPath(audio, session, ".wav");
             bool declaredArtifacts = record.NotePath.Length != 0 && record.AudioPath.Length != 0;
             bool noteExists = File.Exists(record.NotePath), audioExists = File.Exists(record.AudioPath);
             bool verifiedStatus = Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
             bool hasArtifacts = declaredArtifacts && noteExists && audioExists && verifiedStatus;
-            // A clean final status with both named outputs removed represents a
-            // user-cleared meeting. Keep its private metadata untouched, while a
-            // single missing output, failed publication or unavailable vault
-            // still requires inspection rather than silently disappearing.
-            bool removedArtifacts = declaredArtifacts && !noteExists && !audioExists && verifiedStatus &&
+            // Completed files can be independently removed by the user. Keep a
+            // neutral entry for a remaining file, hide fully cleared results,
+            // and retain warnings for errors or an unavailable save directory.
+            bool removableArtifacts = declaredArtifacts && verifiedStatus &&
                 Text(status, "cleanup_error", "").Length == 0 &&
+                Text(metadata, "capture_error", "").Length == 0 &&
                 !Directory.Exists(record.NotePath) && !Directory.Exists(record.AudioPath) &&
                 (Within(record.NotePath, session) || Directory.Exists(artifactRoot)) &&
                 (Within(record.AudioPath, session) || Directory.Exists(artifactRoot));
-            record.State = hasArtifacts ? "completed" : removedArtifacts ? "removed" : "missing";
-            if (removedArtifacts) record.Message = "会议成品已移除";
+            record.State = hasArtifacts ? "completed" : !removableArtifacts ? "missing" :
+                noteExists ? "transcript_only" : audioExists ? "audio_only" : "removed";
+            if (record.State == "removed") record.Message = "会议成品已移除";
+            else if (record.State == "transcript_only") record.Message = "仅保留转录，录音文件已移除";
+            else if (record.State == "audio_only") record.Message = "仅保留录音，转录文件已移除";
             else if (!hasArtifacts) record.Message = "会议录音或转录成品需要检查；保留资料不会自动重新转写";
             else if (record.Message.Length == 0) record.Message = "录音和转录笔记已保存";
             if (hasArtifacts && Text(status, "cleanup_error", "").Length != 0)
@@ -199,6 +217,7 @@ internal sealed class SessionCatalog {
         }
         record.Fingerprint = Fingerprint(record, status);
         record.NeedsAttention = !record.WorkerAlive && record.State != "removed" &&
+            record.State != "transcript_only" && record.State != "audio_only" &&
             Text(controller, "notified_fingerprint", "") != record.Fingerprint;
         return record;
     }

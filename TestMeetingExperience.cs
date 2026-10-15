@@ -41,6 +41,25 @@ internal static class TestMeetingExperience {
         });
         children.Add(process); return process;
     }
+    static ToolStripMenuItem OpenRecent(ContextMenuStrip menu, ToolStripMenuItem recent, string title) {
+        // A preceding native menu action queues dismissal messages. Drain them
+        // before reopening, otherwise they can close the next synthetic menu.
+        menu.Close();
+        Application.DoEvents();
+        menu.Show(new Point(20, 20));
+        Application.DoEvents();
+        Check(menu.Visible && recent.HasDropDownItems, "The actual tray menu must expose recent meetings");
+        recent.ShowDropDown();
+        Application.DoEvents();
+        Check(recent.DropDown.Visible, "Recent meetings must expand through the native menu: " + title);
+        foreach (ToolStripItem item in recent.DropDownItems)
+            if (item.Text.Contains(title)) return item as ToolStripMenuItem;
+        return null;
+    }
+    static ToolStripItem MenuAction(ToolStripMenuItem meeting, string text) {
+        foreach (ToolStripItem action in meeting.DropDownItems) if (action.Text == text) return action;
+        return null;
+    }
     static RecordingSession FakeActiveRecording(string session) {
         // No constructor, endpoint or writer is invoked. Stopping skips level reads
         // while retaining the controller's real "another meeting is active" guard.
@@ -172,6 +191,60 @@ internal static class TestMeetingExperience {
             Application.DoEvents();
             Check(recent.DropDownItems.Count >= 3, "Each of the three meetings must remain reachable");
             menu.Close();
+            // A user may intentionally keep only one completed artifact. Reopen
+            // the actual menus after deletion; do not bypass their refresh events.
+            string transcriptOnly = Fixture("20261014-121000", "recorded");
+            var transcriptMetadata = MeetingFiles.ReadJson(Path.Combine(transcriptOnly, "session.json"));
+            transcriptMetadata["title"] = "Native transcript-only fixture";
+            MeetingFiles.WriteJson(Path.Combine(transcriptOnly, "session.json"), transcriptMetadata);
+            string keptNote = Path.Combine((string)config["vault_root"], "kept-transcript.md");
+            string deletedAudio = Path.Combine((string)config["vault_root"], "deleted-audio.wav");
+            Complete(transcriptOnly, keptNote, deletedAudio);
+            File.Delete(deletedAudio);
+            int childrenBeforePartial = children.Count;
+            var transcriptItem = OpenRecent(menu, recent, "Native transcript-only fixture");
+            Check(transcriptItem != null && transcriptItem.Text.Contains("仅保留转录"), "Deleting a completed WAV must show only-kept-transcript instead of a missing-artifact alarm");
+            Check(!transcriptItem.Text.Contains("缺失") && !transcriptItem.Text.Contains("检查"), "An intentionally retained transcript must not show a missing-artifact warning");
+            var retainedNote = MenuAction(transcriptItem, "打开转录笔记");
+            var absentAudio = MenuAction(transcriptItem, "定位录音文件");
+            Check(retainedNote != null && retainedNote.Enabled, "The retained transcript must remain reachable");
+            Check(absentAudio == null || !absentAudio.Enabled, "A deleted recording must not have an enabled locate action");
+            Check(MenuAction(transcriptItem, "重试这场转写") == null, "A deliberately retained transcript must not offer transcription retry");
+            opened = null;
+            retainedNote.PerformClick();
+            Check(opened == keptNote, "The retained transcript action must open its exact synthetic note through the injected opener");
+            menu.Close();
+            var transcriptRecord = ((SessionCatalog)Field(context, "catalog")).Get(transcriptOnly);
+            Check(transcriptRecord.State == "transcript_only" && !transcriptRecord.NeedsAttention && !transcriptRecord.CanRetry, "Transcript-only completion must be quiet and non-retryable");
+            string audioOnly = Fixture("20261014-121001", "recorded");
+            var audioMetadata = MeetingFiles.ReadJson(Path.Combine(audioOnly, "session.json"));
+            audioMetadata["title"] = "Native audio-only fixture";
+            MeetingFiles.WriteJson(Path.Combine(audioOnly, "session.json"), audioMetadata);
+            string deletedNote = Path.Combine((string)config["vault_root"], "deleted-transcript.md");
+            string keptAudio = Path.Combine((string)config["vault_root"], "kept-recording.wav");
+            Complete(audioOnly, deletedNote, keptAudio);
+            File.Delete(deletedNote);
+            var audioItem = OpenRecent(menu, recent, "Native audio-only fixture");
+            Check(audioItem != null && audioItem.Text.Contains("仅保留录音"), "Deleting a completed MD must show only-kept-recording instead of a missing-artifact alarm");
+            var retainedAudio = MenuAction(audioItem, "定位录音文件");
+            var absentNote = MenuAction(audioItem, "打开转录笔记");
+            Check(retainedAudio != null && retainedAudio.Enabled, "The retained recording must remain reachable");
+            Check(absentNote == null || !absentNote.Enabled, "A deleted transcript must not have an enabled open action");
+            Check(MenuAction(audioItem, "重试这场转写") == null, "A deliberately retained recording must not offer transcription retry");
+            string located = null;
+            Set(context, "artifactLocator", new Action<string>(delegate(string path) { located = path; }));
+            retainedAudio.PerformClick();
+            Check(located == keptAudio, "The retained recording action must locate its exact synthetic WAV through the injected locator");
+            menu.Close();
+            var audioRecord = ((SessionCatalog)Field(context, "catalog")).Get(audioOnly);
+            Check(audioRecord.State == "audio_only" && !audioRecord.NeedsAttention && !audioRecord.CanRetry, "Audio-only completion must be quiet and non-retryable");
+            File.Delete(keptNote);
+            File.Delete(keptAudio);
+            Check(OpenRecent(menu, recent, "Native transcript-only fixture") == null, "Deleting the remaining transcript must remove that meeting from the actual recent menu");
+            menu.Close();
+            Check(OpenRecent(menu, recent, "Native audio-only fixture") == null, "Deleting the remaining recording must remove that meeting from the actual recent menu");
+            menu.Close();
+            Check(children.Count == childrenBeforePartial, "Artifact deletion and menu refresh must not start any transcription worker");
             // A controller file can become locked after the worker is created.
             // Preserve the live process and use legacy identity, never write error
             // over the worker's output just because persistence failed.

@@ -86,7 +86,25 @@ internal static class TestSessionCatalog {
         catalog.MarkNotified(finished);
         True(!new SessionCatalog(home, vault).Get(completed).NeedsAttention, "completed is not repeatedly announced");
         File.Delete(audio);
-        True(catalog.Get(completed).State == "missing" && !catalog.Get(completed).CanRetry, "missing finished audio never automatically retranscribes");
+        var transcriptOnly = catalog.Get(completed);
+        True(transcriptOnly.State == "transcript_only" && !transcriptOnly.CanRetry && !transcriptOnly.NeedsAttention,
+            "user removed finished audio leaves a non-alerting transcript-only meeting");
+        Equal(transcriptOnly.Message, "仅保留转录，录音文件已移除", "transcript-only state explains the retained result");
+        True(transcriptOnly.NotePath == note && File.Exists(transcriptOnly.NotePath) && Contains(catalog.Snapshot(), completed),
+            "transcript-only history retains its existing note entry");
+        foreach (string errorKey in new[] { "merge_error", "artifact_error", "cleanup_error" }) {
+            Write(Path.Combine(completed, "status.json"), new Dictionary<string, object> {
+                { "state", "completed" }, { "note_path", note }, { "audio_path", audio }, { errorKey, "fixture failure" }
+            });
+            var partialFailure = catalog.Get(completed);
+            True(partialFailure.State == "missing" && partialFailure.NeedsAttention && Contains(catalog.Snapshot(), completed),
+                "partial output with " + errorKey + " remains an inspection case");
+        }
+        Write(Path.Combine(completed, "status.json"), new { state = "completed", note_path = note, audio_path = audio });
+        Write(Path.Combine(completed, "session.json"), new { state = "recorded", session_dir = completed, capture_error = "fixture capture failure" });
+        True(catalog.Get(completed).State == "missing" && catalog.Get(completed).NeedsAttention,
+            "capture failure with a retained transcript is not classified as ordinary user removal");
+        Write(Path.Combine(completed, "session.json"), new { state = "recorded", session_dir = completed });
         File.Delete(note);
         var removed = catalog.Get(completed);
         True(removed.State == "removed" && !removed.NeedsAttention && !removed.CanRetry,
@@ -113,16 +131,86 @@ internal static class TestSessionCatalog {
         Equal(catalog.Get(completed).State, "missing", "replacement directory is not mistaken for deliberate removal");
         Directory.Delete(audio);
         File.WriteAllText(audio, "not-audio");
-        True(catalog.Get(completed).State == "missing" && Contains(catalog.Snapshot(), completed),
-            "restoring one file makes incomplete meeting visible again");
+        var audioOnly = catalog.Get(completed);
+        True(audioOnly.State == "audio_only" && !audioOnly.CanRetry && !audioOnly.NeedsAttention && Contains(catalog.Snapshot(), completed),
+            "retaining only finished audio remains visible without a failure alert");
+        True(audioOnly.AudioPath == audio && File.Exists(audioOnly.AudioPath), "audio-only history retains its existing recording entry");
         File.WriteAllText(note, "fixture note", new UTF8Encoding(false));
         Equal(catalog.Get(completed).State, "completed", "restoring both files restores completed meeting");
+
+        string legacyRelative = Session("20261014-120050", "recorded");
+        string legacyOutput = Path.Combine(vault, "attachments", "20261014-120050");
+        Directory.CreateDirectory(legacyOutput);
+        string legacyAudio = Path.Combine(legacyOutput, "meeting.wav");
+        string legacyNote = Path.Combine(vault, "legacy-relative.md");
+        Write(Path.Combine(legacyRelative, "session.json"), new { state = "recorded", session_dir = legacyRelative,
+            audio_output_dir = legacyOutput });
+        Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+            merged_audio = new { path = "meeting.wav" } });
+        File.WriteAllText(legacyAudio, "not-audio");
+        File.WriteAllText(legacyNote, "legacy fixture note");
+        var legacyFinished = catalog.Get(legacyRelative);
+        True(legacyFinished.State == "completed" && legacyFinished.AudioPath == legacyAudio && legacyFinished.NotePath == legacyNote,
+            "legacy merged basename resolves only through its declared absolute audio output directory");
+        File.Delete(legacyAudio);
+        True(catalog.Get(legacyRelative).State == "transcript_only" && !catalog.Get(legacyRelative).NeedsAttention,
+            "legacy relative output also supports a user-retained transcript");
+        File.Delete(legacyNote);
+        True(catalog.Get(legacyRelative).State == "removed" && !Contains(catalog.Snapshot(), legacyRelative),
+            "legacy relative output with both files removed is omitted from history");
+        File.WriteAllText(legacyAudio, "not-audio");
+        True(catalog.Get(legacyRelative).State == "audio_only" && !catalog.Get(legacyRelative).NeedsAttention,
+            "legacy relative output also supports a user-retained recording");
+        File.Delete(legacyAudio);
+        Directory.CreateDirectory(legacyAudio);
+        True(catalog.Get(legacyRelative).State == "missing" && catalog.Get(legacyRelative).NeedsAttention,
+            "legacy output replaced by a directory is not treated as user file removal");
+        Directory.Delete(legacyAudio);
+        foreach (string relativePath in new[] { @"..\escape.wav", @"subdir\meeting.wav", "subdir/meeting.wav" }) {
+            Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+                merged_audio = new { path = relativePath } });
+            Equal(catalog.Get(legacyRelative).State, "invalid", "legacy relative audio must be a basename: " + relativePath);
+        }
+        Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+            merged_audio = new { path = "meeting.wav", published_path = Path.Combine(outside, "meeting.wav") } });
+        Equal(catalog.Get(legacyRelative).State, "invalid", "unsafe published path must not fall back to a safe legacy basename");
+        Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+            merged_audio = new { path = "meeting.wav", published_path = "meeting.wav" } });
+        Equal(catalog.Get(legacyRelative).State, "invalid", "relative explicit published path is not a legacy output basename");
+        Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+            audio_path = "meeting.wav", merged_audio = new { path = "meeting.wav" } });
+        Equal(catalog.Get(legacyRelative).State, "invalid", "relative top-level audio path is not a legacy merged path fallback");
+        Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+            merged_audio = new { path = "meeting.wav" } });
+        Write(Path.Combine(legacyRelative, "session.json"), new { state = "recorded", session_dir = legacyRelative,
+            audio_output_dir = outside });
+        Equal(catalog.Get(legacyRelative).State, "invalid", "legacy audio directory outside the vault is rejected");
+        Write(Path.Combine(legacyRelative, "session.json"), new { state = "recorded", session_dir = legacyRelative,
+            audio_output_dir = "attachments" });
+        Equal(catalog.Get(legacyRelative).State, "invalid", "relative legacy audio directory cannot be resolved against the current directory");
+        Write(Path.Combine(legacyRelative, "session.json"), new { state = "recorded", session_dir = legacyRelative });
+        var unknownLegacy = catalog.Get(legacyRelative);
+        True((unknownLegacy.State == "invalid" || unknownLegacy.State == "missing") && unknownLegacy.NeedsAttention && Contains(catalog.Snapshot(), legacyRelative),
+            "legacy audio without a declared directory remains visible rather than guessing or hiding outputs");
+        Write(Path.Combine(legacyRelative, "session.json"), new { state = "recorded", session_dir = legacyRelative,
+            audio_output_dir = legacyOutput });
+        Write(Path.Combine(legacyRelative, "status.json"), new { state = "completed", note_path = legacyNote,
+            merged_audio = new { path = "meeting.wav" }, artifact_error = "fixture verification error" });
+        True(catalog.Get(legacyRelative).State == "missing" && catalog.Get(legacyRelative).NeedsAttention,
+            "legacy absent outputs with an artifact error remain visible");
         string offline = Session("20261014-120100", "recorded");
         string unavailableVault = Path.Combine(root, "offline-vault");
         Write(Path.Combine(offline, "status.json"), new { state = "completed",
             note_path = Path.Combine(unavailableVault, "fixture.md"), audio_path = Path.Combine(unavailableVault, "fixture.wav") });
         Equal(new SessionCatalog(home, unavailableVault).Get(offline).State, "missing",
             "unavailable vault must not hide every completed meeting as user removal");
+        Write(Path.Combine(offline, "session.json"), new { state = "recorded", session_dir = offline,
+            audio_output_dir = Path.Combine(unavailableVault, "attachments") });
+        Write(Path.Combine(offline, "status.json"), new { state = "completed", note_path = Path.Combine(unavailableVault, "fixture.md"),
+            merged_audio = new { path = "meeting.wav" } });
+        var offlineLegacy = new SessionCatalog(home, unavailableVault).Get(offline);
+        True(offlineLegacy.State == "missing" && offlineLegacy.NeedsAttention,
+            "legacy relative outputs with an unavailable vault remain an inspection case");
         string incomplete = Session("20261014-120200", "recorded");
         Write(Path.Combine(incomplete, "status.json"), new { state = "error", note_path = note, audio_path = audio });
         True(catalog.Get(incomplete).State == "failed" && Contains(catalog.Snapshot(), incomplete),

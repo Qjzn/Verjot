@@ -139,9 +139,20 @@ internal static class TestCompletionFeedback {
             Check(located == noteB, "Transcript action must locate the exact note for B");
             File.Delete(noteB); located = null;
             Call(bLink, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(bLink.Links[0]));
-            Check(located == null && !bLink.Visible && resultPanel.Heading.Text.Contains("缺失"), "Moved artifacts must be revalidated and never opened through stale UI");
+            Check(located == null && bLink.Visible && !bLink.Enabled && bLink.Text.Contains("已移除") &&
+                ((LinkLabel)Field(resultPanel, "AudioFile")).Enabled, "Deleted transcript must disable its stale link while retaining the actual recording destination");
             Call(context, "FocusSession", a, true);
             Check(((LinkLabel)Field(resultPanel, "AudioFile")).Visible, "A valid earlier meeting must remain directly reachable");
+            File.Delete(audioA); located = null;
+            Call(context, "FocusSession", a, true);
+            var removedAudio = (LinkLabel)Field(resultPanel, "AudioFile");
+            var retainedNote = (LinkLabel)Field(resultPanel, "TranscriptFile");
+            Check(removedAudio.Visible && !removedAudio.Enabled && removedAudio.Text.Contains("已移除") && retainedNote.Visible && retainedNote.Enabled,
+                "Transcript-only result keeps its file destination in the lightweight float");
+            Call(removedAudio, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(removedAudio.Links[0]));
+            Check(located == null, "Disabled removed audio must not invoke an artifact action");
+            Call(retainedNote, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(retainedNote.Links[0]));
+            Check(located == noteA, "Remaining transcript must stay reachable after audio deletion");
             Console.WriteLine("Completion feedback: " + assertions + " assertions passed; synthetic files only, no audio or external file opening."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { if (context != null) { Call(context, "RequestExit"); context.Dispose(); } }
