@@ -65,7 +65,7 @@ def validate_config(config: dict, *, check_directory: bool = True) -> dict:
             if "pattern" in rule and not re.fullmatch(rule["pattern"], value):
                 raise ValueError(f"{key} 格式不符合配置说明")
         if "enum" in rule and value not in rule["enum"]:
-            raise ValueError(f"{key} 必须为：" + ", ".join(rule["enum"]))
+            raise ValueError(f"{key} 必须为：" + ", ".join(map(str, rule["enum"])))
         if type(value) is int and not rule.get("minimum", value) <= value <= rule.get("maximum", value):
             raise ValueError(f"{key} 超出允许范围")
     drive, _ = ntpath.splitdrive(result["vault_root"])

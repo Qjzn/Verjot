@@ -35,6 +35,7 @@ internal static class MeetingFiles {
     public static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     public static Dictionary<string, object> ReadJson(string path) {
         bool observed = File.Exists(path);
+        var retryClock = Stopwatch.StartNew();
         string snapshot;
         for (int attempt = 0; ; attempt++) {
             try {
@@ -42,11 +43,26 @@ internal static class MeetingFiles {
                 using (var reader = new StreamReader(stream, Encoding.UTF8)) snapshot = reader.ReadToEnd();
                 break;
             } catch (IOException error) {
-                if (attempt >= 3) {
+                int code = error.HResult & 0xffff;
+                bool sharing = code == 32 || code == 33;
+                if (sharing) observed = true;
+                bool replacing = observed && (error is FileNotFoundException || error is DirectoryNotFoundException);
+                // Atomic replacement/short external locks can outlast three
+                // scheduler ticks. A known path can briefly disappear too.
+                // Unknown optional files keep their short missing-file policy;
+                // permanent conflicts/disappearance remain explicit errors.
+                if (attempt >= 3 && ((!sharing && !replacing) || retryClock.ElapsedMilliseconds >= 200)) {
                     if (!observed && (error is FileNotFoundException || error is DirectoryNotFoundException))
                         return new Dictionary<string, object>();
                     throw;
                 }
+                Thread.Sleep(10);
+            } catch (UnauthorizedAccessException error) {
+                // Windows can report ERROR_ACCESS_DENIED while an existing
+                // file is delete-pending. Retry that brief window, but never
+                // turn denied/uncertain metadata into an empty optional file.
+                if ((error.HResult & 0xffff) != 5 || attempt >= 3) throw;
+                observed = true;
                 Thread.Sleep(10);
             }
         }
@@ -183,13 +199,21 @@ internal sealed class TimelineWriter : IDisposable {
         public StorageException(string message, Exception cause) : base(message, cause) { }
     }
     readonly object gate = new object();
-    readonly WaveFileWriter writer;
+    WaveFileWriter writer;
+    readonly WaveFormat format;
     readonly int byteRate;
     readonly int blockAlign;
     readonly int sampleRate, channels, bits;
     readonly bool floatSamples;
     readonly byte[] silence;
     readonly string path;
+    readonly long segmentByteLimit;
+    sealed class Segment {
+        public string Path;
+        public long Start, Bytes;
+    }
+    readonly List<Segment> segments = new List<Segment>();
+    Segment currentSegment;
     readonly List<long[]> pausedRanges = new List<long[]>();
     long written;
     long endByteBudget = long.MaxValue;
@@ -224,18 +248,44 @@ internal sealed class TimelineWriter : IDisposable {
     const double ContinuousTimestampUncertaintyMs = 2;
     public float Peak { get { lock (gate) return peak; } }
     public bool ClockFitRejected { get { lock (gate) return clockFitRejected; } }
-    public WaveFormat Format { get { return writer.WaveFormat; } }
+    public WaveFormat Format { get { return format; } }
+    public object[] Segments { get {
+        lock (gate) {
+            var result = new List<object>();
+            foreach (Segment segment in segments) result.Add(new Dictionary<string, object> {
+                { "path", Path.GetFileName(segment.Path) }, { "start_frame", segment.Start / blockAlign }, { "frames", segment.Bytes / blockAlign }
+            });
+            return result.ToArray();
+        }
+    } }
 
-    public TimelineWriter(string path, WaveFormat format) {
-        this.path = path;
-        try { writer = new WaveFileWriter(path, format); }
-        catch (IOException error) { throw StorageFailure(error); }
-        catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
+    // The two-argument path remains available to historical timeline self-tests.
+    // Production CaptureTrack always supplies the bounded segment duration.
+    public TimelineWriter(string path, WaveFormat format) : this(path, format, 0, false) { }
+    public TimelineWriter(string path, WaveFormat format, int segmentSeconds) : this(path, format, segmentSeconds, true) { }
+    TimelineWriter(string path, WaveFormat format, int segmentSeconds, bool segmented) {
+        if (segmented && (segmentSeconds < 10 || segmentSeconds > 600))
+            throw new ArgumentOutOfRangeException("segmentSeconds", "无损录音分段时长须为 10 到 600 秒。");
+        this.path = path; this.format = format;
         byteRate = format.AverageBytesPerSecond;
         blockAlign = format.BlockAlign;
         sampleRate = format.SampleRate; channels = format.Channels; bits = format.BitsPerSample; floatSamples = IsFloat(format);
+        // Reserve ample RIFF/header headroom, including unusual high-channel
+        // mix formats. A frame is never split, and only one WAV remains open.
+        segmentByteLimit = !segmented ? long.MaxValue :
+            Math.Min((long)segmentSeconds * sampleRate * blockAlign, 0xf0000000L / blockAlign * blockAlign);
         millisecondsPerFrame = 1000.0 / format.SampleRate;
         silence = new byte[Math.Max(blockAlign, byteRate / blockAlign / 4 * blockAlign)];
+        OpenSegment(0);
+    }
+    void OpenSegment(long firstByte) {
+        string filename = segmentByteLimit == long.MaxValue ? path : Path.Combine(Path.GetDirectoryName(path),
+            Path.GetFileNameWithoutExtension(path) + ".seg" + (segments.Count + 1).ToString("D6", CultureInfo.InvariantCulture) + ".wav");
+        try { writer = new WaveFileWriter(filename, format); }
+        catch (IOException error) { throw StorageFailure(error); }
+        catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
+        currentSegment = new Segment { Path = filename, Start = firstByte };
+        segments.Add(currentSegment);
     }
     long Bytes(double milliseconds) {
         return (long)Math.Max(0, milliseconds * byteRate / 1000.0) / blockAlign * blockAlign;
@@ -244,7 +294,17 @@ internal sealed class TimelineWriter : IDisposable {
         return new StorageException("录音文件无法继续写入，请检查磁盘空间和文件权限；正在保存已录内容。", error);
     }
     void WriteAudio(byte[] data, int count) {
-        try { writer.Write(data, 0, count); }
+        try {
+            int offset = 0;
+            while (offset < count) {
+                if (currentSegment.Bytes == segmentByteLimit) {
+                    CloseWriter(); OpenSegment(written);
+                }
+                int part = (int)Math.Min(count - offset, segmentByteLimit - currentSegment.Bytes);
+                writer.Write(data, offset, part);
+                currentSegment.Bytes += part; offset += part; written += part;
+            }
+        }
         catch (IOException error) { throw StorageFailure(error); }
         catch (UnauthorizedAccessException error) { throw StorageFailure(error); }
         catch (ArgumentException error) {
@@ -264,7 +324,6 @@ internal sealed class TimelineWriter : IDisposable {
         while (written < target) {
             int count = (int)Math.Min(silence.Length, target - written);
             WriteAudio(silence, count);
-            written += count;
         }
     }
     public void SetPaused(bool value, double elapsedMs) {
@@ -304,10 +363,9 @@ internal sealed class TimelineWriter : IDisposable {
             if (count == 0) return;
             byte[] audio = MaskPausedAudio(buffer, count);
             WriteAudio(audio, count);
-            written += count;
             previousCallbackMs = elapsedMs;
             hadCallback = true;
-            peak = paused ? 0 : MeasurePeak(audio, count, writer.WaveFormat);
+            peak = paused ? 0 : MeasurePeak(audio, count, format);
         }
     }
     void ResetClock(long position, double timeMs) {
@@ -456,7 +514,7 @@ internal sealed class TimelineWriter : IDisposable {
             }
         }
         byte[] masked = MaskPausedAudio(output, output.Length);
-        WriteAudio(masked, masked.Length); written += masked.Length;
+        WriteAudio(masked, masked.Length);
         peak = paused ? 0 : MeasurePeak(masked, masked.Length, Format);
     }
     public void SetEndBoundary(double elapsedMs) {
@@ -465,8 +523,19 @@ internal sealed class TimelineWriter : IDisposable {
     void TrimExcessAfterClose(long limit) {
         if (written <= limit) return;
         // A callback burst can contain more data than its current wall-clock
-        // position suggests. Trim only this writer's WAV after its header closes.
-        using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)) {
+        // position suggests. Repair each owned segment in absolute byte space.
+        for (int index = segments.Count - 1; index >= 0; index--) {
+            Segment segment = segments[index];
+            if (segment.Start >= limit && index > 0) {
+                File.Delete(segment.Path); segments.RemoveAt(index); continue;
+            }
+            long remaining = Math.Min(segment.Bytes, Math.Max(0, limit - segment.Start));
+            if (remaining < segment.Bytes) { TrimWave(segment.Path, remaining); segment.Bytes = remaining; }
+        }
+        written = limit;
+    }
+    void TrimWave(string filename, long limit) {
+        using (var stream = new FileStream(filename, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)) {
             var read = new BinaryReader(stream);
             var write = new BinaryWriter(stream);
             stream.Position = 12;
@@ -482,7 +551,6 @@ internal sealed class TimelineWriter : IDisposable {
                     stream.Position = 4;
                     write.Write((uint)(stream.Length - 8));
                     write.Flush();
-                    written = limit;
                     return;
                 }
                 stream.Position = body + size + (size % 2);
@@ -493,8 +561,15 @@ internal sealed class TimelineWriter : IDisposable {
     void SilencePausedRangesAfterClose() {
         if (pausedRanges.Count == 0) return;
         // A callback burst can already be written ahead of a later pause click.
-        // Reapply only microphone pause ranges to the finalized WAV as well.
-        using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)) {
+        // A late click can affect closed segments too. Reopen each one alone.
+        foreach (Segment segment in segments) {
+            bool overlaps = false;
+            foreach (long[] range in pausedRanges) overlaps |= range[0] < segment.Start + segment.Bytes && range[1] > segment.Start;
+            if (overlaps) SilenceSegment(segment);
+        }
+    }
+    void SilenceSegment(Segment segment) {
+        using (var stream = new FileStream(segment.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)) {
             var read = new BinaryReader(stream);
             stream.Position = 12;
             while (stream.Position + 8 <= stream.Length) {
@@ -503,8 +578,8 @@ internal sealed class TimelineWriter : IDisposable {
                 long body = stream.Position;
                 if (kind == "data") {
                     foreach (long[] range in pausedRanges) {
-                        long start = Math.Min(written, range[0]);
-                        long end = Math.Min(written, range[1]);
+                        long start = Math.Max(0, Math.Min(segment.Bytes, range[0] - segment.Start));
+                        long end = Math.Max(0, Math.Min(segment.Bytes, range[1] - segment.Start));
                         stream.Position = body + start;
                         while (start < end) {
                             int count = (int)Math.Min(silence.Length, end - start);
@@ -603,13 +678,17 @@ internal sealed class CaptureTrack : IDisposable {
         }
     } }
     public float Peak { get { return writer.ReadPeak(); } }
-    public CaptureTrack(WasapiCapture source, string name, string path, Stopwatch sessionClock, Action<Exception> onFailed) {
+    public WaveFormat Format { get { return writer.Format; } }
+    public object[] Segments { get { return writer.Segments; } }
+    public CaptureTrack(WasapiCapture source, string name, string path, Stopwatch sessionClock, Action<Exception> onFailed)
+        : this(source, name, path, sessionClock, onFailed, 300) { }
+    public CaptureTrack(WasapiCapture source, string name, string path, Stopwatch sessionClock, Action<Exception> onFailed, int segmentSeconds) {
         capture = source;
         DeviceName = name;
         PathName = path;
         clock = sessionClock;
         failed = onFailed;
-        writer = new TimelineWriter(path, capture.WaveFormat);
+        writer = new TimelineWriter(path, capture.WaveFormat, segmentSeconds);
         capture.DataAvailable += delegate(object sender, WaveInEventArgs args) {
             try { writer.Add(args.Buffer, args.BytesRecorded, clock.Elapsed.TotalMilliseconds); }
             catch (Exception error) { failed(error); }
@@ -620,7 +699,9 @@ internal sealed class CaptureTrack : IDisposable {
             if (!requestedStop) failed(args.Exception ?? new IOException("音频设备停止，已结束录音并保留音频。"));
         };
     }
-    public CaptureTrack(MMDevice source, bool isLoopback, string path, Stopwatch sessionClock, Action<Exception> onFailed) {
+    public CaptureTrack(MMDevice source, bool isLoopback, string path, Stopwatch sessionClock, Action<Exception> onFailed)
+        : this(source, isLoopback, path, sessionClock, onFailed, 300) { }
+    public CaptureTrack(MMDevice source, bool isLoopback, string path, Stopwatch sessionClock, Action<Exception> onFailed, int segmentSeconds) {
         deviceId = source.ID; loopback = isLoopback;
         DeviceName = source.FriendlyName; PathName = path; clock = sessionClock; failed = onFailed;
         // Both clocks use QueryPerformanceCounter. WASAPI returns its value in
@@ -629,7 +710,7 @@ internal sealed class CaptureTrack : IDisposable {
         double elapsed = sessionClock.Elapsed.TotalMilliseconds;
         long after = Stopwatch.GetTimestamp();
         qpcOrigin100ns = (before / 2.0 + after / 2.0) * 10000000.0 / Stopwatch.Frequency - elapsed * 10000.0;
-        writer = new TimelineWriter(path, source.AudioClient.MixFormat);
+        writer = new TimelineWriter(path, source.AudioClient.MixFormat, segmentSeconds);
     }
     void Diagnostic(string message, double atMs, bool uncertain) {
         lock (diagnostics) {
@@ -642,13 +723,28 @@ internal sealed class CaptureTrack : IDisposable {
             });
         }
     }
+    internal static bool SameCaptureFormat(WaveFormat expected, WaveFormat actual) {
+        // WAVEFORMATEX also carries encoding, alignment and extensible channel
+        // mask/valid precision. Equal rate/channels/width alone can accept PCM32
+        // bytes under a float32 WAV header and turn valid speech into NaNs.
+        using (var first = new MemoryStream())
+        using (var second = new MemoryStream())
+        using (var firstWriter = new BinaryWriter(first))
+        using (var secondWriter = new BinaryWriter(second)) {
+            expected.Serialize(firstWriter); actual.Serialize(secondWriter);
+            byte[] a = first.ToArray(), b = second.ToArray();
+            if (a.Length != b.Length) return false;
+            for (int index = 0; index < a.Length; index++) if (a[index] != b[index]) return false;
+            return true;
+        }
+    }
     void CaptureTimestamped() {
         try {
             using (var enumerator = new MMDeviceEnumerator())
             using (var device = enumerator.GetDevice(deviceId))
             using (var client = device.AudioClient) {
                 WaveFormat format = client.MixFormat;
-                if (format.SampleRate != writer.Format.SampleRate || format.Channels != writer.Format.Channels || format.BitsPerSample != writer.Format.BitsPerSample)
+                if (!SameCaptureFormat(writer.Format, format))
                     throw new IOException("音频设备格式在启动时变化，请重新连接设备。");
                 client.Initialize(AudioClientShareMode.Shared, loopback ? AudioClientStreamFlags.Loopback : AudioClientStreamFlags.None,
                     1000000, 0, format, Guid.Empty);
@@ -836,6 +932,8 @@ internal sealed class RecordingSession : IDisposable {
             { "transcription_model", (string)config["transcription_mode"] == "api" ? config["api_model"] : "Qwen3-ASR-1.7B" },
             { "transcription_api_base_url", (string)config["transcription_mode"] == "api" ? ((string)config["api_base_url"]).TrimEnd('/') : "" },
             { "system_capture_mode", MeetingFiles.Text(config, "system_capture_mode", "all_active") },
+            { "audio_format", "mp3" }, { "mp3_bitrate_kbps", config.ContainsKey("mp3_bitrate_kbps") ? config["mp3_bitrate_kbps"] : 192 },
+            { "recording_segment_seconds", config.ContainsKey("recording_segment_seconds") ? config["recording_segment_seconds"] : 300 },
             { "timeline", "wasapi_device_qpc_100ns" }, { "session_dir", DirectoryPath },
             { "microphone_pauses", microphonePauses }, { "microphone_paused", false },
             { "recording_pauses", recordingPauses }, { "recording_paused", false }, { "bookmarks", bookmarks }
@@ -910,7 +1008,7 @@ internal sealed class RecordingSession : IDisposable {
         try {
             var track = new CaptureTrack(device, kind == "loopback", Path.Combine(DirectoryPath, source.Key + ".wav"), clock, delegate(Exception error) {
                 CaptureFailed(source, endpointKey, error);
-            });
+            }, config.ContainsKey("recording_segment_seconds") ? Convert.ToInt32(config["recording_segment_seconds"]) : 300);
             lock (gate) {
                 source.Track = track;
                 track.SetPaused(recordingPaused || (kind == "microphone" && microphonePaused), clock.Elapsed.TotalMilliseconds);
@@ -998,6 +1096,8 @@ internal sealed class RecordingSession : IDisposable {
                 offsets[source.Key] = 0; names[source.Key] = source.Name; files[source.Key] = source.Track.PathName; starts[source.Key] = source.Track.OffsetMs;
                 entries.Add(new Dictionary<string, object> {
                     { "source", source.Key }, { "kind", source.Kind }, { "path", Path.GetFileName(source.Track.PathName) },
+                    { "segments", source.Track.Segments }, { "sample_rate", source.Track.Format.SampleRate },
+                    { "channels", source.Track.Format.Channels }, { "bits_per_sample", source.Track.Format.BitsPerSample },
                     { "device_id", source.DeviceId }, { "name", source.Name }, { "requested_at_seconds", source.RequestedMs / 1000.0 },
                     { "opened_at_seconds", source.Track.OffsetMs / 1000.0 }, { "coverage_gap_seconds", Math.Max(0, source.Track.OffsetMs - source.RequestedMs) / 1000.0 },
                     { "closed_at_seconds", source.Ended ? (object)(source.EndMs / 1000.0) : null },

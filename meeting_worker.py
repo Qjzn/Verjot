@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from contextlib import contextmanager
 from datetime import datetime
 import hashlib
@@ -20,8 +21,9 @@ from urllib.parse import quote
 import soundfile as sf
 
 from asr_engine import atomic_json, job_fingerprint as local_job_fingerprint, read_segments
-from audio_sources import capture_sources, source_kind, SOURCE_NAME
+from audio_sources import capture_paths, capture_sources, source_kind, SOURCE_NAME
 from merge_audio import merge_session
+from mp3_audio import encode_mp3, validate_mp3
 from tingji_config import load_config
 
 HOME = Path(__file__).resolve().parent
@@ -103,14 +105,19 @@ def meeting_folder(config: dict):
 
 
 def audio_output_path(session: Path, vault: Path, metadata: dict, config=None):
+    # Absence identifies pre-MP3 recordings; never migrate their finished audio.
+    audio_format = metadata.get("audio_format", "wav")
+    if audio_format not in ("wav", "mp3"):
+        raise ValueError("会议录音格式必须为 wav 或 mp3")
+    filename = "meeting." + audio_format
     if metadata.get("storage_mode") != "minimal":
-        return safe_path(session / "meeting.wav")
+        return safe_path(session / filename)
     folder = meeting_folder(config or {})
     expected = safe_path(vault / folder / "附件" / session.name)
     supplied = metadata.get("audio_output_dir")
     if not supplied or not Path(supplied).is_absolute() or safe_path(Path(supplied)) != expected:
         raise ValueError("公开录音目录必须对应当前会议的库内附件目录")
-    return safe_path(expected / "meeting.wav")
+    return safe_path(expected / filename)
 
 
 def note_location(session: Path, config: dict, metadata: dict):
@@ -269,8 +276,7 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
                 mixed_audio=None, merge_error=None):
     lines = []
     if mixed_audio is not None:
-        default_audio = (Path(metadata["audio_output_dir"]) / "meeting.wav"
-                         if metadata.get("storage_mode") == "minimal" else session / "meeting.wav")
+        default_audio = audio_output_path(session, vault, metadata)
         published = Path(mixed_audio.get("published_path", default_audio))
         lines.extend(["**会议录音**", audio_link(safe_path(published), safe_path(vault), metadata), ""])
     bookmarks = [item for item in metadata.get("bookmarks", []) if isinstance(item, dict)
@@ -416,6 +422,38 @@ def publish_audio(session: Path, config: dict, metadata: dict, merged: dict):
     source = validate_wave(session / "meeting.wav", merged)
     output = audio_output_path(session, vault, metadata, config)
     ownership = read_json(session / "status.json", {}).get("published_audio")
+    if metadata.get("audio_format") == "mp3":
+        status(session, "正在生成并校验 MP3 会议录音", stage="encode")
+        source_sha256 = file_sha256(source)
+        verify_audio_destination(output, ownership)
+        safe_path(output.parent)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        safe_path(output.parent)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix=".meeting-", suffix=".tmp", dir=output.parent,
+                                             delete=False) as stream:
+                temporary = Path(stream.name)
+            details = encode_mp3(source, temporary, frames=merged["frames"],
+                                 bitrate_kbps=metadata.get("mp3_bitrate_kbps", 192))
+            if file_sha256(source) != source_sha256:
+                raise ValueError("编码期间无损合并录音发生变化，已保留所有原始录音")
+            published_sha256 = file_sha256(temporary)
+            safe_path(output)
+            verify_audio_destination(output, ownership)
+            os.replace(temporary, output)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+        previous = read_json(session / "status.json", {})
+        atomic_json(session / "status.json", {**previous, "published_audio": {
+            "path": str(output), "size": output.stat().st_size, "sha256": published_sha256}})
+        return {**merged, **details, "path": "meeting.mp3", "published_path": str(output),
+                "container": "MP3", "subtype": "MPEG_LAYER_III",
+                "output_mtime_ns": output.stat().st_mtime_ns,
+                "lossless_container": merged.get("container", "WAV"),
+                "lossless_sha256": source_sha256,
+                "lossless_output_size": merged.get("output_size"), "output_sha256": published_sha256}
     if output != source:
         verify_audio_destination(output, ownership)
         safe_path(output.parent)
@@ -447,13 +485,51 @@ def publish_audio(session: Path, config: dict, metadata: dict, merged: dict):
     return {**merged, "published_path": str(output), "output_sha256": published_sha256}
 
 
-def cleanup_candidates(session: Path, *, keep_meeting=False):
+def validate_published_audio(path: Path, metadata: dict, merged: dict):
+    if metadata.get("audio_format") != "mp3":
+        return validate_wave(path, merged)
+    path = safe_path(path)
+    if (not merged.get("complete") or merged.get("format") != "mp3"
+            or path.stat().st_size != merged.get("output_size")
+            or not re.fullmatch(r"[a-f0-9]{64}", str(merged.get("output_sha256", "")))
+            or file_sha256(path) != merged["output_sha256"]):
+        raise ValueError("MP3 成品内容已改变或缺少校验信息，已保留原始无损录音")
+    details = validate_mp3(path, frames=merged.get("frames", 0),
+                           bitrate_kbps=metadata.get("mp3_bitrate_kbps", 192))
+    if any(details.get(key) != merged.get(key) for key in details):
+        raise ValueError("MP3 成品参数与完成状态不一致，已保留原始无损录音")
+    return path
+
+
+def cleanup_metadata_token(session: Path, metadata: dict):
+    """Bind cleanup to one unchanged metadata file and its validated contents."""
+    path = safe_path(session / "session.json")
+
+    def identity(info):
+        # Windows Python 3.12 stat/fstat expose different ctime meanings.
+        # File ID detects replacement; the digest below binds exact contents.
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+    with path.open("rb") as stream:
+        before = identity(os.fstat(stream.fileno()))
+        content = stream.read()
+        after = identity(os.fstat(stream.fileno()))
+    if (before != after or after != identity(safe_path(path).stat())
+            or json.loads(content.decode("utf-8-sig")) != metadata):
+        raise ValueError("会议元数据已发生变化，已停止清理")
+    return after, hashlib.sha256(content).digest()
+
+
+def cleanup_candidates(session: Path, *, keep_meeting=False, metadata=None):
     """Plan only known generated files; callers must validate the session boundary."""
     session = safe_path(session)
     candidates = []
-    metadata = read_json(session / "session.json", {})
+    if metadata is None:
+        metadata = read_json(session / "session.json", {})
     generated = set(COMPACT_FILES)
-    generated.update(row["path"] for row in capture_sources(session, metadata, require_files=False))
+    generated.update(path.relative_to(session).as_posix()
+                     for row in capture_sources(session, metadata, require_files=False)
+                     for path in capture_paths(session, row))
     for name in sorted(generated):
         if name == "meeting.wav" and keep_meeting:
             continue
@@ -495,7 +571,7 @@ def verified_artifacts(session: Path, config: dict, metadata: dict, verified_sta
     if not complete:
         raise ValueError("转写结果尚未完整，已保留原始录音")
     audio = audio_output_path(session, vault, metadata, config)
-    validate_wave(audio, merged)
+    validate_published_audio(audio, metadata, merged)
     if not note.is_file():
         raise ValueError("转写笔记不存在，已保留原始录音")
     content = note.read_bytes()
@@ -517,12 +593,20 @@ def verified_artifacts(session: Path, config: dict, metadata: dict, verified_sta
 
 
 def compact_session(session: Path, config: dict, metadata: dict, verified_status: dict):
-    """Delete generated artifacts only after the published WAV and MD are verified.
+    """Delete generated artifacts only after the published audio and MD are verified.
 
     session.json/status.json and all unknown files remain. Return relative paths
     actually removed; marking artifacts_compacted is the caller's final action.
     """
     session = safe_path(session)
+    # Never let a later edit enroll additional files for deletion.
+    metadata = copy.deepcopy(metadata)
+    metadata_token = cleanup_metadata_token(session, metadata)
+
+    def check_metadata():
+        if cleanup_metadata_token(session, metadata) != metadata_token:
+            raise ValueError("会议元数据已发生变化，已停止清理")
+
     if capture_failure(metadata) or capture_failure(verified_status):
         raise ValueError("采集异常，已保留原始录音、分段和转写结果供检查，不能清理恢复资料")
     vault, _ = note_location(session, config, metadata)
@@ -532,21 +616,27 @@ def compact_session(session: Path, config: dict, metadata: dict, verified_status
     audio, _ = verified_artifacts(session, config, metadata, verified_status)
     if not re.fullmatch(r"[a-f0-9]{64}", str(verified_status.get("merged_audio", {}).get("output_sha256", ""))):
         raise ValueError("旧录音缺少内容校验信息，已保留原始录音和处理资料，请先核对成品")
-    candidates = cleanup_candidates(session, keep_meeting=audio == session / "meeting.wav")
+    candidates = cleanup_candidates(session, keep_meeting=audio == session / "meeting.wav",
+                                    metadata=metadata)
     # Remove recovery evidence last, so a interrupted cleanup can be resumed.
-    raw_names = {row["path"] for row in capture_sources(session, metadata, require_files=False)}
+    raw_names = {path.relative_to(session).as_posix()
+                 for row in capture_sources(session, metadata, require_files=False)
+                 for path in capture_paths(session, row)}
     candidates.sort(key=lambda path: (path.name in raw_names or path.name == "result.json",
                                       path.name == "result.json", str(path)))
     removed = []
     for path in candidates:
         safe_path(path)
         path.relative_to(session)
+        check_metadata()
         path.unlink()
         removed.append(path.relative_to(session).as_posix())
     clips = safe_path(session / "clips")
     if clips.is_dir() and not any(clips.iterdir()):
+        check_metadata()
         clips.rmdir()
         removed.append("clips/")
+    check_metadata()
     return removed
 
 
@@ -584,7 +674,8 @@ def finish_compaction(session: Path, config: dict, metadata: dict, completed: di
 def input_fingerprint(session: Path):
     entries = []
     metadata = read_json(session / "session.json", {})
-    names = ["session.json", *(row["path"] for row in capture_sources(session, metadata))]
+    names = ["session.json", *(path.relative_to(session).as_posix()
+             for row in capture_sources(session, metadata) for path in capture_paths(session, row))]
     for name in names:
         path = session / name
         if path.is_file():

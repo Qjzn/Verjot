@@ -1,4 +1,4 @@
-"""Make one local playback WAV; source tracks remain intact for transcription."""
+"""Make one RF64 playback intermediate; lossless tracks stay intact for ASR."""
 from __future__ import annotations
 
 from contextlib import ExitStack
@@ -12,23 +12,23 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
-from audio_sources import capture_sources
+from audio_sources import capture_sources, capture_paths, open_source
 
 
 SAMPLE_RATE = 48000
 CHANNELS = 2
-VERSION = 2
+VERSION = 3
 
 
 def _fingerprint(session: Path, metadata: dict) -> str:
     files = []
     for entry in capture_sources(session, metadata):
         source = entry["source"]
-        path = session / entry["path"]
-        if path.is_file():
+        for path in capture_paths(session, entry):
             info = path.stat()
-            files.append([source, info.st_size, info.st_mtime_ns])
+            files.append([source, path.name, info.st_size, info.st_mtime_ns])
     value = {"version": VERSION, "files": files,
+             "source_layout": metadata.get("sources"),
              "duration_seconds": metadata.get("duration_seconds", 0),
              "capture_offsets_ms": metadata.get("capture_offsets_ms", {})}
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -95,7 +95,7 @@ def merge_session(session: Path, metadata: dict, block_frames: int = SAMPLE_RATE
                 and cached.get("output_mtime_ns") == info.st_mtime_ns
                 and header.frames == cached.get("frames")
                 and header.samplerate == SAMPLE_RATE and header.channels == CHANNELS
-                and header.subtype == "PCM_16"):
+                and header.subtype == "PCM_16" and header.format == "RF64"):
             return {**cached, "reused": True}
     except (OSError, ValueError, sf.LibsndfileError):
         pass
@@ -107,12 +107,11 @@ def merge_session(session: Path, metadata: dict, block_frames: int = SAMPLE_RATE
             frames = int(round(duration * SAMPLE_RATE))
             for entry in capture_sources(session, metadata):
                 source = entry["source"]
-                path = session / entry["path"]
                 offset_seconds = float(metadata.get("capture_offsets_ms", {}).get(source, 0)) / 1000
                 if not math.isfinite(offset_seconds) or offset_seconds < 0:
                     raise ValueError("capture_offsets_ms must contain non-negative finite numbers")
                 offset = int(round(offset_seconds * SAMPLE_RATE))
-                audio = resources.enter_context(sf.SoundFile(path))
+                audio = resources.enter_context(open_source(session, entry))
                 tracks.append((audio, offset))
                 frames = max(frames, offset + (audio.frames * SAMPLE_RATE + audio.samplerate - 1)
                              // audio.samplerate)
@@ -130,7 +129,7 @@ def merge_session(session: Path, metadata: dict, block_frames: int = SAMPLE_RATE
             peak = max(float(np.max(np.abs(block))) for block in blocks())
             gain = min(1.0, 0.98 / peak) if peak > 0 else 1.0
             with sf.SoundFile(temporary, "w", samplerate=SAMPLE_RATE, channels=CHANNELS,
-                              subtype="PCM_16", format="WAV") as output:
+                              subtype="PCM_16", format="RF64") as output:
                 for block in blocks():
                     output.write(block * gain)
             header = sf.info(temporary)
@@ -142,6 +141,7 @@ def merge_session(session: Path, metadata: dict, block_frames: int = SAMPLE_RATE
             info = destination.stat()
             result = {"complete": True, "fingerprint": fingerprint, "path": destination.name,
                       "sample_rate": SAMPLE_RATE, "channels": CHANNELS, "subtype": "PCM_16",
+                      "container": "RF64",
                       "frames": frames, "duration_seconds": frames / SAMPLE_RATE,
                       "gain": gain, "mixed_peak_before_gain": peak,
                       "output_size": info.st_size, "output_mtime_ns": info.st_mtime_ns,

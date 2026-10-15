@@ -59,7 +59,7 @@ def eligible_session(session: Path, config: dict, home: Path = HOME,
             raise ValueError(f"Legacy source recording is missing: {source}")
         info = sf.info(audio)
         if (info.frames <= 0 or not 8000 <= info.samplerate <= 192000 or info.channels not in (1, 2)
-                or info.format not in {"WAV", "WAVEX"}
+                or info.format not in {"WAV", "WAVEX", "RF64"}
                 or info.subtype not in {"FLOAT", "DOUBLE", "PCM_16", "PCM_24", "PCM_32"}):
             raise ValueError(f"Legacy source WAV header is invalid: {source}")
         offset = float(metadata.get("capture_offsets_ms", {}).get(source, 0)) / 1000

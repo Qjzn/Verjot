@@ -145,6 +145,54 @@ class MergeTests(unittest.TestCase):
             self.merge()
         self.assertFalse((self.session / "meeting.wav").exists())
 
+    def test_segment_boundaries_and_pause_offsets_match_unsegmented_sample_for_sample(self):
+        import copy
+        from merge_audio import merge_session
+        for rate in (44100, 48000):
+            with self.subTest(rate=rate):
+                random = np.random.default_rng(rate)
+                voice = random.normal(0, .06, (rate + 731, 2)).astype(np.float32)
+                voice[rate // 3:rate // 2] = 0  # Muted interval straddles multiple segment cuts.
+                media = random.normal(0, .04, (48000 + 987, 2)).astype(np.float32)
+                self.write("mic", voice, rate)
+                self.write("system", media, 48000)
+                metadata = {"duration_seconds": 1.2, "capture_offsets_ms": {"mic": 13, "system": 27}}
+                merge_session(self.session, metadata, block_frames=997)
+                expected = self.output()[0]
+                rows = []
+                for source, samples, sample_rate in (("mic", voice, rate), ("system", media, 48000)):
+                    row = {"source": source, "path": source + ".wav",
+                           "kind": "microphone" if source == "mic" else "loopback",
+                           "sample_rate": sample_rate, "channels": 2, "bits_per_sample": 32,
+                           "segments": []}
+                    boundaries = [0, 1, sample_rate // 3 - 1, sample_rate // 3 + 1,
+                                  sample_rate // 2, len(samples) - 1, len(samples)]
+                    for index, (first, last) in enumerate(zip(boundaries, boundaries[1:]), 1):
+                        path = f"{source}.seg{index:06d}.wav"
+                        sf.write(self.session / path, samples[first:last], sample_rate, subtype="FLOAT")
+                        row["segments"].append({"path": path, "start_frame": first, "frames": last - first})
+                    (self.session / row["path"]).unlink()
+                    rows.append(row)
+                metadata = {**copy.deepcopy(metadata), "sources": rows}
+                result = merge_session(self.session, metadata, block_frames=2017)
+                np.testing.assert_array_equal(self.output()[0], expected)
+                self.assertEqual(result["container"], "RF64")
+                self.assertEqual((self.session / "meeting.wav").read_bytes()[:4], b"RF64")
+                self.assertTrue(merge_session(self.session, metadata)["reused"])
+
+    def test_a_changed_segment_invalidates_the_cached_mix(self):
+        from merge_audio import merge_session
+        path = self.session / "mic.seg000001.wav"
+        sf.write(path, np.full(4800, .1), 48000, subtype="FLOAT")
+        metadata = {"sources": [{"source": "mic", "path": "mic.wav", "kind": "microphone",
+                                "sample_rate": 48000, "channels": 1, "bits_per_sample": 32,
+                                "segments": [{"path": path.name, "start_frame": 0, "frames": 4800}]}]}
+        first = merge_session(self.session, metadata)
+        sf.write(path, np.full(4800, .2), 48000, subtype="FLOAT")
+        second = merge_session(self.session, metadata)
+        self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+        self.assertFalse(second["reused"])
+
 
 if __name__ == "__main__":
     unittest.main()

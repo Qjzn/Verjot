@@ -678,7 +678,7 @@ class MinimalStorageTests(unittest.TestCase):
         audio = self.output / "meeting.wav"
         before_source = (self.session / "mic.wav").read_bytes()
         original_size = audio.stat().st_size
-        sf.write(audio, np.full((4800, 2), .7), 48000, subtype="PCM_16")
+        sf.write(audio, np.full((4800, 2), .7), 48000, subtype="PCM_16", format=sf.info(audio).format)
         replaced = audio.read_bytes()
         self.assertEqual(audio.stat().st_size, original_size)
         with patch.object(worker, "run_stage", side_effect=AssertionError("must not load a model")):
@@ -811,6 +811,234 @@ class MinimalStorageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             worker.compact_session(self.session, self.config, self.metadata, state)
         self.assertEqual((self.session / "mic.wav").read_bytes(), original_audio)
+
+    def test_cleanup_cannot_enroll_unowned_source_after_artifact_validation(self):
+        with patch.object(worker, "finish_compaction"):
+            self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        unowned = self.session / "mic_02.wav"
+        unowned.write_bytes(b"customer file which was never captured")
+        original = (self.session / "mic.wav").read_bytes()
+        verify = worker.verified_artifacts
+
+        def swap_metadata(*args, **kwargs):
+            result = verify(*args, **kwargs)
+            changed = {**self.metadata, "sources": [
+                {"source": key, "path": f"{key}.wav", "kind": kind}
+                for key, kind in (("mic", "microphone"), ("system", "loopback"), ("mic_02", "microphone"))]}
+            worker.atomic_json(self.session / "session.json", changed)
+            return result
+
+        with patch.object(worker, "verified_artifacts", swap_metadata), self.assertRaises(ValueError):
+            worker.compact_session(self.session, self.config, self.metadata, state)
+        self.assertEqual(unowned.read_bytes(), b"customer file which was never captured")
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        self.assertTrue((self.session / "result.json").is_file())
+
+    def test_cleanup_rejects_atomic_metadata_replacement_even_with_same_contents(self):
+        with patch.object(worker, "finish_compaction"):
+            self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        original = (self.session / "mic.wav").read_bytes()
+        candidates = worker.cleanup_candidates
+
+        def replace_identity(*args, **kwargs):
+            result = candidates(*args, **kwargs)
+            path = self.session / "session.json"
+            temporary = self.session / "replacement.json"
+            temporary.write_bytes(path.read_bytes())
+            worker.os.replace(temporary, path)
+            return result
+
+        with patch.object(worker, "cleanup_candidates", replace_identity), self.assertRaises(ValueError):
+            worker.compact_session(self.session, self.config, self.metadata, state)
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        self.assertTrue((self.session / "result.json").is_file())
+
+    def test_cleanup_stops_if_metadata_changes_after_first_cache_delete(self):
+        with patch.object(worker, "finish_compaction"):
+            self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        original = (self.session / "mic.wav").read_bytes()
+        unlink = Path.unlink
+        removed = []
+
+        def change_after_delete(path, *args, **kwargs):
+            existed = path.exists()
+            unlink(path, *args, **kwargs)
+            if not existed:
+                return
+            removed.append(path.name)
+            if len(removed) == 1:
+                worker.atomic_json(self.session / "session.json", {**self.metadata, "title": "external edit"})
+
+        with patch.object(Path, "unlink", change_after_delete), self.assertRaises(ValueError):
+            worker.compact_session(self.session, self.config, self.metadata, state)
+        self.assertEqual(len(removed), 1)
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        self.assertTrue((self.session / "result.json").is_file())
+
+
+class Mp3PublicationTests(unittest.TestCase):
+    stage = MinimalStorageTests.stage
+    process = MinimalStorageTests.process
+
+    def setUp(self):
+        MinimalStorageTests.setUp(self)
+        self.metadata.update(audio_format="mp3", mp3_bitrate_kbps=192)
+        worker.atomic_json(self.session / "session.json", self.metadata)
+
+    def test_mp3_is_only_public_audio_and_asr_still_receives_lossless_sources(self):
+        stages = []
+
+        def stage(session, command, name):
+            if name == "prepare":
+                self.assertTrue((session / "mic.wav").is_file())
+                self.assertTrue((session / "system.wav").is_file())
+                self.assertTrue((session / "meeting.wav").is_file())
+                self.assertNotIn(".mp3", " ".join(command))
+            stages.append(name)
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(stage), 0)
+        self.assertEqual(stages, ["prepare", "asr"])
+        state = worker.read_json(self.session / "status.json")
+        self.assertTrue(state["artifacts_compacted"])
+        self.assertEqual(state["merged_audio"]["format"], "mp3")
+        self.assertEqual(state["merged_audio"]["bitrate_kbps"], 192)
+        self.assertEqual(state["merged_audio"]["decoded_frames"], 4800)
+        self.assertEqual(sorted(path.suffix for path in self.vault.rglob("*") if path.is_file()),
+                         [".md", ".mp3"])
+        note = Path(state["note_path"]).read_text(encoding="utf-8")
+        self.assertIn("meeting.mp3", note)
+        self.assertNotIn("meeting.wav", note)
+        self.assertEqual(sorted(path.name for path in self.session.iterdir()),
+                         ["session.json", "status.json"])
+        self.assertEqual(self.process(), 0)
+
+    def test_encoder_failure_keeps_lossless_and_transcription_checkpoint(self):
+        with patch.object(worker, "encode_mp3", side_effect=RuntimeError("fixture MP3 failure")):
+            self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        self.assertTrue(state["merge_error"])
+        self.assertFalse(state["artifacts_compacted"])
+        for name in ("mic.wav", "system.wav", "meeting.wav", "result.json", "segments.json"):
+            self.assertTrue((self.session / name).is_file(), name)
+        self.assertFalse((self.output / "meeting.mp3").exists())
+        self.assertEqual(list(self.output.glob(".meeting-*")), [])
+
+    def test_unowned_mp3_is_never_overwritten_or_used_to_delete_raw_audio(self):
+        self.output.mkdir(parents=True)
+        output = self.output / "meeting.mp3"
+        output.write_bytes(b"customer recording")
+        self.assertEqual(self.process(), 0)
+        self.assertEqual(output.read_bytes(), b"customer recording")
+        self.assertTrue((self.session / "mic.wav").is_file())
+        self.assertFalse(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+
+    def test_failed_asr_retry_uses_owned_mp3_and_changed_mp3_blocks_compaction(self):
+        def fail_asr(session, command, name):
+            if name == "asr":
+                raise RuntimeError("fixture interrupted ASR")
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(fail_asr), 1)
+        output = self.output / "meeting.mp3"
+        state = worker.read_json(self.session / "status.json")
+        self.assertEqual(state["published_audio"]["sha256"], worker.file_sha256(output))
+        original = output.read_bytes()
+        output.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        self.assertEqual(self.process(), 0)
+        self.assertTrue((self.session / "mic.wav").is_file())
+        self.assertFalse(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+
+    def test_capture_failure_preserves_mp3_and_lossless_for_review(self):
+        self.metadata["capture_error"] = "fixture endpoint loss"
+        worker.atomic_json(self.session / "session.json", self.metadata)
+        self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        self.assertTrue(state["capture_needs_review"])
+        self.assertFalse(state["artifacts_compacted"])
+        self.assertTrue((self.output / "meeting.mp3").is_file())
+        self.assertTrue((self.session / "mic.wav").is_file())
+        self.assertTrue((self.session / "meeting.wav").is_file())
+
+    def test_damaged_published_mp3_blocks_cleanup_and_can_resume_after_restore(self):
+        with patch.object(worker, "finish_compaction"):
+            self.assertEqual(self.process(), 0)
+        output = self.output / "meeting.mp3"
+        original = output.read_bytes()
+        output.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        with patch.object(worker, "run_stage", side_effect=AssertionError("must not reload model")):
+            self.assertEqual(worker.process_session(self.session), 1)
+        self.assertTrue((self.session / "mic.wav").is_file())
+        self.assertTrue((self.session / "result.json").is_file())
+        output.write_bytes(original)
+        with patch.object(worker, "run_stage", side_effect=AssertionError("must not reload model")):
+            self.assertEqual(worker.process_session(self.session), 0)
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+
+    def test_rf64_changed_during_encoding_preserves_all_recovery_audio(self):
+        original_encoder = worker.encode_mp3
+
+        def changed_lossless(source, output, **options):
+            details = original_encoder(source, output, **options)
+            data = bytearray(source.read_bytes())
+            data[-1] ^= 1
+            source.write_bytes(data)
+            return details
+
+        with patch.object(worker, "encode_mp3", changed_lossless):
+            self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        self.assertIn("发生变化", state["merge_error"])
+        self.assertFalse(state["artifacts_compacted"])
+        self.assertTrue((self.session / "mic.wav").is_file())
+        self.assertTrue((self.session / "meeting.wav").is_file())
+        self.assertFalse((self.output / "meeting.mp3").exists())
+
+    def test_segmented_capture_is_lossless_for_prepare_and_all_owned_parts_are_cleaned(self):
+        sources, originals = [], {}
+        for key, boundaries in (("mic", (0, 1701, 4800)), ("system", (0, 899, 2666, 4800))):
+            kind = "microphone" if key == "mic" else "loopback"
+            signal = sf.read(self.session / f"{key}.wav", dtype="float32", always_2d=True)[0]
+            (self.session / f"{key}.wav").unlink()
+            parts = []
+            for index, (begin, end) in enumerate(zip(boundaries, boundaries[1:]), 1):
+                name = f"{key}.seg{index:06d}.wav"
+                sf.write(self.session / name, signal[begin:end], 48000, subtype="FLOAT")
+                parts.append({"path": name, "start_frame": begin, "frames": end - begin})
+                originals[name] = (self.session / name).read_bytes()
+            sources.append({"source": key, "path": f"{key}.wav", "kind": kind,
+                            "sample_rate": 48000, "channels": signal.shape[1],
+                            "bits_per_sample": 32, "segments": parts})
+        self.metadata["sources"] = sources
+        worker.atomic_json(self.session / "session.json", self.metadata)
+        before = worker.input_fingerprint(self.session)
+        changed = self.session / sources[1]["segments"][-1]["path"]
+        changed.write_bytes(changed.read_bytes() + b"test fingerprint")
+        self.assertNotEqual(before, worker.input_fingerprint(self.session))
+        changed.write_bytes(originals[changed.name])
+        (self.session / "system.seg999999.wav").write_bytes(b"unregistered user file")
+
+        def stage(session, command, name):
+            if name == "prepare":
+                for filename, data in originals.items():
+                    self.assertEqual((session / filename).read_bytes(), data)
+                self.assertFalse((session / "mic.wav").exists())
+                self.assertFalse((session / "system.wav").exists())
+                from audio_sources import open_source
+                with open_source(session, sources[0]) as audio:
+                    decoded = audio.read(dtype="float32")
+                np.testing.assert_array_equal(decoded, np.full(4800, .2, dtype="float32"))
+            self.stage(session, command, name)
+
+        self.assertEqual(self.process(stage), 0)
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+        for filename in originals:
+            self.assertFalse((self.session / filename).exists())
+        self.assertTrue((self.session / "system.seg999999.wav").is_file())
+        self.assertTrue((self.output / "meeting.mp3").is_file())
 
 
 if __name__ == "__main__":

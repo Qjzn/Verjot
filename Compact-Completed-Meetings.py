@@ -189,7 +189,7 @@ def validate_audio(audio: Path, session: Path, metadata: dict, status: dict) -> 
         raise ValueError("Combined recording is missing")
     info = sf.info(audio)
     if (info.frames <= 0 or info.samplerate != 48000 or info.channels != 2
-            or info.subtype != "PCM_16" or info.format not in {"WAV", "WAVEX"}):
+            or info.subtype != "PCM_16" or info.format not in {"WAV", "WAVEX", "RF64"}):
         raise ValueError("Combined recording has an invalid WAV header")
     merged = status.get("merged_audio")
     if not isinstance(merged, dict) or not merged.get("complete"):

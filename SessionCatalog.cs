@@ -172,7 +172,7 @@ internal sealed class SessionCatalog {
                     }
                 }
             }
-            record.AudioPath = ArtifactPath(audio, session, ".wav");
+            record.AudioPath = ArtifactPath(audio, session, ".wav", ".mp3");
             bool declaredArtifacts = record.NotePath.Length != 0 && record.AudioPath.Length != 0;
             bool noteExists = File.Exists(record.NotePath), audioExists = File.Exists(record.AudioPath);
             bool verifiedStatus = Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
@@ -200,6 +200,14 @@ internal sealed class SessionCatalog {
             else if (record.Message.Length == 0) record.Message = "录音和转录笔记已保存";
             if (hasArtifacts && Text(status, "cleanup_error", "").Length != 0)
                 record.Message += "；临时资料清理未完成，已保留";
+            if (!captureNeedsReview && noteExists && !audioExists &&
+                    string.Equals(Text(status, "result_complete", ""), "true", StringComparison.OrdinalIgnoreCase) &&
+                    Text(status, "artifact_error", "").Length == 0 && Text(status, "merge_error", "").Length != 0 &&
+                    HasOriginalAudio(session, metadata)) {
+                record.State = "failed";
+                record.CanRetry = true;
+                record.Message = "转录已保存，录音生成失败；可重试生成成品";
+            }
         } else if (fresh && (statusState == "failed" || statusState == "error")) {
             record.State = "failed";
             record.CanRetry = true;
@@ -234,6 +242,7 @@ internal sealed class SessionCatalog {
         if (state == "error" || state == "failed") return "转写失败";
         string stage = Text(status, "stage", "");
         if (stage == "merge") return "合并录音";
+        if (stage == "encode") return "压缩录音";
         if (stage == "prepare" || stage == "speakers" || stage == "diarization") return "分析说话人";
         if (stage == "asr") {
             int done, total;
@@ -245,12 +254,14 @@ internal sealed class SessionCatalog {
         return "录音已保存 · 处理中";
     }
 
-    string ArtifactPath(string path, string session, string extension) {
+    string ArtifactPath(string path, string session, params string[] extensions) {
         if (string.IsNullOrWhiteSpace(path)) return "";
         if (!Path.IsPathRooted(path)) throw new IOException("会议成品路径必须为完整路径");
         path = Path.GetFullPath(path);
-        if (!string.Equals(Path.GetExtension(path), extension, StringComparison.OrdinalIgnoreCase))
-            throw new IOException("会议成品文件类型错误");
+        bool allowed = false;
+        foreach (string extension in extensions)
+            if (string.Equals(Path.GetExtension(path), extension, StringComparison.OrdinalIgnoreCase)) allowed = true;
+        if (!allowed) throw new IOException("会议成品文件类型错误");
         // A configured vault may include work, but another meeting's private files
         // must still never be treated as this meeting's output.
         if (Within(path, work) && !Within(path, session)) throw new IOException("会议成品指向其他会议资料");
@@ -285,10 +296,24 @@ internal sealed class SessionCatalog {
                 string kind = name == "mic" || name.StartsWith("mic_", StringComparison.Ordinal) ? "microphone" : "loopback";
                 if (Text(source, "kind", "") != kind || Text(source, "path", "") != name + ".wav")
                     throw new IOException("会议录音来源类型或路径无效");
-                string path = Path.Combine(session, name + ".wav");
-                CheckOrdinary(path);
-                if (Directory.Exists(path)) throw new IOException("会议录音来源不能为目录");
-                if (!File.Exists(path)) complete = false;
+                object declaredSegments;
+                if (source.TryGetValue("segments", out declaredSegments)) {
+                    var segments = declaredSegments as System.Collections.IList;
+                    if (segments == null || segments.Count == 0) throw new IOException("会议无损分段清单无效");
+                    long nextFrame = 0;
+                    for (int index = 0; index < segments.Count; index++) {
+                        var segment = segments[index] as Dictionary<string, object>;
+                        object first, count;
+                        string expected = name + ".seg" + (index + 1).ToString("D6", CultureInfo.InvariantCulture) + ".wav";
+                        if (segment == null || Text(segment, "path", "") != expected ||
+                            !segment.TryGetValue("start_frame", out first) || !(first is int || first is long) ||
+                            !segment.TryGetValue("frames", out count) || !(count is int || count is long) ||
+                            Convert.ToInt64(first) != nextFrame || Convert.ToInt64(count) < 0)
+                            throw new IOException("会议无损分段路径或连续帧坐标无效");
+                        nextFrame = checked(nextFrame + Convert.ToInt64(count));
+                        complete = OriginalExists(session, expected) && complete;
+                    }
+                } else complete = OriginalExists(session, name + ".wav") && complete;
             }
             return complete;
         }
@@ -301,6 +326,13 @@ internal sealed class SessionCatalog {
         return found;
     }
 
+    static bool OriginalExists(string session, string filename) {
+        string path = Path.Combine(session, filename);
+        CheckOrdinary(path);
+        if (Directory.Exists(path)) throw new IOException("会议录音来源不能为目录");
+        return File.Exists(path);
+    }
+
     Dictionary<string, object> ReadLegacy() {
         try {
             var legacy = ReadJson(Path.Combine(home, "last-session.json"), true);
@@ -311,8 +343,8 @@ internal sealed class SessionCatalog {
     }
 
     Dictionary<string, object> ReadJson(string path, bool optional) {
-        CheckOrdinary(path);
         bool observed = File.Exists(path);
+        var retryClock = Stopwatch.StartNew();
         string snapshot;
         for (int attempt = 0; ; attempt++) {
             try {
@@ -321,11 +353,25 @@ internal sealed class SessionCatalog {
                 using (var reader = new StreamReader(stream, Encoding.UTF8)) snapshot = reader.ReadToEnd();
                 break;
             } catch (IOException error) {
-                if (attempt >= 3) {
+                int code = error.HResult & 0xffff;
+                bool sharing = code == 32 || code == 33;
+                if (sharing) observed = true;
+                bool replacing = observed && (error is FileNotFoundException || error is DirectoryNotFoundException);
+                // Keep an atomic-replace sharing conflict recoverable beyond
+                // three scheduler ticks, including an already-observed path
+                // briefly disappearing. Permanent conflicts still fail.
+                if (attempt >= 3 && ((!sharing && !replacing) || retryClock.ElapsedMilliseconds >= 200)) {
                     if (optional && !observed && (error is FileNotFoundException || error is DirectoryNotFoundException))
                         return new Dictionary<string, object>();
                     throw;
                 }
+                System.Threading.Thread.Sleep(10);
+            } catch (UnauthorizedAccessException error) {
+                // Include CheckOrdinary's attribute read in the bounded retry:
+                // a delete-pending Windows file can deny both attributes/open.
+                // Permanent permission failures still throw their original type.
+                if ((error.HResult & 0xffff) != 5 || attempt >= 3) throw;
+                observed = true;
                 System.Threading.Thread.Sleep(10);
             }
         }

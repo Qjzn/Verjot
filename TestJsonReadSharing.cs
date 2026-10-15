@@ -3,9 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
+using Microsoft.Win32.SafeHandles;
 
 // Real production JSON entry points, isolated files only. No COM, capture or UI.
 internal static class TestJsonReadSharing {
@@ -15,6 +19,10 @@ internal static class TestJsonReadSharing {
     static readonly List<object> results = new List<object>();
     static readonly MethodInfo catalogRead = typeof(SessionCatalog).GetMethod("ReadJson", BindingFlags.Instance | BindingFlags.NonPublic);
     static readonly MethodInfo catalogWrite = typeof(SessionCatalog).GetMethod("WriteJson", BindingFlags.Instance | BindingFlags.NonPublic);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetFileInformationByHandle(SafeFileHandle file, int kind, ref byte data, uint size);
     static void Check(bool condition, string message) { assertions++; if (!condition) throw new Exception(message); }
     static Dictionary<string, object> Snapshot(int revision) {
         return new Dictionary<string, object> { { "revision", revision }, { "payload", new string('x', 2048) }, { "tail", revision } };
@@ -108,6 +116,78 @@ internal static class TestJsonReadSharing {
         Check(readErrors == 0 && writeErrors == 0 && invalidSnapshots == 0,
             label + ": atomic replacement must produce complete snapshots without read/write errors or empty states; got " + firstError + " empty=" + invalidSnapshots);
     }
+    static void LongerTransientSharingLock(string label, Func<string, Dictionary<string, object>> read) {
+        string path = Path.Combine(root, label + "-longer-sharing-lock.json");
+        File.WriteAllText(path, "{\"revision\":85,\"tail\":85}", Utf8);
+        var locked = new ManualResetEvent(false);
+        var locker = new Thread(delegate() {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) {
+                locked.Set(); Thread.Sleep(85);
+            }
+        });
+        locker.Start(); locked.WaitOne();
+        Dictionary<string, object> value = null; Exception failure = null; var watch = Stopwatch.StartNew();
+        try { value = read(path); } catch (Exception error) { failure = error; }
+        finally { locker.Join(); locked.Dispose(); }
+        watch.Stop();
+        Check(failure == null && value != null && Convert.ToInt32(value["revision"]) == 85 && Convert.ToInt32(value["tail"]) == 85,
+            label + ": an 85 ms real sharing violation must recover a complete snapshot within the bounded retry budget; got " + failure);
+        Check(watch.ElapsedMilliseconds < 500, label + ": transient sharing-lock recovery stays bounded");
+        results.Add(new { kind = "longer_sharing_lock", source = label, held_ms = 85, elapsed_ms = watch.ElapsedMilliseconds });
+    }
+    static void ExistingPathTemporarilyMissing(string label, Func<string, Dictionary<string, object>> read) {
+        string path = Path.Combine(root, label + "-replace-missing.json"), held = path + ".held";
+        File.WriteAllText(path, "{\"revision\":145,\"tail\":145}", Utf8);
+        var locked = new ManualResetEvent(false);
+        var replacer = new Thread(delegate() {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Delete)) {
+                locked.Set(); Thread.Sleep(60); // Reader observes the existing, locked path first.
+                File.Move(path, held); Thread.Sleep(85); File.Move(held, path);
+            }
+        });
+        replacer.Start(); locked.WaitOne();
+        Dictionary<string, object> value = null; Exception failure = null; var watch = Stopwatch.StartNew();
+        try { value = read(path); } catch (Exception error) { failure = error; }
+        finally { replacer.Join(); locked.Dispose(); }
+        watch.Stop();
+        Check(failure == null && value != null && Convert.ToInt32(value["revision"]) == 145 && Convert.ToInt32(value["tail"]) == 145,
+            label + ": a previously observed path temporarily missing during replacement must recover a complete snapshot; got " + failure);
+        Check(watch.ElapsedMilliseconds < 500, label + ": replacement path recovery stays bounded");
+        results.Add(new { kind = "existing_path_temporarily_missing", source = label, missing_ms = 85, elapsed_ms = watch.ElapsedMilliseconds });
+    }
+    static void DeletePending(string label, Func<string, Dictionary<string, object>> read) {
+        string path = Path.Combine(root, label + "-delete-pending.json"); File.WriteAllText(path, "{\"revision\":1}", Utf8);
+        Check(File.Exists(path), label + ": delete-pending fixture starts as a known existing file");
+        using (var owner = CreateFile(path, 0xC0010000, 4, IntPtr.Zero, 3, 0, IntPtr.Zero)) {
+            Check(!owner.IsInvalid, label + ": isolated delete-pending owner opens");
+            byte pending = 1;
+            Check(SetFileInformationByHandle(owner, 4, ref pending, 1), label + ": native delete-pending state is established");
+            var closer = new Thread(delegate() { Thread.Sleep(20); owner.Close(); });
+            closer.Start(); Exception failure = null; var watch = Stopwatch.StartNew();
+            try { read(path); } catch (Exception error) { failure = error; }
+            finally { closer.Join(); }
+            watch.Stop();
+            Check(failure is IOException && watch.ElapsedMilliseconds < 500,
+                label + ": ERROR_ACCESS_DENIED during deletion must resolve to bounded missing-file IOException, not empty metadata; got " + failure);
+        }
+    }
+    static void PersistentPermissionDenied(string label, Func<string, Dictionary<string, object>> read) {
+        string path = Path.Combine(root, label + "-permission-denied.json"); File.WriteAllText(path, "{\"revision\":1}", Utf8);
+        FileSecurity original = File.GetAccessControl(path);
+        FileSecurity denied = File.GetAccessControl(path);
+        denied.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User, FileSystemRights.ReadData, AccessControlType.Deny));
+        File.SetAccessControl(path, denied);
+        Exception failure = null; var watch = Stopwatch.StartNew();
+        try { read(path); } catch (Exception error) { failure = error; }
+        finally {
+            original.SetSecurityDescriptorBinaryForm(original.GetSecurityDescriptorBinaryForm(), AccessControlSections.Access);
+            File.SetAccessControl(path, original);
+        }
+        watch.Stop();
+        Check(failure is UnauthorizedAccessException && watch.ElapsedMilliseconds < 500,
+            label + ": real permanent read denial remains a bounded explicit UnauthorizedAccessException; got " + failure);
+        Check(read(path).ContainsKey("revision"), label + ": original fixture permissions are restored");
+    }
     public static int Main(string[] args) {
         try {
             root = Path.Combine(Path.GetFullPath(args[0]), "json-read-sharing-" + Guid.NewGuid().ToString("N"));
@@ -119,6 +199,10 @@ internal static class TestJsonReadSharing {
             Action<string, Dictionary<string, object>> catalogWriter = delegate(string path, Dictionary<string, object> value) { CatalogWrite(catalog, path, value); };
             Contract("MeetingFiles", meetingReader, meetingWriter);
             Contract("SessionCatalog", catalogReader, catalogWriter);
+            DeletePending("MeetingFiles", meetingReader); DeletePending("SessionCatalog", catalogReader);
+            PersistentPermissionDenied("MeetingFiles", meetingReader); PersistentPermissionDenied("SessionCatalog", catalogReader);
+            LongerTransientSharingLock("MeetingFiles", meetingReader); LongerTransientSharingLock("SessionCatalog", catalogReader);
+            ExistingPathTemporarilyMissing("MeetingFiles", meetingReader); ExistingPathTemporarilyMissing("SessionCatalog", catalogReader);
             bool requiredMissingFailed = false;
             try { CatalogRead(catalog, Path.Combine(root, "required-missing.json"), false); }
             catch (FileNotFoundException) { requiredMissingFailed = true; }

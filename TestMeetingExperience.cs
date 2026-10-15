@@ -46,9 +46,22 @@ internal static class TestMeetingExperience {
         // before reopening, otherwise they can close the next synthetic menu.
         menu.Close();
         Application.DoEvents();
-        menu.Show(new Point(20, 20));
-        Application.DoEvents();
-        Check(menu.Visible && recent.HasDropDownItems, "The actual tray menu must expose recent meetings");
+        bool focusDismissed = false;
+        ToolStripDropDownClosedEventHandler closed = delegate(object sender, ToolStripDropDownClosedEventArgs error) {
+            if (error.CloseReason == ToolStripDropDownCloseReason.AppFocusChange) focusDismissed = true;
+        };
+        menu.Closed += closed;
+        try {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                menu.Show(new Point(20, 20));
+                Application.DoEvents();
+                if (menu.Visible || !recent.HasDropDownItems || !focusDismissed) break;
+                // Preserve native AutoClose. Only an observed foreground change
+                // gets a bounded reopen; missing items or other failures fail.
+                menu.Close(); Application.DoEvents(); Thread.Sleep(30); Application.DoEvents();
+            }
+        } finally { menu.Closed -= closed; }
+        Check(menu.Visible && recent.HasDropDownItems, "The actual tray menu must expose recent meetings: " + title + "; visible=" + menu.Visible + "; recent=" + recent.DropDownItems.Count);
         recent.ShowDropDown();
         Application.DoEvents();
         Check(recent.DropDown.Visible, "Recent meetings must expand through the native menu: " + title);

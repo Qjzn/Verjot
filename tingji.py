@@ -17,7 +17,8 @@ import uuid
 from tingji_config import load_config, ordinary_path
 
 HOME = Path(__file__).resolve().parent
-COMMON_PACKAGES = {"numpy": "numpy", "scipy": "scipy", "soundfile": "soundfile", "sherpa-onnx": "sherpa_onnx"}
+COMMON_PACKAGES = {"numpy": "numpy", "scipy": "scipy", "soundfile": "soundfile", "sherpa-onnx": "sherpa_onnx",
+                   "imageio-ffmpeg": "imageio_ffmpeg"}
 LOCAL_PACKAGES = {"torch": "torch", "transformers": "transformers", "accelerate": "accelerate", "jinja2": "jinja2"}
 
 
@@ -52,6 +53,18 @@ def doctor(full=False):
             add("package:" + package, True, version + ("，导入成功" if full else "，已安装"))
         except Exception:
             add("package:" + package, False, "未安装或导入失败；请按当前模式运行 Install.ps1，不要改全局 Python")
+    if full:
+        try:
+            from mp3_audio import encoder_path
+            executable = encoder_path()
+            probe = subprocess.run([str(executable), "-hide_banner", "-encoders"],
+                                   capture_output=True, text=True, timeout=15,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            add("mp3_encoder", probe.returncode == 0 and "libmp3lame" in probe.stdout,
+                "本地 MP3 编码器可用，不上传音频" if probe.returncode == 0 and "libmp3lame" in probe.stdout
+                else "MP3 编码器不可用；请按当前模式运行 Install.ps1")
+        except Exception:
+            add("mp3_encoder", False, "MP3 编码器缺失或无法执行；请按当前模式运行 Install.ps1")
     if full and mode == "local":
         try:
             import torch
@@ -63,7 +76,7 @@ def doctor(full=False):
             add("asr_runtime", True, detail)
         except Exception:
             add("asr_runtime", False, "本地模型接口导入失败，请恢复 requirements.txt 中的运行库版本")
-    for name in ("ObsidianMeeting.exe", "NAudio.dll", "meeting_worker.py", "prepare_audio.py", "merge_audio.py", "audio_sources.py",
+    for name in ("ObsidianMeeting.exe", "NAudio.dll", "meeting_worker.py", "prepare_audio.py", "merge_audio.py", "audio_sources.py", "mp3_audio.py",
                  "api_asr.py" if mode == "api" else "asr_engine.py"):
         add("file:" + name, (HOME / name).is_file(), "已就绪" if (HOME / name).is_file() else "文件缺失，请运行安装/构建脚本")
     models = HOME / "models"

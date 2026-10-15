@@ -3,5 +3,6 @@ sherpa-onnx==1.13.8
 numpy==2.5.4
 scipy==1.18.1
 soundfile==0.14.0
+imageio-ffmpeg==0.6.0
 # Used only by download_models.py to fetch official speaker models.
 requests>=2.32.0

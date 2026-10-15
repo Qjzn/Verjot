@@ -15,7 +15,7 @@ from typing import Callable
 
 import numpy as np
 
-from audio_sources import capture_sources, source_kind
+from audio_sources import capture_sources, source_kind, open_source
 
 
 SAMPLE_RATE = 16000
@@ -45,30 +45,59 @@ def _channel_rms(samples: np.ndarray) -> np.ndarray:
     return np.sqrt(energy / len(samples)) if len(samples) else energy
 
 
-def read_audio(path: Path) -> tuple[np.ndarray, dict]:
+def _read_segmented_mono(path: Path, entry: dict) -> tuple[np.ndarray, int, int]:
+    """Downmix in bounded blocks; resampling/DC removal run once per source."""
+    with open_source(path.parent, entry) as audio:
+        channels, rate = audio.channels, audio.samplerate
+        mono = np.empty(audio.frames, dtype=np.float32)
+        energy = np.zeros(channels, dtype=np.float64)
+        for first in range(0, audio.frames, 65536):
+            block = audio.read(min(65536, audio.frames - first), dtype="float32", always_2d=True)
+            values = np.asarray(block, dtype=np.float64)
+            if not np.isfinite(values).all():
+                raise ValueError(f"Non-finite audio samples: {path}")
+            energy += np.einsum("ij,ij->j", values, values)
+            mono[first:first + len(block)] = block.mean(axis=1)
+        channel_rms = np.sqrt(energy / audio.frames) if audio.frames else energy
+        if audio.frames and _channel_rms(mono)[0] < channel_rms.max() * 0.25:
+            audio.seek(0)
+            strongest = int(channel_rms.argmax())
+            for first in range(0, audio.frames, 65536):
+                block = audio.read(min(65536, audio.frames - first), dtype="float32", always_2d=True)
+                mono[first:first + len(block)] = block[:, strongest]
+    return mono, rate, channels
+
+
+def read_audio(path: Path, entry: dict | None = None) -> tuple[np.ndarray, dict]:
     """Read/resample without denoising or mixing separate recording sources."""
     import soundfile as sf
     from scipy.signal import resample_poly
 
-    samples, rate = sf.read(path, dtype="float32", always_2d=True)
-    if samples.size == 0:
-        return np.empty(0, dtype=np.float32), {"sample_rate": rate, "channels": samples.shape[1]}
-    try:
-        channel_rms = _channel_rms(samples)
-    except ValueError:
-        raise ValueError(f"Non-finite audio samples: {path}") from None
-    mono = samples.mean(axis=1)
-    # Stereo averaging can cancel opposite-polarity channels. Use the strongest
-    # channel in that case, instead of silently producing a near-empty recording.
-    if _channel_rms(mono)[0] < channel_rms.max() * 0.25:
-        mono = samples[:, int(channel_rms.argmax())]
+    if entry is not None and "segments" in entry:
+        mono, rate, channels = _read_segmented_mono(path, entry)
+    else:
+        samples, rate = sf.read(path, dtype="float32", always_2d=True)
+        channels = samples.shape[1]
+        if samples.size:
+            try:
+                channel_rms = _channel_rms(samples)
+            except ValueError:
+                raise ValueError(f"Non-finite audio samples: {path}") from None
+            mono = samples.mean(axis=1)
+            # Keep opposite-polarity stereo from silently cancelling speech.
+            if _channel_rms(mono)[0] < channel_rms.max() * 0.25:
+                mono = samples[:, int(channel_rms.argmax())]
+        else:
+            mono = np.empty(0, dtype=np.float32)
+    if not len(mono):
+        return mono, {"sample_rate": rate, "channels": channels}
     mono = mono - mono.mean()
     if rate != SAMPLE_RATE:
         divisor = math.gcd(int(rate), SAMPLE_RATE)
         mono = resample_poly(mono, SAMPLE_RATE // divisor, int(rate) // divisor)
     return np.ascontiguousarray(mono, dtype=np.float32), {
         "sample_rate": rate,
-        "channels": samples.shape[1],
+        "channels": channels,
         "duration": round(len(mono) / SAMPLE_RATE, 3),
     }
 
@@ -478,7 +507,7 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
     for entry in entries:
         source = entry["source"]
         audio_path = session_dir / entry["path"]
-        samples, info = read_audio(audio_path)
+        samples, info = read_audio(audio_path, entry=entry)
         sources[source] = samples
         info["peak_frame_rms"] = round(peak_frame_rms(samples), 6)
         summaries[source] = info

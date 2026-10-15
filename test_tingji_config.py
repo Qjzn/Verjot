@@ -7,6 +7,20 @@ from meeting_worker import audio_link
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_segmented_recording_and_mp3_defaults(self):
+        config = self.validate()
+        self.assertEqual(config["recording_segment_seconds"], 300)
+        self.assertEqual(config["mp3_bitrate_kbps"], 192)
+        self.assertEqual(self.validate(recording_segment_seconds=10)["recording_segment_seconds"], 10)
+        self.assertEqual(self.validate(mp3_bitrate_kbps=320)["mp3_bitrate_kbps"], 320)
+
+    def test_invalid_segment_limits_and_mp3_rates_rejected(self):
+        for changes in ({"recording_segment_seconds": 9}, {"recording_segment_seconds": 601},
+                        {"recording_segment_seconds": True}, {"recording_segment_seconds": "300"},
+                        {"mp3_bitrate_kbps": 193}, {"mp3_bitrate_kbps": "192"}, {"mp3_bitrate_kbps": True}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.validate(**changes)
+
     def test_multi_device_capture_defaults_and_explicit_override(self):
         self.assertEqual(self.validate()["system_capture_mode"], "all_active")
         self.assertEqual(self.validate(system_capture_mode="default")["system_capture_mode"], "default")

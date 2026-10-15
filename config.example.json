@@ -5,6 +5,8 @@
   "mic_device_id": "",
   "system_device_id": "",
   "system_capture_mode": "all_active",
+  "recording_segment_seconds": 300,
+  "mp3_bitrate_kbps": 192,
   "asr_context": "",
   "asr_denoise": "light",
   "asr_echo_filter": true,

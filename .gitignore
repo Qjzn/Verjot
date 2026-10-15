@@ -49,6 +49,9 @@
 !/test_merge_audio.py
 !/test_legacy_migration.py
 !/test_download_models.py
+!/mp3_audio.py
+!/test_mp3_audio.py
+!/TestSegmentedTimeline.cs
 
 # Reviewed artwork only. Runtime libraries are restored as documented in README.
 !/assets/

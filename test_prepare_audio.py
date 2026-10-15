@@ -12,6 +12,97 @@ import prepare_audio as preparation
 
 
 class PreparationTests(unittest.TestCase):
+    def test_segmented_asr_source_preserves_resampling_and_speech_crossing_boundaries(self):
+        import soundfile as sf
+        for rate in (44100, 48000):
+            with self.subTest(rate=rate), tempfile.TemporaryDirectory() as temporary:
+                session = Path(temporary)
+                timeline = np.arange(rate * 2 + 11) / rate
+                voice = (.03 * np.sin(2 * np.pi * 311 * timeline)).astype(np.float32)
+                samples = np.column_stack((voice, -voice))  # Preserve anti-phase fallback globally.
+                path = session / "mic.wav"
+                sf.write(path, samples, rate, subtype="FLOAT")
+                expected, expected_info = preparation.read_audio(path)
+                row = {"source": "mic", "path": path.name, "kind": "microphone",
+                       "sample_rate": rate, "channels": 2, "bits_per_sample": 32, "segments": []}
+                boundaries = [0, 1, rate // 2 - 1, rate // 2 + 1, rate + 7, len(samples)]
+                for index, (first, last) in enumerate(zip(boundaries, boundaries[1:]), 1):
+                    name = f"mic.seg{index:06d}.wav"
+                    sf.write(session / name, samples[first:last], rate, subtype="FLOAT")
+                    row["segments"].append({"path": name, "start_frame": first, "frames": last - first})
+                path.unlink()
+                actual, actual_info = preparation.read_audio(path, entry=row)
+                np.testing.assert_array_equal(actual, expected)
+                self.assertEqual(actual_info, expected_info)
+
+    def test_capture_rotation_is_one_diarizer_call_and_does_not_create_speakers(self):
+        import soundfile as sf
+        from unittest.mock import patch
+        class Turn:
+            start, end, speaker = .3, 2.7, 4
+        class Result:
+            def sort_by_start_time(self): return [Turn()]
+        class Diarizer:
+            def __init__(self): self.calls = []
+            def process(self, samples):
+                self.calls.append(samples.copy())
+                return Result()
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary)
+            samples = (.03 * np.sin(np.arange(48000 * 3) * 2 * np.pi * 347 / 48000)).astype(np.float32)
+            row = {"source": "mic", "path": "mic.wav", "kind": "microphone",
+                   "sample_rate": 48000, "channels": 1, "bits_per_sample": 32, "segments": []}
+            for index in range(3):
+                path = f"mic.seg{index + 1:06d}.wav"
+                sf.write(session / path, samples[index * 48000:(index + 1) * 48000], 48000, subtype="FLOAT")
+                row["segments"].append({"path": path, "start_frame": index * 48000, "frames": 48000})
+            (session / "session.json").write_text(json.dumps({"sources": [row],
+                "capture_offsets_ms": {"mic": 500}}), encoding="utf-8")
+            diarizer = Diarizer()
+            with patch.object(preparation, "assign_global_speakers", return_value={}):
+                rows = preparation.prepare_session(session, "unused", "unused", diarizer=diarizer)
+            self.assertEqual(len(diarizer.calls), 1)
+            self.assertEqual(len(diarizer.calls[0]), 48000)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual((rows[0]["source"], rows[0]["speaker"]), ("mic", "mic_01"))
+            self.assertEqual((rows[0]["start"], rows[0]["end"]), (.8, 3.2))
+            clip, rate = sf.read(rows[0]["text_audio"])
+            self.assertGreater(len(clip), int(2.4 * rate))
+            self.assertFalse((session / "mic.wav").exists())
+
+    def test_segmented_audio_rejects_nonfinite_samples_in_later_parts(self):
+        import soundfile as sf
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary)
+            row = {"source": "mic", "path": "mic.wav", "kind": "microphone",
+                   "sample_rate": 48000, "channels": 1, "bits_per_sample": 32, "segments": []}
+            for index, samples in enumerate((np.zeros(100), np.array([.1, np.nan])), 1):
+                name = f"mic.seg{index:06d}.wav"
+                sf.write(session / name, samples, 48000, subtype="FLOAT")
+                row["segments"].append({"path": name, "start_frame": 0 if index == 1 else 100,
+                                        "frames": len(samples)})
+            with self.assertRaisesRegex(ValueError, "Non-finite audio samples"):
+                preparation.read_audio(session / "mic.wav", entry=row)
+
+    def test_segmented_stereo_downmix_matches_whole_source_at_statistics_block_edges(self):
+        import soundfile as sf
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary)
+            samples = np.random.default_rng(813).normal(0, .03, (131079, 2)).astype(np.float32)
+            path = session / "system.wav"
+            sf.write(path, samples, 44100, subtype="FLOAT")
+            expected, _ = preparation.read_audio(path)
+            row = {"source": "system", "path": path.name, "kind": "loopback",
+                   "sample_rate": 44100, "channels": 2, "bits_per_sample": 32, "segments": []}
+            boundaries = [0, 65535, 65536, 65537, len(samples)]
+            for index, (first, last) in enumerate(zip(boundaries, boundaries[1:]), 1):
+                name = f"system.seg{index:06d}.wav"
+                sf.write(session / name, samples[first:last], 44100, subtype="FLOAT")
+                row["segments"].append({"path": name, "start_frame": first, "frames": last - first})
+            path.unlink()
+            actual, _ = preparation.read_audio(path, entry=row)
+            np.testing.assert_array_equal(actual, expected)
+
     def test_chunked_channel_rms_matches_reference_at_block_boundaries(self):
         random = np.random.default_rng(120)
         for length in (0, 1, 65535, 65536, 65537, 131079):

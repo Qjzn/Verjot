@@ -138,6 +138,40 @@ internal static class TestSessionCatalog {
         var finished = catalog.Get(completed);
         True(finished.State == "completed" && !finished.CanRetry && finished.NotePath == note && finished.AudioPath == audio,
             "completed legacy merged_audio path resolves without reading audio");
+        string mp3Meeting = Session("20261015-130000", "recorded");
+        string mp3 = Path.Combine(vault, "meeting.mp3");
+        File.WriteAllText(mp3, "MP3 existence only; catalog must not decode");
+        Write(Path.Combine(mp3Meeting, "status.json"), new { state = "completed", note_path = note, audio_path = mp3 });
+        True(catalog.Get(mp3Meeting).State == "completed" && catalog.Get(mp3Meeting).AudioPath == mp3,
+            "new MP3 result resolves without opening audio");
+        File.Delete(mp3);
+        Equal(catalog.Get(mp3Meeting).State, "transcript_only", "deleted MP3 has neutral transcript-only state");
+        Write(Path.Combine(mp3Meeting, "status.json"), new { state = "completed", note_path = note,
+            result_complete = true, merge_error = "encoder unavailable", merged_audio = (object)null });
+        True(catalog.Get(mp3Meeting).CanRetry && catalog.Get(mp3Meeting).State == "failed",
+            "complete transcript with failed MP3 encoding offers retained-lossless retry");
+        File.WriteAllText(mp3, "MP3 existence only");
+        Write(Path.Combine(mp3Meeting, "status.json"), new { state = "completed", note_path = note, audio_path = mp3 + ".exe" });
+        Equal(catalog.Get(mp3Meeting).State, "invalid", "MP3-like executable extension remains rejected");
+        string segmented = Session("20261015-130100", "recorded");
+        File.Delete(Path.Combine(segmented, "mic.wav"));
+        File.WriteAllText(Path.Combine(segmented, "mic.seg000001.wav"), "segment existence only");
+        File.WriteAllText(Path.Combine(segmented, "mic.seg000002.wav"), "segment existence only");
+        Write(Path.Combine(segmented, "session.json"), new { state = "recorded", session_dir = segmented,
+            sources = new[] { new { source = "mic", path = "mic.wav", kind = "microphone", segments = new[] {
+                new { path = "mic.seg000001.wav", start_frame = 0, frames = 10 },
+                new { path = "mic.seg000002.wav", start_frame = 10, frames = 5 } } } } });
+        True(catalog.Get(segmented).CanRetry, "all declared lossless segments permit retry without logical mic.wav");
+        File.Delete(Path.Combine(segmented, "mic.seg000002.wav"));
+        True(!catalog.Get(segmented).CanRetry, "missing declared segment cannot be silently omitted");
+        Write(Path.Combine(segmented, "session.json"), new { state = "recorded", session_dir = segmented,
+            sources = new[] { new { source = "mic", path = "mic.wav", kind = "microphone", segments = new[] {
+                new { path = "mic.seg000001.wav", start_frame = 1, frames = 10 } } } } });
+        Equal(catalog.Get(segmented).State, "invalid", "segment gaps are rejected before retry");
+        Write(Path.Combine(segmented, "session.json"), new { state = "recorded", session_dir = segmented,
+            sources = new[] { new { source = "mic", path = "mic.wav", kind = "microphone", segments = new[] {
+                new { path = "../mic.seg000001.wav", start_frame = 0, frames = 10 } } } } });
+        Equal(catalog.Get(segmented).State, "invalid", "segment path traversal is rejected");
         catalog.MarkNotified(finished);
         True(!new SessionCatalog(home, vault).Get(completed).NeedsAttention, "completed is not repeatedly announced");
         string captureWarning = Session("20261014-120010", "recorded_with_error");

@@ -111,8 +111,11 @@ class LegacyMigrationTests(unittest.TestCase):
             preparation.apply_session(plan, config, home, running=set())
             recording = session / "meeting.wav"
             size = recording.stat().st_size
-            sf.write(recording, np.full((5760, 2), -0.4), 48000, subtype="PCM_16")
+            original = recording.read_bytes()
+            sf.write(recording, np.full((5760, 2), -0.4), 48000, subtype="PCM_16",
+                     format=sf.info(recording).format)
             self.assertEqual(size, recording.stat().st_size)
+            self.assertNotEqual(original, recording.read_bytes())
             before = {p.name: p.read_bytes() for p in session.iterdir()}
             note_before = note.read_bytes()
             with self.assertRaisesRegex(ValueError, "content changed"):
