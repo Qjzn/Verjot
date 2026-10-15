@@ -2458,13 +2458,13 @@ internal sealed class MeetingContext : ApplicationContext {
         Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
     }
     void RequestExit() {
-        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose()) return;
+        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose(RequestExit)) return;
         exiting = true;
         toggle.Enabled = false;
         if (recording != null) Stop(); else ExitThread();
     }
     protected override void ExitThreadCore() {
-        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose()) return;
+        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose(ExitThread)) return;
         timer.Stop(); timer.Dispose();
         hotkey.Dispose();
         tray.Visible = false; tray.Dispose();

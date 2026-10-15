@@ -325,6 +325,36 @@ internal static class TestMeetingExperience {
             Check(MenuAction(warningItem, "打开转录笔记") != null && MenuAction(warningItem, "定位录音文件") != null, "Warning results must keep both published files reachable");
             Check(MenuAction(warningItem, "重试这场转写") == null, "A completed warning must not offer an ineffective ASR retry");
             menu.Close();
+            // Exercise the controller's actual exit entry while quick-note
+            // persistence is asynchronous. Never stop a real recording here.
+            bool rejectNoteSave = false;
+            var noteStore = new QuickNoteStore((string)config["vault_root"], "exit-note-fixture", Path.Combine(MeetingFiles.Home, "exit-note-recovery"));
+            var noteWindow = new QuickNoteWindow(noteStore, Path.Combine(MeetingFiles.Home, "exit-note-state"), delegate { if (rejectNoteSave) throw new IOException("Synthetic durable save failure"); });
+            Call(noteWindow, "LoadToday");
+            var noteWait = Stopwatch.StartNew();
+            while ((bool)Field(noteWindow, "workerBusy") && noteWait.ElapsedMilliseconds < 5000) { Application.DoEvents(); Thread.Sleep(2); }
+            Check(!(bool)Field(noteWindow, "workerBusy"), "The isolated quick note must load before exit validation");
+            rejectNoteSave = true;
+            var noteEditor = (System.Windows.Controls.RichTextBox)Field(noteWindow, "editor");
+            noteEditor.AppendText("退出保护样本");
+            Set(context, "quickNote", noteWindow);
+            var protectedRecording = FakeActiveRecording(warned);
+            Set(context, "recording", protectedRecording); Set(noteWindow, "composing", true);
+            Call(context, "RequestExit");
+            Check(!(bool)Field(context, "exiting") && object.ReferenceEquals(Field(context, "recording"), protectedRecording), "IME composition must block controller exit before touching the active recording");
+            Set(noteWindow, "composing", false); Call(context, "RequestExit");
+            noteWait.Restart();
+            while ((bool)Field(noteWindow, "workerBusy") && noteWait.ElapsedMilliseconds < 5000) { Application.DoEvents(); Thread.Sleep(2); }
+            Check(!noteWindow.IsDisposed && !(bool)Field(context, "exiting"), "A failed asynchronous note save must cancel controller exit");
+            Check(object.ReferenceEquals(Field(context, "recording"), protectedRecording), "A failed note save must leave the recording untouched");
+            Set(context, "recording", null); rejectNoteSave = false;
+            noteEditor.AppendText("恢复后尾文"); Call(context, "RequestExit");
+            Check(!(bool)Field(context, "exiting"), "The controller must wait for the final note write without synchronously exiting");
+            noteWait.Restart();
+            while (!noteWindow.IsDisposed && noteWait.ElapsedMilliseconds < 5000) { Application.DoEvents(); Thread.Sleep(2); }
+            Check(noteWindow.IsDisposed && (bool)Field(context, "exiting"), "Successful note persistence must automatically resume the controller exit");
+            Check(noteStore.Load(DateTime.Today).Text == "退出保护样本恢复后尾文", "The actual controller exit must preserve the final note text");
+            context.Dispose(); context = null; menu.Dispose();
             Console.WriteLine("Meeting experience: " + assertions + " assertions passed; no audio, model, cloud or external editor.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

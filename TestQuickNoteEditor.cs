@@ -20,6 +20,11 @@ internal static class TestQuickNoteEditor {
         var watch = System.Diagnostics.Stopwatch.StartNew();
         while (watch.ElapsedMilliseconds < milliseconds) { Application.DoEvents(); Thread.Sleep(10); }
     }
+    static void Settled(QuickNoteWindow window) {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        do { Pump(10); } while (!window.IsDisposed && ((bool)Field(window, "workerBusy") || (string)Field(window, "pendingText") != null) && watch.ElapsedMilliseconds < 5000);
+        Check(window.IsDisposed || !(bool)Field(window, "workerBusy"), "Background storage completes without blocking the UI pump");
+    }
     static byte[] Png() {
         using (var image = new Bitmap(8, 4)) using (var graphics = Graphics.FromImage(image)) using (var stream = new MemoryStream()) {
             graphics.Clear(Color.RoyalBlue); image.Save(stream, ImageFormat.Png); return stream.ToArray();
@@ -98,6 +103,18 @@ internal static class TestQuickNoteEditor {
             using (var window = new QuickNoteWindow(store, Path.Combine(root, "state"))) {
                 window.Toggle(); Pump(100);
                 Check(window.Visible && window.TopMost, "Quick note opens visibly and pinned by default");
+                Point origin = window.Location, pointer = window.PointToScreen(new Point(20, 20));
+                Call(window, "BeginWindowDrag", pointer);
+                Call(window, "OnMouseMove", new MouseEventArgs(MouseButtons.Left, 0, 50, 40, 0));
+                Check(window.Location == new Point(origin.X + 30, origin.Y + 20), "Local header dragging updates the window before the button is released");
+                Call(window, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, 20, 20, 0));
+                Check(!(bool)Field(window, "draggingWindow") && !window.Capture, "Finishing a drag releases capture");
+                pointer = window.PointToScreen(new Point(20, 20));
+                var captionMessage = Message.Create(window.Handle, 0xA1, new IntPtr(2), new IntPtr((pointer.Y << 16) | (pointer.X & 0xffff)));
+                Call(window, "WndProc", captionMessage);
+                Check((bool)Field(window, "draggingWindow"), "The native title bar uses the same tool-local live dragging path");
+                window.Capture = false;
+                Check(!(bool)Field(window, "draggingWindow"), "Losing capture safely ends live dragging");
                 var editor = (WC.RichTextBox)Field(window, "editor");
                 editor.CaretPosition = editor.Document.ContentEnd; editor.AppendText("自动保存中文\n- 简单列表"); Pump(800);
                 var note = store.Load(DateTime.Today);
@@ -108,8 +125,9 @@ internal static class TestQuickNoteEditor {
                 var imagePaste = new System.Windows.DataObject();
                 using (var stream = new MemoryStream(Png())) imagePaste.SetData(System.Windows.DataFormats.Bitmap, System.Windows.Media.Imaging.BitmapFrame.Create(stream, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat, System.Windows.Media.Imaging.BitmapCacheOption.OnLoad));
                 Call(window, "Paste", editor, new System.Windows.DataObjectPastingEventArgs(imagePaste, false, System.Windows.DataFormats.Bitmap));
+                Settled(window);
                 string replaced = QuickNoteMarkdown.Text(editor.Document, "\n");
-                Check(replaced.StartsWith("![图片](<" + imagePath + ">)\n保存中文"), "Image paste replaces exactly the selected text");
+                Check(replaced.StartsWith("![图片](<" + imagePath + ">)\n保存中文"), "Image paste replaces exactly the selected text: " + replaced + "; status=" + ((LinkLabel)Field(window, "status")).Text);
                 editor.Undo(); Check(QuickNoteMarkdown.Text(editor.Document, "\n") == note.Text, "Image replacement and newline are one undo group");
                 editor.Redo(); Check(QuickNoteMarkdown.Text(editor.Document, "\n") == replaced, "Redo restores the whole image replacement"); editor.Undo();
                 var paste = new System.Windows.DataObject(); paste.SetData(System.Windows.DataFormats.UnicodeText, "\n粘贴纯文本 **保持Markdown**");
@@ -117,7 +135,9 @@ internal static class TestQuickNoteEditor {
                 Call(window, "Paste", editor, new System.Windows.DataObjectPastingEventArgs(paste, false, System.Windows.DataFormats.UnicodeText));
                 Check(QuickNoteMarkdown.Text(editor.Document, "\n").EndsWith("**保持Markdown**"), "The actual paste handler accepts plain Unicode Markdown from its event snapshot");
                 editor.Undo(); Pump(800); Check(store.Load(DateTime.Today).Text == note.Text, "Undo of pasted text keeps the prior note intact");
-                editor.CaretPosition = editor.Document.ContentEnd; Call(window, "InsertImage", Png()); editor.AppendText("图片后文字"); Pump(800);
+                editor.CaretPosition = editor.Document.ContentEnd;
+                Call(window, "Paste", editor, new System.Windows.DataObjectPastingEventArgs(imagePaste, false, System.Windows.DataFormats.Bitmap)); Settled(window);
+                editor.AppendText("图片后文字"); Pump(800);
                 string withImage = store.Load(DateTime.Today).Text;
                 Check(withImage.Contains("![图片](<" + imagePath + ">)"), "Inserted image is a reusable relative Markdown reference");
                 Check(withImage.StartsWith("自动保存中文\n- 简单列表") && withImage.EndsWith("图片后文字"), "Image insertion retains text on both sides");
@@ -130,7 +150,8 @@ internal static class TestQuickNoteEditor {
                 window.Toggle(); Check(window.Visible, "Toggle does not hide an active IME composition");
                 Check(!window.FlushAndClose(), "Exit waits for IME composition instead of dropping pending text");
                 typeof(QuickNoteWindow).GetField("composing", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(window, false);
-                Check((bool)Call(window, "Flush"), "Committed composition can be saved");
+                Call(window, "Flush"); Settled(window);
+                Check(!(bool)Field(window, "dirty"), "Committed composition can be saved");
                 withImage += "输入法组合";
                 window.Toggle(); Check(!window.Visible, "The same toggle flushes and hides");
                 window.Toggle(); Pump(50); Check(QuickNoteMarkdown.Text(editor.Document, "\n") == withImage, "Reopen reloads the saved document without conversion");
@@ -141,12 +162,14 @@ internal static class TestQuickNoteEditor {
                 editor.AppendText("我的未存修改");
                 File.AppendAllText(note.Path, "\nObsidian 外部修改");
                 window.Toggle();
+                Settled(window);
                 Check(window.Visible, "Save conflict keeps the note visible");
                 Check(File.ReadAllText(note.Path).EndsWith("Obsidian 外部修改"), "Save conflict never overwrites external edits");
                 Check(store.Load(DateTime.Today).HasRecovery, "Save conflict preserves recovery text outside the vault");
                 Check(!window.FlushAndClose(), "Failed flush cancels application close");
                 string unsaved = QuickNoteMarkdown.Text(editor.Document, "\n");
                 Call(window, "ReloadDiskKeepingDraft");
+                Settled(window);
                 Check(QuickNoteMarkdown.Text(editor.Document, "\n").EndsWith("Obsidian 外部修改"), "Conflict recovery reloads the latest external version");
                 bool archived = false;
                 foreach (string path in Directory.GetFiles(recovery, "*.md")) if (File.ReadAllText(path) == unsaved) archived = true;
@@ -155,6 +178,32 @@ internal static class TestQuickNoteEditor {
             }
 
             var original = store.Load(DateTime.Today); store.SaveRecovery(original, original.Text + "\n恢复输入");
+            using (var loadFailure = new QuickNoteWindow(store, Path.Combine(root, "load-failure-state"), delegate { throw new IOException("模拟首次载入失败"); })) {
+                loadFailure.Toggle(); Settled(loadFailure);
+                Check(((WC.RichTextBox)Field(loadFailure, "editor")).IsReadOnly, "An initial load failure keeps the empty editor read-only");
+                Check(loadFailure.FlushAndClose() && loadFailure.IsDisposed, "A clean initial load failure does not trap application exit");
+            }
+            var reloadStore = new QuickNoteStore(vault, "慢重载", Path.Combine(root, "slow-reload-recovery"));
+            var reloadOriginal = reloadStore.Load(DateTime.Today); reloadStore.Save(reloadOriginal, "原有磁盘内容");
+            bool delayReload = false;
+            using (var reloadWindow = new QuickNoteWindow(reloadStore, Path.Combine(root, "slow-reload-state"), delegate { if (delayReload) Thread.Sleep(800); })) {
+                reloadWindow.Toggle(); Settled(reloadWindow);
+                var editor = (WC.RichTextBox)Field(reloadWindow, "editor"); editor.AppendText("待恢复的输入");
+                File.WriteAllText(reloadOriginal.Path, "Obsidian 外部版本保持不变");
+                Call(reloadWindow, "Flush"); Settled(reloadWindow);
+                delayReload = true;
+                Call(reloadWindow, "ReloadDiskKeepingDraft");
+                Pump(650); // The real 500ms debounce fires while archive/load is in flight.
+                Call(reloadWindow, "LoadToday"); // Also model the cross-day timer's direct entry.
+                bool capturedOldText = Field(reloadWindow, "pendingText") != null;
+                Settled(reloadWindow);
+                Check(reloadStore.Load(DateTime.Today).Text == "Obsidian 外部版本保持不变", "A debounce during slow reload must never save the old editor snapshot with the new disk revision");
+                Check(!capturedOldText, "A read-only reload does not capture an obsolete pending save");
+                bool retained = false;
+                foreach (string path in Directory.GetFiles(Path.Combine(root, "slow-reload-recovery"), "*.md")) if (File.ReadAllText(path).Contains("待恢复的输入")) retained = true;
+                Check(retained, "Slow reload retains the exact former input in an archived draft");
+                delayReload = false; Check(reloadWindow.FlushAndClose(), "The reloaded editor closes cleanly");
+            }
             using (var recovered = new QuickNoteWindow(store, Path.Combine(root, "state"))) {
                 recovered.Toggle(); Pump(800);
                 Check(store.Load(DateTime.Today).Text.EndsWith("恢复输入"), "Matching-revision crash recovery is restored and saved");

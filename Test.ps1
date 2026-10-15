@@ -3,12 +3,19 @@
 param([switch]$NativeOnly)
 $ErrorActionPreference = 'Stop'
 $taskRoot = $PSScriptRoot
+# Fail before starting any fixture if a test tries to use shared user input.
+$taskUnsafeTestCalls = '\b(?:Clipboard\s*\.\s*(?:Get\w*|Set\w*|Clear|Contains\w*)|SendInput|SendKeys\s*\.\s*\w+|keybd_event|SetForegroundWindow|OpenClipboard|EmptyClipboard|SetClipboardData|GetClipboardData)\s*\('
+$taskUnsafeSources = Get-ChildItem -LiteralPath $taskRoot -Filter 'Test*.cs' -File | Select-String -Pattern $taskUnsafeTestCalls
+if ($taskUnsafeSources) { throw 'A native test contains a shared clipboard or global input call. Use a local DataObject or targeted window message.' }
 $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $taskCompiler)) { $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
 if (-not (Test-Path -LiteralPath $taskCompiler)) { throw '.NET Framework C# compiler was not found.' }
 $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($taskOutput) | Out-Null
-foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestQuickNoteEditor')) {
+$taskDesktopRunner = Join-Path $taskOutput 'TestDesktopRunner.exe'
+& $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskRoot 'TestDesktopRunner.cs')
+if ($LASTEXITCODE -ne 0) { throw "Isolated test desktop runner compilation failed: $LASTEXITCODE" }
+foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
@@ -25,7 +32,9 @@ foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecord
     Copy-Item -LiteralPath (Join-Path $taskRoot 'lib\NAudio.dll') -Destination $taskFolder
     Copy-Item -LiteralPath (Join-Path $taskRoot 'config.schema.json') -Destination $taskFolder
     Copy-Item -LiteralPath (Join-Path $taskRoot 'ObsidianMeeting.exe.config') -Destination ($taskBinary + '.config')
-    & $taskBinary $taskFolder
+    # Each fixture gets a separate desktop without switching the user's screen.
+    # Native UI tests may activate their own windows, never the user's windows.
+    & $taskDesktopRunner $taskBinary $taskFolder
     if ($LASTEXITCODE -ne 0) { throw "$taskTest failed: $LASTEXITCODE; fixture: $taskFolder" }
 }
 if (-not $NativeOnly) {
@@ -47,3 +56,4 @@ if (-not $NativeOnly) {
 }
 Write-Output "All requested regressions passed. Local fixtures: $taskOutput"
 Write-Output 'Native tests use synthetic metadata/input levels and harmless child processes; no live recording, model inference, cloud transcription or user note is opened.'
+Write-Output 'Native windows run on an isolated test desktop; no system clipboard access or global keyboard injection.'

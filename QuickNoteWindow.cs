@@ -45,6 +45,11 @@ internal static class QuickNoteMarkdown {
     }
 
     internal static WC.Image LoadImage(string path) {
+        BitmapSource bitmap = LoadBitmap(path);
+        return bitmap == null ? null : new WC.Image { Source = bitmap, MaxWidth = 280, MaxHeight = 260, Stretch = WM.Stretch.Uniform };
+    }
+
+    internal static BitmapSource LoadBitmap(string path) {
         if (string.IsNullOrEmpty(path)) return null;
         try {
             var file = new FileInfo(path);
@@ -57,7 +62,7 @@ internal static class QuickNoteMarkdown {
                 bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
                 bitmap.DecodePixelWidth = Math.Min(720, decoder.Frames[0].PixelWidth);
                 bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze();
-                return new WC.Image { Source = bitmap, MaxWidth = 280, MaxHeight = 260, Stretch = WM.Stretch.Uniform };
+                return bitmap;
             }
         } catch (Exception) {
             return null;
@@ -142,14 +147,39 @@ internal sealed class QuickNoteWindow : Form {
     string failedText;
     string archivedRecovery;
     string archivedRecoverySource, archivedRecoveryText;
+    // One storage operation at a time owns the mutable document. The UI only
+    // reads the cached metadata until its completion is posted back.
+    bool workerBusy, loadRequested, reloadRequested, hideRequested, closeRequested;
+    long editVersion, savedVersion, pendingVersion;
+    string pendingText, reloadText, notePath, recoveryPath;
+    DateTime noteDate;
+    Action closeContinuation;
+    int imageEpoch;
+    long queuedImagePixels;
+    int queuedImageCount;
+    PendingImage lastImageRequest;
+    readonly Action beforeStorageWork;
+    readonly Queue<PendingImage> imageQueue = new Queue<PendingImage>();
+    sealed class PendingImage {
+        internal BitmapSource Source;
+        internal string File, SelectedText;
+        internal WD.FlowDocument Document;
+        internal WD.TextPointer Start, End;
+        internal long Version;
+        internal int Epoch;
+        internal long Pixels;
+        internal PendingImage Previous;
+        internal WD.TextPointer InsertEnd;
+    }
     Font uiFont;
+    bool draggingWindow;
+    Point dragOrigin, dragPointer;
 
-    [DllImport("user32.dll")] static extern bool ReleaseCapture();
-    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
+    public QuickNoteWindow(QuickNoteStore store, string stateRoot) : this(store, stateRoot, null) { }
 
-    public QuickNoteWindow(QuickNoteStore store, string stateRoot) {
+    internal QuickNoteWindow(QuickNoteStore store, string stateRoot, Action beforeStorageWork) {
         if (store == null) throw new ArgumentNullException("store");
-        this.store = store; this.stateRoot = Path.GetFullPath(stateRoot);
+        this.store = store; this.stateRoot = Path.GetFullPath(stateRoot); this.beforeStorageWork = beforeStorageWork;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         uiFont = new Font("Microsoft YaHei UI", 9); Font = uiFont;
         Text = "听记 · 速记"; ShowInTaskbar = false; TopMost = true;
@@ -172,9 +202,12 @@ internal sealed class QuickNoteWindow : Form {
         Controls.Add(host); Controls.Add(status); Controls.Add(top);
         pin.Click += delegate { TopMost = !TopMost; pin.Pinned = TopMost; pin.AccessibleName = TopMost ? "取消置顶" : "置顶"; tips.SetToolTip(pin, pin.AccessibleName); pin.Invalidate(); SaveWindowState(); };
         hide.Click += delegate { TryHide(); };
-        System.Windows.Forms.MouseEventHandler drag = delegate(object sender, System.Windows.Forms.MouseEventArgs e) { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), IntPtr.Zero); } };
+        System.Windows.Forms.MouseEventHandler drag = delegate(object sender, System.Windows.Forms.MouseEventArgs e) { if (e.Button == MouseButtons.Left) BeginWindowDrag(((Control)sender).PointToScreen(e.Location)); };
         top.MouseDown += drag; dateLabel.MouseDown += drag;
-        editor.TextChanged += delegate { if (!loading) { dirty = true; failedText = null; SetStatus("正在输入…", false); ScheduleSave(); } };
+        editor.TextChanged += delegate(object sender, WC.TextChangedEventArgs e) { if (!loading) {
+            if (e.UndoAction == WC.UndoAction.Undo || e.UndoAction == WC.UndoAction.Redo) { imageEpoch++; while (imageQueue.Count > 0) ReleaseImage(imageQueue.Dequeue()); }
+            editVersion++; if (!dirty) SetStatus("正在输入…", false); dirty = true; failedText = null; ScheduleSave();
+        } };
         TextCompositionManager.AddPreviewTextInputStartHandler(editor, delegate { composing = true; saveTimer.Stop(); });
         TextCompositionManager.AddPreviewTextInputUpdateHandler(editor, delegate { composing = true; saveTimer.Stop(); });
         TextCompositionManager.AddPreviewTextInputHandler(editor, delegate { composing = false; if (dirty) ScheduleSave(); });
@@ -186,7 +219,7 @@ internal sealed class QuickNoteWindow : Form {
         foreach (RoutedCommand command in new RoutedCommand[] { WD.EditingCommands.ToggleBullets, WD.EditingCommands.ToggleNumbering })
             editor.CommandBindings.Add(new CommandBinding(command, delegate(object sender, ExecutedRoutedEventArgs e) { e.Handled = true; }));
         saveTimer.Tick += delegate { saveTimer.Stop(); if (!composing) Flush(); };
-        dayTimer.Tick += delegate { if (Visible && !composing && note != null && note.Date.Date != DateTime.Today && Flush()) LoadToday(); };
+        dayTimer.Tick += delegate { if (Visible && !composing && note != null && noteDate.Date != DateTime.Today) LoadToday(); };
         status.LinkClicked += delegate { ShowSaveMenu(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) { if (!closeAllowed) { e.Cancel = true; TryHide(); } };
         ResizeEnd += delegate { SaveWindowState(); ResizeImages(); };
@@ -201,42 +234,79 @@ internal sealed class QuickNoteWindow : Form {
         RestoreWindowState();
     }
 
+    void BeginWindowDrag(Point screenPoint) {
+        if (WindowState != FormWindowState.Normal) return;
+        dragOrigin = Location; dragPointer = screenPoint; draggingWindow = true; Capture = true;
+    }
+
+    protected override void OnMouseMove(System.Windows.Forms.MouseEventArgs e) {
+        if (draggingWindow) {
+            Point pointer = PointToScreen(e.Location);
+            Location = new Point(dragOrigin.X + pointer.X - dragPointer.X, dragOrigin.Y + pointer.Y - dragPointer.Y);
+        }
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(System.Windows.Forms.MouseEventArgs e) {
+        if (draggingWindow && e.Button == MouseButtons.Left) { draggingWindow = false; Capture = false; SaveWindowState(); }
+        base.OnMouseUp(e);
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e) {
+        if (draggingWindow && !Capture) { draggingWindow = false; SaveWindowState(); }
+        base.OnMouseCaptureChanged(e);
+    }
+
+    protected override void WndProc(ref Message m) {
+        if (m.Msg == 0xA1 && m.WParam.ToInt64() == 2) { // WM_NCLBUTTONDOWN / HTCAPTION
+            long packed = m.LParam.ToInt64();
+            BeginWindowDrag(new Point(unchecked((short)(packed & 0xffff)), unchecked((short)((packed >> 16) & 0xffff))));
+            m.Result = IntPtr.Zero; return;
+        }
+        base.WndProc(ref m);
+    }
+
     public void Toggle() {
         if (IsDisposed) return;
         if (Visible) { TryHide(); return; }
         try {
-            if (note == null || note.Date.Date != DateTime.Today || !dirty) LoadToday();
+            hideRequested = false;
+            if (note == null || noteDate.Date != DateTime.Today || (!dirty && !workerBusy)) LoadToday();
             Show(); Activate(); editor.Focus();
         } catch (Exception error) { if (note == null) editor.IsReadOnly = true; SetStatus("无法载入速记：" + error.Message, true); Show(); Activate(); }
     }
 
-    public bool FlushAndClose() {
+    public bool FlushAndClose() { return FlushAndClose(null); }
+
+    public bool FlushAndClose(Action onReady) {
         if (IsDisposed) return true;
-        if (composing || !Flush()) { Show(); Activate(); return false; }
-        SaveWindowState(); closeAllowed = true; Close(); return true;
+        if (composing) { SetStatus("请先完成输入法中的文字，再退出。", true); return false; }
+        closeRequested = true; hideRequested = false;
+        if (closeContinuation == null) closeContinuation = onReady;
+        if (Flush()) { FinishClose(false); return true; }
+        return false;
     }
 
     void TryHide() {
         if (composing) return;
-        if (!Flush()) { Show(); Activate(); return; }
-        SaveWindowState(); Hide();
+        hideRequested = true;
+        if (Flush()) { hideRequested = false; SaveWindowState(); Hide(); }
     }
 
     void LoadToday() {
-        QuickNoteDocument next = store.Load(DateTime.Today);
-        string text = next.Text;
-        bool recoveryConflict = next.HasRecovery && !string.Equals(next.RecoveryRevision, next.Revision, StringComparison.Ordinal);
-        if (next.HasRecovery && !recoveryConflict) text = next.RecoveryText;
-        if (recoveryConflict && (archivedRecoverySource != next.Path || archivedRecoveryText != next.RecoveryText)) {
-            archivedRecovery = store.ArchiveRecovery(next, next.RecoveryText);
-            archivedRecoverySource = next.Path; archivedRecoveryText = next.RecoveryText;
-        }
+        if (composing || loadRequested || reloadRequested || (editor.IsReadOnly && workerBusy)) return;
+        if (dirty) CaptureSave();
+        loadRequested = true; editor.IsReadOnly = true; DrainWork();
+    }
+
+    void ApplyLoaded(QuickNoteDocument next, string text, bool recoveryConflict, bool fromReload) {
         loading = true;
-        try { note = next; newline = text.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n"; editor.Document = QuickNoteMarkdown.Create(text, store); editor.IsReadOnly = false; dirty = next.HasRecovery && !recoveryConflict; failedText = null; }
+        try { note = next; CacheNoteMetadata(); newline = text.IndexOf("\r\n", StringComparison.Ordinal) >= 0 ? "\r\n" : "\n"; editor.Document = QuickNoteMarkdown.Create(text, store); editor.IsReadOnly = false; dirty = !fromReload && next.HasRecovery && !recoveryConflict; failedText = null; editVersion++; savedVersion = dirty ? editVersion - 1 : editVersion; }
         finally { loading = false; }
         dateLabel.Text = next.Date.ToString("M月d日 dddd");
         tips.SetToolTip(dateLabel, next.Path);
-        if (recoveryConflict) SetStatus("另有未合并草稿，点击查看；磁盘内容未改动", true);
+        if (fromReload) SetStatus("已载入磁盘版本；原输入另存为恢复草稿", false);
+        else if (recoveryConflict) SetStatus("另有未合并草稿，点击查看；磁盘内容未改动", true);
         else { SetSavedStatus(); if (dirty) ScheduleSave(); }
         ResizeImages(); editor.CaretPosition = editor.Document.ContentEnd;
     }
@@ -244,31 +314,105 @@ internal sealed class QuickNoteWindow : Form {
     void ScheduleSave() { saveTimer.Stop(); saveTimer.Start(); }
 
     bool Flush() {
-        if (!dirty) return true;
-        if (note == null) { SetStatus("笔记尚未载入，当前内容仍在，请重试打开。", true); return false; }
+        // A load owns the document transition. A timer must not capture the
+        // former editor text and later save it with the replacement revision.
         if (composing) return false;
-        string text = QuickNoteMarkdown.Text(editor.Document, newline);
-        try {
-            store.SaveRecovery(note, text);
-            store.Save(note, text); dirty = false; failedText = null;
-            SetSavedStatus(); return true;
-        } catch (Exception error) {
-            failedText = text;
-            try { store.SaveRecovery(note, text); } catch { }
-            SetStatus(error is QuickNoteConflictException ? "外部内容已变化；草稿保留，点击处理" : "保存失败，内容仍在；点击查看恢复方式", true);
-            tips.SetToolTip(status, error.Message); return false;
-        }
+        if (!dirty) return !workerBusy && imageQueue.Count == 0 && !loadRequested && !reloadRequested;
+        if (editor.IsReadOnly) return false;
+        if (note == null) { SetStatus("笔记尚未载入，当前内容仍在，请重试打开。", true); return false; }
+        CaptureSave(); DrainWork(); return false;
+    }
+
+    void CaptureSave() {
+        if (!dirty || composing || note == null) return;
+        pendingText = QuickNoteMarkdown.Text(editor.Document, newline); pendingVersion = editVersion;
+    }
+
+    void CacheNoteMetadata() {
+        if (note == null) return;
+        notePath = note.Path; noteDate = note.Date;
+        recoveryPath = note.HasRecovery ? note.RecoveryPath : null;
+    }
+
+    void DrainWork() {
+        if (workerBusy || IsDisposed) return;
+        if (imageQueue.Count > 0) { StartImageWork(imageQueue.Dequeue()); return; }
+        if (pendingText == null && !reloadRequested && !loadRequested) { FinishRequests(); return; }
+        bool save = pendingText != null, reload = !save && reloadRequested;
+        string text = save ? pendingText : reloadText;
+        long version = pendingVersion;
+        if (save) pendingText = null;
+        else if (reload) { reloadRequested = false; text = QuickNoteMarkdown.Text(editor.Document, newline); }
+        else loadRequested = false;
+        QuickNoteDocument document = note;
+        DateTime date = DateTime.Today;
+        string priorArchiveSource = archivedRecoverySource, priorArchiveText = archivedRecoveryText;
+        IntPtr dispatcherHandle = Handle;
+        workerBusy = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            Exception failure = null; bool conflict = false; string archive = null;
+            QuickNoteDocument result = document; string loadedText = null;
+            try {
+                if (beforeStorageWork != null) beforeStorageWork();
+                if (save) { store.SaveRecovery(document, text); store.Save(document, text); }
+                else {
+                    if (reload) archive = store.ArchiveRecovery(document, text);
+                    result = store.Load(date); loadedText = result.Text;
+                    conflict = result.HasRecovery && !string.Equals(result.RecoveryRevision, result.Revision, StringComparison.Ordinal);
+                    if (!reload && result.HasRecovery && !conflict) loadedText = result.RecoveryText;
+                    if (!reload && conflict && (priorArchiveSource != result.Path || priorArchiveText != result.RecoveryText)) archive = store.ArchiveRecovery(result, result.RecoveryText);
+                }
+            } catch (Exception error) { failure = error; }
+            try { BeginInvoke((Action)delegate {
+                workerBusy = false;
+                if (IsDisposed) return;
+                note = result; CacheNoteMetadata();
+                if (failure != null) {
+                    failedText = save ? text : reload ? text : failedText;
+                    // Save already retains its recovery on failure. Keep any
+                    // newer snapshot queued so its draft is retained as well.
+                    hideRequested = closeRequested = false; closeContinuation = null;
+                    if (!save) editor.IsReadOnly = note == null;
+                    if (save) { loadRequested = false; if (!reloadRequested) editor.IsReadOnly = false; }
+                    SetStatus(failure is QuickNoteConflictException ? "外部内容已变化；草稿保留，点击处理" : "保存或载入失败，内容仍在；点击查看恢复方式", true);
+                    tips.SetToolTip(status, failure.Message);
+                } else if (save) {
+                    savedVersion = Math.Max(savedVersion, version); dirty = editVersion != savedVersion;
+                    if (!dirty) { failedText = null; SetSavedStatus(); }
+                } else {
+                    if (archive != null) { archivedRecovery = archive; archivedRecoverySource = reload ? document.Path : result.Path; archivedRecoveryText = reload ? text : result.RecoveryText; }
+                    ApplyLoaded(result, loadedText, conflict, reload);
+                }
+                if ((hideRequested || closeRequested) && dirty && failedText == null) CaptureSave();
+                DrainWork();
+            }); } catch (InvalidOperationException) { } // Only forced disposal can bypass the close protocol.
+        });
+    }
+
+    void FinishRequests() {
+        if (dirty || composing || workerBusy || imageQueue.Count > 0) return;
+        if (closeRequested) { FinishClose(true); return; }
+        if (hideRequested) { hideRequested = false; SaveWindowState(); Hide(); }
+    }
+
+    void FinishClose(bool continueExit) {
+        Action continuation = closeContinuation;
+        closeContinuation = null; closeRequested = false;
+        SaveWindowState(); closeAllowed = true; Close(); if (!IsDisposed) Dispose();
+        // The controller's recursive continuation must see an already disposed
+        // window, and must run only for an asynchronous completion.
+        if (continueExit && continuation != null) continuation();
     }
 
     void SetStatus(string message, bool error) {
         status.Text = message; status.LinkColor = error ? Color.FromArgb(155, 73, 33) : Color.FromArgb(55, 96, 138);
         status.AccessibleName = message;
-        tips.SetToolTip(status, !error && note != null ? note.Path : message);
+        tips.SetToolTip(status, !error && notePath != null ? notePath : message);
     }
 
     void SetSavedStatus() {
         string folder = Path.GetFileName(store.FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        SetStatus(folder + " / " + Path.GetFileName(note.Path), false);
+        SetStatus(folder + " / " + Path.GetFileName(notePath), false);
     }
 
     void ShowSaveMenu() {
@@ -280,9 +424,9 @@ internal sealed class QuickNoteWindow : Form {
             } catch (Exception error) { SetStatus("无法打开文件夹：" + error.Message, true); }
         });
         menu.Items.Add("复制当前内容", null, delegate { try { Clipboard.SetText(QuickNoteMarkdown.Text(editor.Document, newline)); } catch (Exception error) { tips.SetToolTip(status, error.Message); } });
-        string recoveryPath = archivedRecovery ?? (note != null && note.HasRecovery ? note.RecoveryPath : null);
-        if (!string.IsNullOrEmpty(recoveryPath))
-            menu.Items.Add("打开草稿所在文件夹", null, delegate { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + recoveryPath.Replace("\"", "") + "\""); } catch (Exception error) { tips.SetToolTip(status, error.Message); } });
+        string draftPath = archivedRecovery ?? recoveryPath;
+        if (!string.IsNullOrEmpty(draftPath))
+            menu.Items.Add("打开草稿所在文件夹", null, delegate { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + draftPath.Replace("\"", "") + "\""); } catch (Exception error) { tips.SetToolTip(status, error.Message); } });
         if (note != null && failedText != null)
             menu.Items.Add("保留草稿并载入磁盘版本", null, delegate { ReloadDiskKeepingDraft(); });
         menu.Closed += delegate { menu.Dispose(); };
@@ -290,12 +434,11 @@ internal sealed class QuickNoteWindow : Form {
     }
 
     void ReloadDiskKeepingDraft() {
-        try {
-            string text = QuickNoteMarkdown.Text(editor.Document, newline);
-            archivedRecovery = store.ArchiveRecovery(note, text);
-            archivedRecoverySource = note.Path; archivedRecoveryText = text;
-            dirty = false; LoadToday(); SetStatus("已载入磁盘版本；原输入另存为恢复草稿", false);
-        } catch (Exception error) { SetStatus("暂时无法载入：" + error.Message, true); }
+        if (composing || note == null) return;
+        reloadText = QuickNoteMarkdown.Text(editor.Document, newline);
+        pendingText = null; loadRequested = false; reloadRequested = true;
+        hideRequested = closeRequested = false; closeContinuation = null;
+        editor.IsReadOnly = true; DrainWork();
     }
 
     void EditorKeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
@@ -310,7 +453,16 @@ internal sealed class QuickNoteWindow : Form {
             // Use the event's clipboard snapshot. Reopening the global clipboard
             // here would race another application and can fail while it is busy.
             var image = e.DataObject.GetData(W.DataFormats.Bitmap, true) as BitmapSource;
-            if (image != null) { InsertImage(EncodePng(image)); return; }
+            if (image != null) {
+                // Snapshot event-owned pixels before returning; never retain a
+                // clipboard COM/DataObject on the storage thread.
+                long pixels = (long)image.PixelWidth * image.PixelHeight;
+                if (pixels > 36000000 || pixels + queuedImagePixels > 36000000 || queuedImageCount >= 16) throw new IOException("图片处理量较大，请等待当前图片完成后再粘贴（最多3600万像素）。");
+                int stride = checked((image.PixelWidth * image.Format.BitsPerPixel + 7) / 8);
+                byte[] data = new byte[checked(stride * image.PixelHeight)]; image.CopyPixels(data, stride, 0);
+                var snapshot = BitmapSource.Create(image.PixelWidth, image.PixelHeight, image.DpiX, image.DpiY, image.Format, image.Palette, data, stride); snapshot.Freeze();
+                QueueImage(snapshot, null); return;
+            }
             var files = e.DataObject.GetData(W.DataFormats.FileDrop, true) as string[];
             if (files != null) { foreach (string path in files) InsertImageFile(path); return; }
             string text = e.DataObject.GetData(W.DataFormats.UnicodeText, true) as string;
@@ -336,28 +488,78 @@ internal sealed class QuickNoteWindow : Form {
     }
 
     void InsertImageFile(string path) {
-        if (!File.Exists(path) || new FileInfo(path).Length > 12L * 1024 * 1024) throw new IOException("请选择12MB以内的图片文件。");
-        using (var stream = File.OpenRead(path)) {
-            BitmapDecoder decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
-            if (decoder.Frames.Count == 0) throw new IOException("无法读取此图片。");
-            InsertImage(EncodePng(decoder.Frames[0]));
-        }
+        QueueImage(null, Path.GetFullPath(path));
     }
 
-    void InsertImage(byte[] png) {
-        string target = store.StoreImage(png);
-        WC.Image image = QuickNoteMarkdown.LoadImage(store.ResolveImage(target));
-        if (image == null) throw new IOException("图片已保存，但无法显示。");
-        editor.BeginChange();
-        try {
-            editor.Selection.Text = "";
-            WD.TextPointer position = editor.CaretPosition.GetInsertionPosition(WD.LogicalDirection.Forward);
-            image.Margin = new W.Thickness(0, 5, 0, 5);
-            var container = new WD.InlineUIContainer(image, position) { Tag = "![图片](<" + target + ">)", BaselineAlignment = W.BaselineAlignment.Center };
-            var after = new WD.LineBreak(container.ElementEnd);
-            editor.CaretPosition = after.ElementEnd.GetInsertionPosition(WD.LogicalDirection.Forward);
-        } finally { editor.EndChange(); }
-        ResizeImages(); editor.Focus();
+    void QueueImage(BitmapSource source, string file) {
+        if (editor.IsReadOnly) throw new IOException("请等待当前笔记载入完成。");
+        long pixels = source == null ? 0 : (long)source.PixelWidth * source.PixelHeight;
+        if (queuedImageCount >= 16 || queuedImagePixels + pixels > 36000000) throw new IOException("请等待当前图片处理完成后再插入。");
+        queuedImageCount++; queuedImagePixels += pixels;
+        var request = new PendingImage { Source = source, File = file, Document = editor.Document, Start = editor.Selection.Start.GetPositionAtOffset(0, WD.LogicalDirection.Backward), End = editor.Selection.End.GetPositionAtOffset(0, WD.LogicalDirection.Backward), SelectedText = editor.Selection.Text, Version = editVersion, Epoch = imageEpoch, Pixels = pixels };
+        if (lastImageRequest != null && lastImageRequest.Document == request.Document && lastImageRequest.Version == request.Version && lastImageRequest.Start.CompareTo(request.Start) == 0) request.Previous = lastImageRequest;
+        lastImageRequest = request;
+        imageQueue.Enqueue(request);
+        SetStatus("正在插入图片…", false); DrainWork();
+    }
+
+    void ReleaseImage(PendingImage request) { queuedImageCount--; queuedImagePixels -= request.Pixels; request.Source = null; if (queuedImageCount == 0) lastImageRequest = null; }
+
+    void StartImageWork(PendingImage request) {
+        workerBusy = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            Exception failure = null; string target = null; BitmapSource preview = null;
+            try {
+                byte[] png;
+                if (request.Source != null) png = EncodePng(request.Source);
+                else {
+                    if (!File.Exists(request.File) || new FileInfo(request.File).Length > 12L * 1024 * 1024) throw new IOException("请选择12MB以内的图片文件。");
+                    using (var stream = File.OpenRead(request.File)) {
+                        BitmapDecoder decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+                        if (decoder.Frames.Count == 0) throw new IOException("无法读取此图片。");
+                        png = EncodePng(decoder.Frames[0]);
+                    }
+                }
+                target = store.StoreImage(png);
+                preview = QuickNoteMarkdown.LoadBitmap(store.ResolveImage(target));
+                if (preview == null) throw new IOException("图片已保存，但无法显示。");
+            } catch (Exception error) { failure = error; }
+            try { BeginInvoke((Action)delegate {
+                workerBusy = false;
+                ReleaseImage(request);
+                if (IsDisposed) return;
+                try {
+                if (failure != null) {
+                    hideRequested = closeRequested = false; closeContinuation = null;
+                    SetStatus("无法插入图片：" + failure.Message, true);
+                } else if (request.Document == editor.Document && request.Epoch == imageEpoch) {
+                    // TextPointers follow edits while encoding is in progress.
+                    // Do not move the live caret if the user has continued typing.
+                    var liveStart = editor.Selection.Start; var liveEnd = editor.Selection.End;
+                    bool unchanged = request.Version == editVersion;
+                    bool followsImage = request.Previous != null && request.Previous.InsertEnd != null;
+                    WD.TextPointer start = followsImage ? request.Previous.InsertEnd : request.Start;
+                    var range = new WD.TextRange(start, followsImage ? start : request.End);
+                    editor.BeginChange();
+                    try {
+                        if (range.Text == request.SelectedText) range.Text = "";
+                        var image = new WC.Image { Source = preview, MaxHeight = 260, Stretch = WM.Stretch.Uniform, Margin = new W.Thickness(0, 5, 0, 5) };
+                        var container = new WD.InlineUIContainer(image, start.GetInsertionPosition(WD.LogicalDirection.Forward)) { Tag = "![图片](<" + target + ">)", BaselineAlignment = W.BaselineAlignment.Center };
+                        var after = new WD.LineBreak(container.ElementEnd);
+                        request.InsertEnd = after.ElementEnd.GetPositionAtOffset(0, WD.LogicalDirection.Backward);
+                        if (unchanged) editor.CaretPosition = after.ElementEnd.GetInsertionPosition(WD.LogicalDirection.Forward);
+                        else editor.Selection.Select(liveStart, liveEnd);
+                    } finally { editor.EndChange(); }
+                    ResizeImages();
+                }
+                } catch (Exception error) {
+                    hideRequested = closeRequested = false; closeContinuation = null;
+                    SetStatus("图片未插入，文字仍在：" + error.Message, true);
+                }
+                if ((hideRequested || closeRequested || loadRequested) && dirty) CaptureSave();
+                DrainWork();
+            }); } catch (InvalidOperationException) { }
+        });
     }
 
     void ResizeImages() {

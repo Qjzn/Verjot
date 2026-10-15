@@ -29,8 +29,13 @@ internal sealed class SessionRecord {
 internal sealed class SessionCatalog {
     readonly string home, work, artifactRoot;
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    readonly Action<int> retryDelay;
 
-    public SessionCatalog(string home, string artifactRoot) {
+    public SessionCatalog(string home, string artifactRoot) : this(home, artifactRoot, System.Threading.Thread.Sleep) { }
+
+    internal SessionCatalog(string home, string artifactRoot, Action<int> retryDelay) {
+        if (retryDelay == null) throw new ArgumentNullException("retryDelay");
+        this.retryDelay = retryDelay;
         this.home = Path.GetFullPath(home);
         work = Path.Combine(this.home, "work");
         this.artifactRoot = string.IsNullOrWhiteSpace(artifactRoot) ? "" : Path.GetFullPath(artifactRoot);
@@ -356,23 +361,24 @@ internal sealed class SessionCatalog {
                 int code = error.HResult & 0xffff;
                 bool sharing = code == 32 || code == 33;
                 if (sharing) observed = true;
-                bool replacing = observed && (error is FileNotFoundException || error is DirectoryNotFoundException);
+                bool missing = error is FileNotFoundException || error is DirectoryNotFoundException;
+                // A never-observed optional file is absent, rather than an in-progress replacement.
+                if (optional && !observed && missing) return new Dictionary<string, object>();
+                bool replacing = observed && missing;
                 // Keep an atomic-replace sharing conflict recoverable beyond
                 // three scheduler ticks, including an already-observed path
                 // briefly disappearing. Permanent conflicts still fail.
                 if (attempt >= 3 && ((!sharing && !replacing) || retryClock.ElapsedMilliseconds >= 200)) {
-                    if (optional && !observed && (error is FileNotFoundException || error is DirectoryNotFoundException))
-                        return new Dictionary<string, object>();
                     throw;
                 }
-                System.Threading.Thread.Sleep(10);
+                retryDelay(10);
             } catch (UnauthorizedAccessException error) {
                 // Include CheckOrdinary's attribute read in the bounded retry:
                 // a delete-pending Windows file can deny both attributes/open.
                 // Permanent permission failures still throw their original type.
                 if ((error.HResult & 0xffff) != 5 || attempt >= 3) throw;
                 observed = true;
-                System.Threading.Thread.Sleep(10);
+                retryDelay(10);
             }
         }
         var data = json.Deserialize<Dictionary<string, object>>(snapshot);

@@ -188,10 +188,31 @@ internal static class TestJsonReadSharing {
             label + ": real permanent read denial remains a bounded explicit UnauthorizedAccessException; got " + failure);
         Check(read(path).ContainsKey("revision"), label + ": original fixture permissions are restored");
     }
+    static void UnobservedOptionalMissingSkipsRetry() {
+        int delays = 0;
+        var catalog = new SessionCatalog(root, root, delegate(int milliseconds) { delays++; });
+        foreach (string missing in new[] { Path.Combine(root, "never-present-optional.json"), Path.Combine(root, "never-present-directory", "optional.json") }) {
+            delays = 0;
+            Check(CatalogRead(catalog, missing, true).Count == 0, "SessionCatalog: a never-present optional path is an empty snapshot");
+            Check(delays == 0, "SessionCatalog: a never-present optional path must not request any retry delay");
+        }
+        delays = 0; bool requiredFailed = false;
+        try { CatalogRead(catalog, Path.Combine(root, "never-present-required.json"), false); }
+        catch (FileNotFoundException) { requiredFailed = true; }
+        Check(requiredFailed, "SessionCatalog: a never-present required path still fails explicitly");
+        Check(delays == 3, "SessionCatalog: required missing metadata keeps its existing bounded retry policy");
+        string existing = Path.Combine(root, "optional-present.json");
+        File.WriteAllText(existing, "{\"revision\":7}", Utf8);
+        delays = 0;
+        Check(Convert.ToInt32(CatalogRead(catalog, existing, true)["revision"]) == 7, "SessionCatalog: an existing optional path returns real metadata");
+        Check(delays == 0, "SessionCatalog: existing readable metadata does not request a retry delay");
+        results.Add(new { kind = "optional_missing_delay_contract", source = "SessionCatalog", missing_file_delays = 0, missing_directory_delays = 0, required_missing_delays = 3 });
+    }
     public static int Main(string[] args) {
         try {
             root = Path.Combine(Path.GetFullPath(args[0]), "json-read-sharing-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(root, "work"));
+            UnobservedOptionalMissingSkipsRetry();
             var catalog = new SessionCatalog(root, root);
             Func<string, Dictionary<string, object>> meetingReader = MeetingFiles.ReadJson;
             Action<string, Dictionary<string, object>> meetingWriter = delegate(string path, Dictionary<string, object> value) { MeetingFiles.WriteJson(path, value); };

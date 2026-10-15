@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -13,11 +12,7 @@ internal static class TestMeetingHotkeys {
     static int assertions;
     [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr window, int id);
-    [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, Input[] inputs, int size);
-    [StructLayout(LayoutKind.Sequential)] struct MouseInput { public int x, y; public uint data, flags, time; public UIntPtr extra; }
-    [StructLayout(LayoutKind.Sequential)] struct KeyInput { public ushort key, scan; public uint flags, time; public UIntPtr extra; }
-    [StructLayout(LayoutKind.Explicit)] struct InputUnion { [FieldOffset(0)] public MouseInput mouse; [FieldOffset(0)] public KeyInput key; }
-    [StructLayout(LayoutKind.Sequential)] struct Input { public uint type; public InputUnion data; }
+    [DllImport("user32.dll", SetLastError = true)] static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
     static void Check(bool condition, string message) { assertions++; if (!condition) throw new Exception(message); }
     static bool Registered(MeetingHotkey hotkey, string name) {
         var property = typeof(MeetingHotkey).GetProperty(name);
@@ -55,13 +50,12 @@ internal static class TestMeetingHotkeys {
         }
         public void Dispose() { done.Set(); owner.Join(); }
     }
-    static Input Key(ushort code, bool up) { return new Input { type = 1, data = new InputUnion { key = new KeyInput { key = code, flags = up ? 2u : 0u } } }; }
-    static void Press(ushort functionKey) {
-        var keys = new ushort[] { 0x11, 0x12, 0x10, functionKey };
-        var input = new List<Input>();
-        foreach (ushort key in keys) input.Add(Key(key, false));
-        for (int i = keys.Length - 1; i >= 0; i--) input.Add(Key(keys[i], true));
-        Check(SendInput((uint)input.Count, input.ToArray(), Marshal.SizeOf(typeof(Input))) == input.Count, "Isolated F-key injection failed: Win32 " + Marshal.GetLastWin32Error());
+    static void Press(MeetingHotkey hotkey, ushort functionKey) {
+        // Registration/conflict/release is tested against Windows separately.
+        // Deliver only to this fixture's message window; never alter the user's
+        // held modifiers, keyboard focus, clipboard or current input stream.
+        int id = 7411 + functionKey - 0x84;
+        Check(PostMessage(hotkey.Handle, 0x0312, new IntPtr(id), new IntPtr((functionKey << 16) | 7)), "Fixture WM_HOTKEY delivery failed: Win32 " + Marshal.GetLastWin32Error());
     }
     static void Receive(Func<bool> received) {
         DateTime until = DateTime.UtcNow.AddSeconds(2);
@@ -84,7 +78,7 @@ internal static class TestMeetingHotkeys {
             string warning = Warning(hotkey);
             Check(warning.Contains(blocked) && warning.Contains("1409"), "Conflict warning must identify the failed key and real Win32 1409");
             Check(!warning.Contains(available), "The working auxiliary key must not be reported as failed");
-            Press(blockPause ? (ushort)0x86 : (ushort)0x85);
+            Press(hotkey, blockPause ? (ushort)0x86 : (ushort)0x85);
             Receive(delegate { return callbacks == 1; });
             hotkey.EnablePause(false);
             Check(!Registered(hotkey, "PauseRegistered") && !Registered(hotkey, "BookmarkRegistered"), "Disable must clear both independent registration states");
@@ -104,9 +98,9 @@ internal static class TestMeetingHotkeys {
             Check(hotkey.QuickNoteRegistered, "The quick-note key must register before any recording starts");
             Check(hotkey.QuickNoteWarning.Length == 0, "An available quick-note key must have no warning");
             Check(!hotkey.PauseRegistered && !hotkey.BookmarkRegistered, "Quick note must not register recording-only keys while idle");
-            Press(0x87);
+            Press(hotkey, 0x87);
             Receive(delegate { return quickNotes == 1; });
-            Press(0x84);
+            Press(hotkey, 0x84);
             Receive(delegate { return starts == 1; });
             hotkey.EnablePause(true);
             Check(hotkey.QuickNoteRegistered && hotkey.PauseRegistered && hotkey.BookmarkRegistered, "Quick note must remain registered alongside both recording-only keys");
@@ -114,9 +108,9 @@ internal static class TestMeetingHotkeys {
             Check(hotkey.QuickNoteRegistered, "Disabling recording-only keys must keep quick note registered");
             Check(!hotkey.PauseRegistered && !hotkey.BookmarkRegistered, "Recording-only keys must still be released");
             Check(hotkey.QuickNoteWarning.Length == 0, "Recording lifecycle must not invent a quick-note warning");
-            Press(0x87);
+            Press(hotkey, 0x87);
             Receive(delegate { return quickNotes == 2; });
-            Press(0x84);
+            Press(hotkey, 0x84);
             Receive(delegate { return starts == 2; });
         }
         Check(!disposed.QuickNoteRegistered, "Disposal must clear quick-note registration state");
@@ -135,18 +129,18 @@ internal static class TestMeetingHotkeys {
             Check(warning.Contains(QuickNoteKey) && warning.Contains("quick_note_hotkey") && warning.Contains("1409"), "Quick-note conflict warning must identify its setting, key and real Win32 1409");
             Check(!warning.Contains(StartKey) && !warning.Contains(PauseKey) && !warning.Contains(BookmarkKey), "Quick-note conflict must not blame unrelated working keys");
             Check(hotkey.AuxiliaryWarning.Length == 0, "Quick-note conflict must remain separate from recording-key warnings");
-            Press(0x84);
+            Press(hotkey, 0x84);
             Receive(delegate { return starts == 1; });
             hotkey.EnablePause(true);
             Check(hotkey.PauseRegistered && hotkey.BookmarkRegistered, "Quick-note conflict must not block either recording-only key");
             Check(hotkey.AuxiliaryWarning.Length == 0, "Available recording keys must not inherit the quick-note warning");
-            Press(0x85);
+            Press(hotkey, 0x85);
             Receive(delegate { return pauses == 1; });
-            Press(0x86);
+            Press(hotkey, 0x86);
             Receive(delegate { return bookmarks == 1; });
             hotkey.EnablePause(false);
             Check(hotkey.QuickNoteWarning == warning && !hotkey.QuickNoteRegistered, "Disabling recording keys must preserve the actionable quick-note conflict warning");
-            Press(0x84);
+            Press(hotkey, 0x84);
             Receive(delegate { return starts == 2; });
             Check(quickNotes == 0, "Other registered keys must not invoke quick note");
         }
@@ -174,7 +168,7 @@ internal static class TestMeetingHotkeys {
             using (var released = new OccupiedKey(BookmarkKey)) { Check(true, "Disposal releases bookmark independently"); }
             QuickNoteLifetime();
             QuickNoteConflict();
-            Console.WriteLine("PASS TestMeetingHotkeys: " + assertions + " assertions; isolated F21/F22/F23/F24 registration and WM_HOTKEY only; no audio or user windows.");
+            Console.WriteLine("PASS TestMeetingHotkeys: " + assertions + " assertions; actual isolated key registration and targeted WM_HOTKEY dispatch; no global input, clipboard, audio or user windows.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
