@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
@@ -29,13 +30,19 @@ internal sealed class MeetingSettingsSnapshot {
     }
     public Dictionary<string, object> Values { get { return Clone(values); } }
     public Dictionary<string, object> CreateCandidate(string root, string meetingFolder, string quickFolder,
-            string start, string pause, string bookmark, string quickNote) {
+            string start, string pause, string bookmark, string quickNote, string protectionSeconds = null) {
         var candidate = Values;
         candidate["vault_root"] = root.Trim();
         candidate["meeting_folder"] = meetingFolder.Trim();
         candidate["quick_note_folder"] = quickFolder.Trim();
         candidate["hotkey"] = start.Trim(); candidate["pause_hotkey"] = pause.Trim();
         candidate["bookmark_hotkey"] = bookmark.Trim(); candidate["quick_note_hotkey"] = quickNote.Trim();
+        if (protectionSeconds != null) {
+            int seconds;
+            if (!int.TryParse(protectionSeconds.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out seconds) || seconds < 0 || seconds > 300)
+                throw new InvalidOperationException("录音保护时间请填写 0 到 300 之间的整数秒；0 表示关闭。");
+            candidate["recording_protection_seconds"] = seconds;
+        }
         return MeetingConfig.Validate(candidate);
     }
     static bool Same(byte[] first, byte[] second) {
@@ -118,15 +125,15 @@ internal sealed class MeetingSettingsDialog : Form {
         Text = "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
-        ClientSize = new Size(460, 416); Padding = new Padding(16);
+        ClientSize = new Size(460, 492); Padding = new Padding(16);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.CenterScreen;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 12 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 14 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
-        for (int row = 0; row < 12; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 ? 38 : row == 9 ? 44 : row == 10 ? 30 : row == 11 ? 0 : 32));
+        for (int row = 0; row < 14; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 ? 38 : row == 11 ? 44 : row == 12 ? 30 : row == 13 ? 0 : 32));
         var current = snapshot.Values;
         AddField(layout, 0, "保存目录", "vault_root", current);
         var browse = new Button { Text = "选择…", Dock = DockStyle.Fill, Margin = new Padding(4, 1, 0, 4) };
@@ -141,12 +148,15 @@ internal sealed class MeetingSettingsDialog : Form {
         AddField(layout, 7, "打开速记", "quick_note_hotkey", current);
         var shortcuts = new Label { Text = "快捷键填写示例：Ctrl+Alt+J、Alt+Space。保存后立即生效。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
         layout.Controls.Add(shortcuts, 0, 8); layout.SetColumnSpan(shortcuts, 3);
-        layout.Controls.Add(error, 0, 9); layout.SetColumnSpan(error, 3);
+        AddField(layout, 9, "录音保护（秒）", "recording_protection_seconds", current);
+        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停时间不计入。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
+        layout.Controls.Add(protection, 0, 10); layout.SetColumnSpan(protection, 3);
+        layout.Controls.Add(error, 0, 11); layout.SetColumnSpan(error, 3);
         var actions = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
         var cancel = new Button { Text = "取消", AutoSize = true, MinimumSize = new Size(76, 28), DialogResult = DialogResult.Cancel };
         save.Click += delegate { SaveSettings(); }; cancel.Click += delegate { Close(); };
         actions.Controls.Add(save); actions.Controls.Add(cancel);
-        layout.Controls.Add(actions, 0, 10); layout.SetColumnSpan(actions, 3);
+        layout.Controls.Add(actions, 0, 12); layout.SetColumnSpan(actions, 3);
         Controls.Add(layout); AcceptButton = save; CancelButton = cancel;
         ResumeLayout(false);
     }
@@ -167,7 +177,7 @@ internal sealed class MeetingSettingsDialog : Form {
         error.Text = ""; save.Enabled = false;
         try {
             var candidate = snapshot.CreateCandidate(inputs["vault_root"].Text, inputs["meeting_folder"].Text, inputs["quick_note_folder"].Text,
-                inputs["hotkey"].Text, inputs["pause_hotkey"].Text, inputs["bookmark_hotkey"].Text, inputs["quick_note_hotkey"].Text);
+                inputs["hotkey"].Text, inputs["pause_hotkey"].Text, inputs["bookmark_hotkey"].Text, inputs["quick_note_hotkey"].Text, inputs["recording_protection_seconds"].Text);
             string failure = apply(candidate);
             if (!string.IsNullOrEmpty(failure)) { error.Text = failure; return; }
             DialogResult = DialogResult.OK; Close();

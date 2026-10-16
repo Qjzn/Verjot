@@ -158,6 +158,9 @@ internal sealed class SessionCatalog {
         if (record.WorkerAlive) {
             record.State = fresh && statusState == "queued" ? "queued" : "processing";
             if (!fresh || record.Message.Length == 0) record.Message = "录音已保存，后台转写中";
+        } else if (metadataState == "discarded") {
+            record.State = "discarded";
+            record.Message = "短录音已取消，临时资料清理未完成；不会转录";
         } else if (metadataState == "recording") {
             record.State = "interrupted";
             record.Message = "上次录音中断，发现保留资料；请先检查，不能保证音频完整";

@@ -36,8 +36,6 @@ internal static class TestMeetingSettings {
     [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr window, int id);
     [DllImport("user32.dll", SetLastError = true)] static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
-    [StructLayout(LayoutKind.Sequential)] struct NativeRect { public int Left, Top, Right, Bottom; }
-    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, ref NativeRect rectangle);
     sealed class ReservedKey : IDisposable {
         readonly Thread thread;
         readonly ManualResetEvent ready = new ManualResetEvent(false), done = new ManualResetEvent(false);
@@ -219,13 +217,41 @@ internal static class TestMeetingSettings {
         try { MeetingSettingsSnapshot.Open(path); } catch (DecoderFallbackException) { invalidUtf8 = true; }
         Check(invalidUtf8 && invalidEncoding.SequenceEqual(File.ReadAllBytes(path)), "Invalid UTF-8 is rejected without silently replacing original bytes");
     }
+    static void RecordingProtection(string directory, string root) {
+        string path = Path.Combine(directory, "synthetic-protection.json"); Write(path, Config(root));
+        var snapshot = MeetingSettingsSnapshot.Open(path);
+        Check(Convert.ToInt32(snapshot.Values["recording_protection_seconds"]) == 5, "An existing config without protection defaults to five seconds");
+        var candidate = snapshot.CreateCandidate(root, "会议记录", "速记", "Ctrl+Alt+L", "Alt+Space", "Ctrl+Alt+K", "Ctrl+Alt+J", " 12 ");
+        Check(Convert.ToInt32(candidate["recording_protection_seconds"]) == 12, "Protection text becomes an integer and permits surrounding whitespace");
+        foreach (string key in snapshot.Values.Keys)
+            if (key != "recording_protection_seconds") Check(Equals(snapshot.Values[key], candidate[key]), "Editing protection preserves every other model and storage setting: " + key);
+        snapshot.Commit(candidate);
+        snapshot = MeetingSettingsSnapshot.Open(path);
+        Check(Convert.ToInt32(Candidate(snapshot, root)["recording_protection_seconds"]) == 12, "Existing seven-argument callers retain an explicitly configured protection value");
+        foreach (int value in new[] { 0, 300 }) {
+            candidate = snapshot.CreateCandidate(root, "会议记录", "速记", "Ctrl+Alt+L", "Alt+Space", "Ctrl+Alt+K", "Ctrl+Alt+J", value.ToString());
+            snapshot.Commit(candidate);
+            Check(Convert.ToInt32(MeetingSettingsSnapshot.Open(path).Values["recording_protection_seconds"]) == value, "Protection boundary saves and reloads: " + value);
+        }
+        byte[] before = File.ReadAllBytes(path);
+        foreach (string invalid in new[] { "", "-1", "301", "1.5", "five", "99999999999999999999" }) {
+            string message = null;
+            try { snapshot.CreateCandidate(root, "会议记录", "速记", "Ctrl+Alt+L", "Alt+Space", "Ctrl+Alt+K", "Ctrl+Alt+J", invalid); }
+            catch (InvalidOperationException error) { message = error.Message; }
+            Check(message != null && message.Contains("0 到 300") && message.Contains("整数"), "Invalid protection has an actionable validation message: " + invalid);
+            Check(before.SequenceEqual(File.ReadAllBytes(path)), "Invalid protection does not touch the config: " + invalid);
+        }
+        candidate = Candidate(snapshot, root); candidate["recording_protection_seconds"] = -1;
+        Check(Reject(delegate { snapshot.Commit(candidate); }), "Persistence independently validates the protection range");
+        Check(before.SequenceEqual(File.ReadAllBytes(path)), "Rejected protection commit leaves all original bytes intact");
+    }
     static TextBox Input(Form form, string name) {
         return (TextBox)form.Controls.Find(name, true)[0];
     }
     static void CheckLayout(Form form, string screenshot) {
-        Application.DoEvents();
+        form.Refresh(); Application.DoEvents();
         foreach (Control input in form.Controls[0].Controls) {
-            Check(form.Controls[0].ClientRectangle.Contains(input.Bounds), "Every settings row fits the client area at " + form.DeviceDpi + " DPI: " + input.Text);
+            Check(form.Controls[0].ClientRectangle.Contains(input.Bounds), "Every settings row fits the client area at " + form.DeviceDpi + " DPI: " + input.GetType().Name + " " + input.Text + "; " + input.Bounds + " inside " + form.Controls[0].ClientRectangle);
             if (input is Label && !string.IsNullOrEmpty(input.Text)) {
                 Size needed = TextRenderer.MeasureText(input.Text, input.Font, new Size(input.Width, int.MaxValue), TextFormatFlags.WordBreak);
                 Check(needed.Height <= input.Height, "Settings label is not vertically clipped at " + form.DeviceDpi + " DPI: " + input.Text);
@@ -240,20 +266,18 @@ internal static class TestMeetingSettings {
             form.Show(); Application.DoEvents();
             Check(form.Text == "verbit · 设置", "Dialog displays the new product name");
             Check(form.TopMost && !form.ShowInTaskbar && form.FormBorderStyle == FormBorderStyle.FixedDialog, "Settings remain a lightweight native tool window");
-            foreach (string key in new[] { "vault_root", "meeting_folder", "quick_note_folder", "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey" })
+            foreach (string key in new[] { "vault_root", "meeting_folder", "quick_note_folder", "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey", "recording_protection_seconds" })
                 Check(Input(form, key).Visible && Input(form, key).AccessibleName.Length > 0, "Editable and labeled setting: " + key);
+            Check(Input(form, "recording_protection_seconds").Text == "5", "Protection input displays the legacy-config default");
             CheckLayout(form, Path.Combine(directory, "settings-dialog.png"));
-            int dpi = 144;
-            double scale = (double)dpi / form.DeviceDpi;
-            var bounds = new NativeRect { Left = form.Left, Top = form.Top, Right = form.Left + (int)Math.Round(form.Width * scale), Bottom = form.Top + (int)Math.Round(form.Height * scale) };
-            SendMessage(form.Handle, 0x02e0, new IntPtr((dpi << 16) | dpi), ref bounds);
-            Application.DoEvents();
-            Check(form.DeviceDpi == dpi, "Private settings window receives a real 144 DPI change message");
-            CheckLayout(form, Path.Combine(directory, "settings-dialog-144.png"));
             Input(form, "hotkey").Text = "invalid";
             ((Button)form.AcceptButton).PerformClick();
             Check(calls == 0 && form.Visible, "Invalid field does not reach the parent or close the form");
             Input(form, "hotkey").Text = "Ctrl+Alt+L";
+            Input(form, "recording_protection_seconds").Text = "301";
+            ((Button)form.AcceptButton).PerformClick();
+            Check(calls == 0 && form.Visible && ((Label)Field(form, "error")).Text.Contains("0 到 300"), "Invalid protection remains editable without reaching apply");
+            Input(form, "recording_protection_seconds").Text = "5";
             ((Button)form.AcceptButton).PerformClick();
             Check(calls == 1 && form.Visible && ((Button)form.AcceptButton).Enabled, "Parent conflict remains editable and can be retried");
             ((Button)form.CancelButton).PerformClick();
@@ -262,8 +286,27 @@ internal static class TestMeetingSettings {
         snapshot = MeetingSettingsSnapshot.Open(path);
         using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> value) { snapshot.Commit(value); calls++; return null; })) {
             form.Show(); Application.DoEvents(); Input(form, "quick_note_folder").Text = "便笺";
+            Input(form, "recording_protection_seconds").Text = "9";
             ((Button)form.AcceptButton).PerformClick();
             Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["quick_note_folder"] == "便笺", "Successful callback persists and closes");
+            Check(Convert.ToInt32(MeetingSettingsSnapshot.Open(path).Values["recording_protection_seconds"]) == 9, "Protection edited through the native dialog is persisted");
+        }
+    }
+    static void MonitorLayouts(string directory, string root) {
+        string path = Path.Combine(directory, "synthetic-monitor-layout.json"); Write(path, Config(root));
+        var snapshot = MeetingSettingsSnapshot.Open(path); int index = 0;
+        foreach (Screen screen in Screen.AllScreens) {
+            using (var form = new MeetingSettingsDialog(snapshot, delegate { throw new InvalidOperationException("Layout fixture must not apply settings"); })) {
+                // Real monitor placement lets Windows supply both client and
+                // non-client DPI; synthetic WM_DPICHANGED cannot do the latter.
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new Point(screen.WorkingArea.Left + 20, screen.WorkingArea.Top + 20);
+                form.Show(); Application.DoEvents();
+                Check(Screen.FromControl(form).DeviceName == screen.DeviceName, "Settings layout fixture opens on the intended monitor");
+                CheckLayout(form, Path.Combine(directory, "settings-monitor-" + index++ + "-dpi-" + form.DeviceDpi + ".png"));
+                Console.WriteLine("Settings layout: " + screen.DeviceName + ", " + form.DeviceDpi + " DPI, client " + form.ClientSize);
+                ((Button)form.CancelButton).PerformClick();
+            }
         }
     }
     [STAThread]
@@ -273,7 +316,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
-            Persistence(directory, root, nextRoot); Interface(directory, root); ContextIntegration(root, nextRoot);
+            Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

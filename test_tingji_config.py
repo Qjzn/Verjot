@@ -30,6 +30,19 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.validate(recording_segment_seconds=10)["recording_segment_seconds"], 10)
         self.assertEqual(self.validate(mp3_bitrate_kbps=320)["mp3_bitrate_kbps"], 320)
 
+    def test_recording_protection_defaults_and_integer_boundaries(self):
+        self.assertEqual(self.validate()["recording_protection_seconds"], 5)
+        for seconds in (0, 1, 5, 300):
+            with self.subTest(seconds=seconds):
+                self.assertEqual(self.validate(recording_protection_seconds=seconds)["recording_protection_seconds"], seconds)
+        example = json.loads(Path(__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
+        self.assertEqual(example["recording_protection_seconds"], 5)
+
+    def test_recording_protection_rejects_out_of_range_and_non_integer_values(self):
+        for seconds in (-1, 301, 5.0, 0.5, "5", True, False, None, []):
+            with self.subTest(seconds=seconds), self.assertRaises(ValueError):
+                self.validate(recording_protection_seconds=seconds)
+
     def test_invalid_segment_limits_and_mp3_rates_rejected(self):
         for changes in ({"recording_segment_seconds": 9}, {"recording_segment_seconds": 601},
                         {"recording_segment_seconds": True}, {"recording_segment_seconds": "300"},

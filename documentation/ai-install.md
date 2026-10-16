@@ -86,6 +86,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath
 
 两种模式都安装 `imageio-ffmpeg==0.6.0`，Windows wheel 包含本地 FFmpeg 编码器（本次下载约 31 MB），不需要常驻服务或设置全局 PATH。编码仅在会后运行，不上传音频。更新旧环境时也要安装新增依赖，`doctor --full` 会实际检查 `libmp3lame` 编码器。默认配置为 `recording_segment_seconds: 300`、`mp3_bitrate_kbps: 192`，缺省旧配置采用同样的新会议默认值；已有 WAV 成品保持原样。
 
+`recording_protection_seconds` 缺省为整数 `5`，允许 `0`–`300`，`0` 关闭。结束时扣除整场暂停后的有效录音不足阈值，清理本场临时录音，不生成 MP3/Markdown、不调用本地或 API 转写；恰好达到阈值正常保留。单独关闭麦克风时电脑声仍录制，该时长仍计入保护时间。更新保留已有配置；新值只用于之后开始的会议。验收应分别检查不足/等于阈值、长时间暂停后仍不足、关闭麦克风但持续录电脑声、`0` 关闭，不能只看总墙钟时长。
+
 分段验收可在独立测试配置临时设 `recording_segment_seconds: 10`，完成超过 20 秒、含麦克风开关和整场暂停的双路测试，再恢复为 300。检查无损段帧数连续、交界附近标记和讲话无遗漏/重复、电脑声在麦克风关闭期间持续、MP3 完整解码与原无损时长一致、Markdown 引用唯一 MP3，正常成功后笔记目录只有两份成品。不要用更短分段测试冒充数小时硬件稳定性验收。
 
 编码回归须运行 `test_mp3_audio`：固定尾块余数 1、46、47、0 及真实复现长度，核对独立的 FFmpeg 和 libsndfile 解码帧数、最后有效信号及损坏拒绝。当前对 FFmpeg 7.1 已复现的极短尾块 Info/LAME 填充错误有受限修正，仅改本次编码产物的尾填充和标签 CRC，不改音频负载、不放宽 1 采样长度校验；未知标签或损坏文件仍保留原轨并报错，不能为了完成安装而跳过成品验证。
@@ -99,6 +101,7 @@ API 服务必须支持 OpenAI 兼容的 `POST /audio/transcriptions` 音频转�
 ```json
 {
   "transcription_mode": "api",
+  "recording_protection_seconds": 5,
   "recording_segment_seconds": 300,
   "mp3_bitrate_kbps": 192,
   "api_base_url": "https://provider.example/v1",

@@ -902,6 +902,7 @@ internal sealed class RecordingSession : IDisposable {
     public bool Stopping { get { return stopping; } }
     public bool MicrophonePaused { get { return microphonePaused; } }
     public bool RecordingPaused { get { return recordingPaused; } }
+    public bool HasStorageFailure { get { return Volatile.Read(ref storageFailureNotified) != 0; } }
     public TimeSpan Elapsed { get { return clock.Elapsed; } }
     float Peak(string kind) {
         float peak = 0;
@@ -979,7 +980,8 @@ internal sealed class RecordingSession : IDisposable {
         return cause != null;
     }
     void NotifyStorageFailure(Exception error) {
-        if (!IsStorageFailure(error) || stopping || Interlocked.CompareExchange(ref storageFailureNotified, 1, 0) != 0) return;
+        if (!IsStorageFailure(error) || Interlocked.CompareExchange(ref storageFailureNotified, 1, 0) != 0) return;
+        if (stopping) return;
         // Do not invoke the stop/save UI callback from a capture thread or while
         // holding gate: saving waits for those same threads to drain. Multiple
         // outputs can fail together when a disk fills; notify exactly once.
@@ -1177,6 +1179,71 @@ internal sealed class RecordingSession : IDisposable {
         if (deviceThread != null && deviceThread != Thread.CurrentThread) deviceThread.Join(6000);
         foreach (Source source in Snapshot()) if (source.Track != null) try { source.Track.Dispose(); } catch (Exception error) { MeetingFiles.Log(error); }
         devices.Dispose(); devicesChanged.Dispose();
+    }
+}
+
+internal static class RecordingProtection {
+    static double Seconds(object value) {
+        if (!(value is double || value is int || value is long || value is decimal)) throw new IOException("录音保护时长数据无效，原始资料已保留。");
+        double seconds = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0) throw new IOException("录音保护时长数据无效，原始资料已保留。");
+        return seconds;
+    }
+    public static bool ShouldDiscard(Dictionary<string, object> metadata, int protectionSeconds) {
+        if (protectionSeconds < 0 || protectionSeconds > 300) throw new ArgumentOutOfRangeException("protectionSeconds");
+        if (protectionSeconds == 0) return false;
+        if (metadata == null) throw new IOException("缺少录音时长资料，原始资料已保留。");
+        object duration;
+        if (!metadata.TryGetValue("duration_seconds", out duration)) throw new IOException("缺少录音时长，原始资料已保留。");
+        double total = Seconds(duration), paused = 0, previousEnd = 0;
+        object pauses;
+        if (metadata.TryGetValue("recording_pauses", out pauses)) {
+            var ranges = pauses as System.Collections.IList;
+            if (ranges == null) throw new IOException("整场暂停数据无效，原始资料已保留。");
+            foreach (object item in ranges) {
+                var range = item as Dictionary<string, object>;
+                object first, last;
+                if (range == null || !range.TryGetValue("start_seconds", out first) || !range.TryGetValue("end_seconds", out last))
+                    throw new IOException("整场暂停区间无效，原始资料已保留。");
+                double start = Seconds(first), end = Seconds(last);
+                if (start < previousEnd || end < start || end > total) throw new IOException("整场暂停时间线无效，原始资料已保留。");
+                paused += end - start; previousEnd = end;
+            }
+        }
+        // Subtracting decimal pause boundaries can put exactly five seconds a
+        // fraction of a nanosecond below five. Keep that boundary conservatively.
+        return total - paused + 1e-9 < protectionSeconds;
+    }
+    public static void Discard(string session) {
+        string work = Path.GetFullPath(Path.Combine(MeetingFiles.Home, "work"));
+        session = Path.GetFullPath(session).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(Path.GetDirectoryName(session), work, StringComparison.OrdinalIgnoreCase) ||
+            !Regex.IsMatch(Path.GetFileName(session), @"\A[0-9]{8}-[0-9]{6}(?:-[0-9a-f]{8})?\z"))
+            throw new IOException("短录音清理路径不在本程序的会议临时目录内。");
+        MeetingConfig.CheckOrdinaryPath(session);
+        string metadataPath = Path.Combine(session, "session.json");
+        MeetingConfig.CheckOrdinaryPath(metadataPath);
+        var metadata = MeetingFiles.ReadJson(metadataPath);
+        string state = MeetingFiles.Text(metadata, "state", "");
+        if ((state != "recorded" && state != "recorded_with_error") ||
+            !string.Equals(MeetingFiles.Text(metadata, "session_dir", ""), session, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("短录音会话身份或状态不匹配，资料未清理。");
+        if (Directory.GetDirectories(session).Length != 0) throw new IOException("短录音目录存在其他资料，未自动清理。");
+        string[] files = Directory.GetFiles(session);
+        foreach (string file in files) {
+            MeetingConfig.CheckOrdinaryPath(file);
+            string name = Path.GetFileName(file);
+            if (name != "session.json" && name != "controller.json" &&
+                !Regex.IsMatch(name, @"\A(?:mic|system)(?:_[0-9]{2,})?(?:\.seg[0-9]{6})?\.wav\z"))
+                throw new IOException("短录音目录存在非录音临时文件，未自动清理。");
+        }
+        // Persist cancellation before removing files: interrupted cleanup must
+        // never turn the remaining short capture into a retryable ASR job.
+        metadata["state"] = "discarded";
+        MeetingFiles.WriteJson(metadataPath, metadata);
+        foreach (string file in files) if (!string.Equals(file, metadataPath, StringComparison.OrdinalIgnoreCase)) File.Delete(file);
+        File.Delete(metadataPath);
+        Directory.Delete(session, false);
     }
 }
 
@@ -2013,9 +2080,11 @@ internal sealed class MeetingContext : ApplicationContext {
     RecordingSession recording;
     QuickNoteWindow quickNote;
     string lastSession;
+    string previousRecordingSession;
     string focusedSession;
     SessionRecord focusedRecord;
     bool exiting;
+    bool preserveShortRecording;
     int deviceCheckTicks;
     string StartHotkey { get { return (string)config["hotkey"]; } }
     string PauseHotkey { get { return (string)config["pause_hotkey"]; } }
@@ -2161,17 +2230,20 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void Start() {
         try {
+            preserveShortRecording = false;
             hotkey.EnablePause(true);
             RecordingSession startedSession = null;
             startedSession = new RecordingSession(config, delegate(Exception error) {
                 OnUi(delegate {
                     if (recording == null || !object.ReferenceEquals(recording, startedSession)) return;
+                    preserveShortRecording = true;
                     panel.SetDeviceWarning("录音异常，正在保存已录内容");
                     Notice("录音异常", error.Message + " 已录内容会保留。", ToolTipIcon.Warning); Stop();
                 });
             });
             recording = startedSession;
             catalog.SaveWorker(recording.DirectoryPath, null);
+            previousRecordingSession = lastSession;
             SaveLastSession(recording.DirectoryPath, null);
             focusedSession = recording.DirectoryPath;
             focusedRecord = null;
@@ -2196,7 +2268,7 @@ internal sealed class MeetingContext : ApplicationContext {
             MeetingFiles.Log(error);
             // If persistence failed after capture started, close the capture
             // through the ordinary save path rather than orphaning a recorder.
-            if (recording != null) { Stop(); return; }
+            if (recording != null) { preserveShortRecording = true; Stop(); return; }
             Notice("无法开始录音", error.Message, ToolTipIcon.Error);
             MessageBox.Show(error.Message, MeetingBrand.Name, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -2247,23 +2319,49 @@ internal sealed class MeetingContext : ApplicationContext {
         pauseMicrophone.Enabled = false;
         bookmark.Enabled = false;
         silence.Reset();
-        panel.ShowStatus("正在保存录音", "正在关闭两路录音文件");
+        panel.ShowStatus("正在结束录音", "正在关闭两路录音文件");
+        int protectionSeconds = config.ContainsKey("recording_protection_seconds") ? Convert.ToInt32(config["recording_protection_seconds"]) : 5;
+        bool preserveShort = preserveShortRecording;
         ended.StopAsync(delegate(Exception error) {
-            OnUi(delegate {
-                recording = null;
-                toggle.Text = "开始录音 · " + StartHotkey;
-                tray.Icon = MeetingBrand.IdleIcon;
-                focusedSession = ended.DirectoryPath;
-                if (error != null) {
-                    RecordLaunchFailure(ended.DirectoryPath, "录音保存异常，请检查原始资料：" + error.Message);
-                    Notice("录音保存异常", "已保留原始文件，请从最近会议检查这场资料。", ToolTipIcon.Error);
-                } else LaunchWorker(ended.DirectoryPath);
-                RefreshFeedback();
-                if ((bool)config["show_processing_window"] && !exiting) panel.Show();
-                else panel.Hide();
-                if (exiting) ExitThread();
-            });
+            bool discarded = false;
+            if (error == null) try {
+                bool shortRecording = RecordingProtection.ShouldDiscard(MeetingFiles.ReadJson(Path.Combine(ended.DirectoryPath, "session.json")), protectionSeconds);
+                if (shortRecording && (preserveShort || ended.HasStorageFailure)) throw new IOException("保护时间内因录音异常停止，原始资料已保留供检查，未自动转录。");
+                discarded = shortRecording;
+                if (discarded) RecordingProtection.Discard(ended.DirectoryPath);
+            } catch (Exception failure) { error = failure; MeetingFiles.Log(failure); }
+            OnUi(delegate { CompleteStoppedRecording(ended.DirectoryPath, discarded, error); });
         });
+    }
+    void CompleteStoppedRecording(string session, bool discarded, Exception error) {
+        recording = null;
+        toggle.Text = "开始录音 · " + StartHotkey;
+        tray.Icon = MeetingBrand.IdleIcon;
+        focusedSession = session;
+        if (discarded) {
+            if (error == null) {
+                focusedSession = null; focusedRecord = null;
+                try {
+                    if (string.Equals(lastSession, session, StringComparison.OrdinalIgnoreCase)) {
+                        lastSession = null;
+                        if (!string.IsNullOrEmpty(previousRecordingSession) && Directory.Exists(previousRecordingSession)) SaveLastSession(previousRecordingSession, null);
+                        else {
+                            string pointer = Path.Combine(MeetingFiles.Home, "last-session.json");
+                            MeetingConfig.CheckOrdinaryPath(pointer);
+                            if (File.Exists(pointer) && string.Equals(MeetingFiles.Text(MeetingFiles.ReadJson(pointer), "session_dir", ""), session, StringComparison.OrdinalIgnoreCase)) File.Delete(pointer);
+                        }
+                    }
+                } catch (Exception failure) { MeetingFiles.Log(failure); }
+                Notice("短录音已取消", "未达到保护时间，未保留录音或转录文件。", ToolTipIcon.Info);
+            } else Notice("短录音未转录", "临时资料清理未完成：" + session + "；" + error.Message, ToolTipIcon.Warning);
+        } else if (error != null) {
+            RecordLaunchFailure(session, "录音保存异常，请检查原始资料：" + error.Message);
+            Notice("录音保存异常", "已保留原始文件，请从最近会议检查这场资料。", ToolTipIcon.Error);
+        } else LaunchWorker(session);
+        RefreshFeedback();
+        if (!discarded && (bool)config["show_processing_window"] && !exiting) panel.Show();
+        else panel.Hide();
+        if (exiting) ExitThread();
     }
     static string Quote(string text) { return "\"" + text.Replace("\"", "\\\"") + "\""; }
     static void OpenFolder(string path) {

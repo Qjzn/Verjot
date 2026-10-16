@@ -22,6 +22,7 @@
 !/MeetingActions.cs
 !/MeetingSettings.cs
 !/TestMeetingSettings.cs
+!/TestRecordingProtection.cs
 !/test_first_use.py
 !/Register-Playback.ps1
 !/TestMeetingActions.cs

@@ -13,6 +13,7 @@
     "mic_device_id": {"type": "string", "default": "", "description": "空值跟随系统默认麦克风，包括录制中切换；非空固定该 Windows 设备 ID。"},
     "system_device_id": {"type": "string", "default": "", "description": "非空固定该输出设备，优先于 system_capture_mode；空值由 system_capture_mode 决定。"},
     "system_capture_mode": {"type": "string", "default": "all_active", "enum": ["all_active", "default"], "description": "all_active 收录所有活动输出端点，覆盖应用分流与默认设备切换；default 只跟随 Windows 默认播放设备。system_device_id 非空时固定该设备。新启用设备仍需初始化；受保护或独占音频可能不可录。"},
+    "recording_protection_seconds": {"type": "integer", "default": 5, "minimum": 0, "maximum": 300, "description": "误触保护秒数；结束时有效录音时长不足此值则清理本场临时录音，不生成 MP3/Markdown、不转录。整场暂停不计时，单独关闭麦克风仍计时；等于此值保留，0关闭。仅对新会议生效。"},
     "recording_segment_seconds": {"type": "integer", "default": 300, "minimum": 10, "maximum": 600, "description": "原设备格式无损 WAV 分段时长，单位秒；达到安全字节边界会提前切分。保持同一会议时间轴，段仅为处理中间文件，成功后清理。"},
     "mp3_bitrate_kbps": {"type": "integer", "default": 192, "minimum": 128, "maximum": 320, "enum": [128, 192, 256, 320], "description": "新会议最终 MP3 固定码率，单位 kbps；默认192。识别仍使用无损原轨；旧 WAV 成品不转换。"},
     "asr_context": {"type": "string", "default": "", "maxLength": 2000, "description": "人名、术语等转写提示；不是会议正文或指令。"},

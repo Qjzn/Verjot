@@ -41,6 +41,7 @@ verbit 从程序目录中的 `config.json` 读取配置。配置与 `ObsidianMee
 | `mic_device_id` | 字符串 | `""` | 否 | 留空跟随 `Capture / Console` 默认麦克风，包括录制中变更；填写完整设备 ID 时固定该输入。 |
 | `system_device_id` | 字符串 | `""` | 否 | 非空固定该播放端点，优先于 `system_capture_mode`；留空按下面模式选择。名称不能代替 ID。 |
 | `system_capture_mode` | 字符串 | `"all_active"` | 否 | `"all_active"` 录所有活动播放端点，覆盖应用分流；`"default"` 只跟随 `Render / Multimedia` 默认端点。固定 `system_device_id` 优先。 |
+| `recording_protection_seconds` | 整数 | `5` | 否 | 误触保护，允许 `0`–`300` 秒，`0` 关闭。结束时有效录音不足此值则清理本场临时录音，不生成 MP3/Markdown、不转录；等于此值保留。整场暂停不计时，单独关闭麦克风仍计时。仅对新会议生效。 |
 | `recording_segment_seconds` | 整数 | `300` | 否 | 每段无损原轨时长，10–600 秒；若先达到安全字节边界则提前切段。按连续帧切割，不重置设备或会议时间轴。仅对新会议生效。 |
 | `mp3_bitrate_kbps` | 整数 | `192` | 否 | 最终 MP3 的固定码率，仅允许 128、192、256、320 kbps。识别仍用无损原轨；旧 WAV 成品不转换。仅对新会议生效。 |
 | `asr_context` | 字符串 | `""` | 否 | 可选的识别术语提示，最多 2000 个字符。适合项目名、产品名、专有词；不是会议内容、历史对话或摘要指令。 |
@@ -64,6 +65,8 @@ verbit 从程序目录中的 `config.json` 读取配置。配置与 `ObsidianMee
 
 默认值指代码在字段省略时采用的值，不等同于示例文件中显式填写的值。三项反馈布尔字段缺省为 `true`；旧配置省略 `animation_mode` 时采用 `"auto"`，其他已确认字段不需要改动。Python 和录音程序读取同一份 `config.schema.json` 进行字段校验和默认值补齐。
 
+保护时间内因故障自动停止，或保存、清理失败时，会保留尚存的临时资料并提示，不自动转录；正常主动结束的短录音仍按保护时间取消，非致命的设备启动告警不会单独阻止取消。
+
 `meeting_folder` 可填写 `"会议记录"` 或 `"项目A/会议记录"`；不要填写 `"../会议记录"`、`"./会议记录"`、`"D:\\会议记录"`、`"项目A//会议记录"` 或 `"CON"`。`quick_note_folder` 使用相同的相对路径规则。
 
 快捷键示例：`"Ctrl+Alt+L"`、`"Ctrl+Alt+K"`、`"Ctrl+Alt+J"`、`"Ctrl+Shift+F8"`、`"Win+F10"`、`"Alt+Space"`。须按示例大小写填写；`"L"` 缺少修饰键，`"Ctrl+Ctrl+L"` 重复修饰键，`"Ctrl+Alt+1"` 使用了不支持的普通数字键。`hotkey`、`pause_hotkey`、`bookmark_hotkey`、`quick_note_hotkey` 的实际组合必须两两不同，调换修饰键顺序也不能绕过冲突检查。合法组合仍可能被系统或其他程序占用：主快捷键注册失败会阻止启动并提示错误；暂停、重点或速记快捷键失败只提示对应键不可用，录音仍可使用。暂停与重点可从浮窗或托盘右键操作，速记可从托盘「速记便签」打开。提示会区分占用与其他 Windows 错误；需要更换组合时，退出程序、修改配置并重新启动。
@@ -84,6 +87,7 @@ verbit 从程序目录中的 `config.json` 读取配置。配置与 `ObsidianMee
   "mic_device_id": "",
   "system_device_id": "",
   "system_capture_mode": "all_active",
+  "recording_protection_seconds": 5,
   "recording_segment_seconds": 300,
   "mp3_bitrate_kbps": 192,
   "asr_context": "",
