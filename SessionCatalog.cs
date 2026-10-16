@@ -13,6 +13,7 @@ internal sealed class SessionRecord {
     public bool CanRetry, NeedsAttention, WorkerAlive;
     public int WorkerPid;
     public DateTime WorkerStartUtc;
+    public DateTime WorkerLaunchUtc, PreviousStatusWriteUtc;
 
     public Process TryOpenWorker() {
         if (WorkerPid <= 0 || WorkerStartUtc == DateTime.MinValue) return null;
@@ -80,7 +81,7 @@ internal sealed class SessionCatalog {
         catch (Exception error) { return InvalidRecord(path, error); }
     }
 
-    public void SaveWorker(string session, Process process) {
+    public void SaveWorker(string session, Process process, DateTime launchUtc = default(DateTime), DateTime previousStatusUtc = default(DateTime)) {
         session = CheckSession(session);
         string controllerPath = Path.Combine(session, "controller.json");
         var controller = ReadJson(controllerPath, true);
@@ -88,7 +89,9 @@ internal sealed class SessionCatalog {
         controller["worker_pid"] = process == null ? 0 : process.Id;
         string started = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o");
         controller["worker_start_time_utc"] = started;
-        controller["launch_time_utc"] = started;
+        controller["launch_time_utc"] = process == null ? "" : launchUtc == DateTime.MinValue ? started : launchUtc.ToUniversalTime().ToString("o");
+        if (process != null && previousStatusUtc != DateTime.MinValue) controller["previous_status_write_time_utc"] = previousStatusUtc.ToUniversalTime().ToString("o");
+        else controller.Remove("previous_status_write_time_utc");
         // A new attempt must be able to report its own final outcome.
         controller.Remove("notified_fingerprint");
         WriteJson(controllerPath, controller);
@@ -107,7 +110,8 @@ internal sealed class SessionCatalog {
         if (record.WorkerPid > 0 && (!int.TryParse(Text(controller, "worker_pid", "0"), out controllerPid) || controllerPid <= 0)) {
             controller["worker_pid"] = record.WorkerPid;
             controller["worker_start_time_utc"] = record.WorkerStartUtc.ToString("o");
-            controller["launch_time_utc"] = record.WorkerStartUtc.ToString("o");
+            controller["launch_time_utc"] = record.WorkerLaunchUtc.ToString("o");
+            if (record.PreviousStatusWriteUtc != DateTime.MinValue) controller["previous_status_write_time_utc"] = record.PreviousStatusWriteUtc.ToString("o");
         }
         controller["notified_fingerprint"] = record.Fingerprint;
         WriteJson(path, controller);
@@ -139,6 +143,12 @@ internal sealed class SessionCatalog {
                               DateTimeStyles.RoundtripKind, out started)) {
             record.WorkerPid = pid;
             record.WorkerStartUtc = started.ToUniversalTime();
+            record.WorkerLaunchUtc = record.WorkerStartUtc;
+            DateTime launch, previous;
+            if (DateTime.TryParse(Text(identity, "launch_time_utc", ""), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out launch))
+                record.WorkerLaunchUtc = launch.ToUniversalTime();
+            if (DateTime.TryParse(Text(identity, "previous_status_write_time_utc", ""), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out previous))
+                record.PreviousStatusWriteUtc = previous.ToUniversalTime();
             using (var process = record.TryOpenWorker()) record.WorkerAlive = process != null;
         }
         string statusPath = Path.Combine(session, "status.json");
@@ -154,7 +164,11 @@ internal sealed class SessionCatalog {
         record.Message = Text(status, "message", "");
         string metadataState = Text(metadata, "state", "");
         string statusState = Text(status, "state", Text(status, "status", ""));
-        bool fresh = record.WorkerPid <= 0 || (File.Exists(statusPath) && File.GetLastWriteTimeUtc(statusPath) >= record.WorkerStartUtc);
+        DateTime statusWrite = File.GetLastWriteTimeUtc(statusPath);
+        // A pre-launch boundary avoids process/file clock precision mismatch.
+        // Requiring a changed status still excludes the previous attempt.
+        bool fresh = record.WorkerPid <= 0 || (File.Exists(statusPath) && statusWrite >= record.WorkerLaunchUtc &&
+            (record.PreviousStatusWriteUtc == DateTime.MinValue || statusWrite > record.PreviousStatusWriteUtc));
         if (record.WorkerAlive) {
             record.State = fresh && statusState == "queued" ? "queued" : "processing";
             if (!fresh || record.Message.Length == 0) record.Message = "录音已保存，后台转写中";

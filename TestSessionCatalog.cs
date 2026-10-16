@@ -415,6 +415,29 @@ internal static class TestSessionCatalog {
                 "prior completed status cannot satisfy a newer terminated attempt");
         }
 
+        // Windows process creation and file-write timestamps may differ below
+        // one clock tick. Bind freshness to the pre-launch attempt boundary,
+        // while still rejecting the exact status that preceded this attempt.
+        string clockSkew = Session("20261014-144000", "recorded_with_error");
+        string clockStatus = Path.Combine(clockSkew, "status.json");
+        DateTime processStart = DateTime.UtcNow.AddSeconds(-1);
+        DateTime attemptStart = processStart.AddMilliseconds(-20);
+        DateTime statusTime = processStart.AddTicks(-6830);
+        Write(clockStatus, new { state = "completed", note_path = note, audio_path = audio });
+        File.SetLastWriteTimeUtc(clockStatus, statusTime);
+        Write(Path.Combine(clockSkew, "controller.json"), new { worker_pid = int.MaxValue,
+            worker_start_time_utc = processStart.ToString("o"), launch_time_utc = attemptStart.ToString("o"),
+            previous_status_write_time_utc = attemptStart.AddSeconds(-1).ToString("o") });
+        Equal(catalog.Get(clockSkew).State, "capture_warning", "sub-millisecond process timestamp skew must not hide current capture warnings");
+        catalog.MarkNotified(catalog.Get(clockSkew));
+        True(!catalog.Get(clockSkew).NeedsAttention, "attempt freshness survives notification persistence");
+        Write(Path.Combine(clockSkew, "controller.json"), new { worker_pid = int.MaxValue,
+            worker_start_time_utc = processStart.ToString("o"), launch_time_utc = attemptStart.ToString("o"),
+            previous_status_write_time_utc = statusTime.ToString("o") });
+        Equal(catalog.Get(clockSkew).State, "failed", "unchanged previous status cannot complete a new attempt");
+        File.SetLastWriteTimeUtc(clockStatus, attemptStart.AddTicks(-1));
+        Equal(catalog.Get(clockSkew).State, "failed", "status before the attempt must remain stale");
+
         string legacyDead = Session("20261014-145000", "recorded");
         Write(Path.Combine(legacyDead, "status.json"), new { state = "error", message = "old process failed" });
         Write(Path.Combine(home, "last-session.json"), new { session_dir = legacyDead, worker_pid = int.MaxValue,

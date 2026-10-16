@@ -2374,13 +2374,18 @@ internal sealed class MeetingContext : ApplicationContext {
         Process.Start(new ProcessStartInfo("explorer.exe", Quote(path)) { UseShellExecute = true });
     }
     void SaveLastSession(string session, Process process) {
+        SaveLastSessionWithAttempt(session, process, DateTime.MinValue, DateTime.MinValue);
+    }
+    void SaveLastSessionWithAttempt(string session, Process process, DateTime launchUtc, DateTime previousStatusUtc) {
         // Retrying an older meeting must not move the latest-meeting pointer.
         if (!string.IsNullOrEmpty(lastSession) && string.Compare(Path.GetFileName(session), Path.GetFileName(lastSession), StringComparison.OrdinalIgnoreCase) < 0) return;
         lastSession = session;
         try {
             MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home, "last-session.json"), new {
                 session_dir = session, worker_pid = process == null ? 0 : process.Id,
-                worker_start_time_utc = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o")
+                worker_start_time_utc = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o"),
+                launch_time_utc = process == null ? "" : launchUtc == DateTime.MinValue ? process.StartTime.ToUniversalTime().ToString("o") : launchUtc.ToUniversalTime().ToString("o"),
+                previous_status_write_time_utc = previousStatusUtc == DateTime.MinValue ? "" : previousStatusUtc.ToUniversalTime().ToString("o")
             });
         } catch (Exception error) { MeetingFiles.Log(error); }
     }
@@ -2393,7 +2398,8 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (lastSession == null) lastSession = record.DirectoryPath;
                 if (record.WorkerAlive) {
                     Process process = record.TryOpenWorker();
-                    if (process != null) jobs.Add(new TranscriptionJob { Session = record.DirectoryPath, Process = process, LastMessage = record.Message, WorkerStartedUtc = record.WorkerStartUtc });
+                    if (process != null) jobs.Add(new TranscriptionJob { Session = record.DirectoryPath, Process = process, LastMessage = record.Message,
+                        WorkerStartedUtc = record.WorkerLaunchUtc, PreviousStatusWriteUtc = record.PreviousStatusWriteUtc });
                 }
                 if (record.NeedsAttention) {
                     attentionCount++;
@@ -2480,7 +2486,7 @@ internal sealed class MeetingContext : ApplicationContext {
             if (process == null) throw new IOException("未能启动转写进程。");
             startedProcess = process;
             jobs.Add(new TranscriptionJob { Session = session, Process = process, PreviousStatusWriteUtc = previousStatus, WorkerStartedUtc = attemptStarted });
-            try { catalog.SaveWorker(session, process); }
+            try { catalog.SaveWorker(session, process, attemptStarted, previousStatus); }
             catch (Exception persistenceError) {
                 MeetingFiles.Log(persistenceError);
                 // Legacy identity is a fallback if the per-meeting file suddenly
@@ -2488,12 +2494,13 @@ internal sealed class MeetingContext : ApplicationContext {
                 try {
                     MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home, "last-session.json"), new {
                         session_dir = session, worker_pid = process.Id,
-                        worker_start_time_utc = process.StartTime.ToUniversalTime().ToString("o")
+                        worker_start_time_utc = process.StartTime.ToUniversalTime().ToString("o"),
+                        launch_time_utc = attemptStarted.ToString("o"), previous_status_write_time_utc = previousStatus.ToString("o")
                     });
                 } catch (Exception fallbackError) { MeetingFiles.Log(fallbackError); }
                 Notice("进度信息保存异常", "转写仍在进行，请等待这场完成后退出verbit；原始资料已保留。", ToolTipIcon.Warning);
             }
-            SaveLastSession(session, process);
+            SaveLastSessionWithAttempt(session, process, attemptStarted, previousStatus);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
             RefreshFeedback();
             Notice("录音已保存 · " + record.Label, ((string)config["transcription_mode"] == "api" ? "讲话片段将提交配置的 API。" : "后台本地转写中。") + "托盘 → 最近会议可查看这场进度。", ToolTipIcon.Info);
