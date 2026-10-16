@@ -45,11 +45,16 @@ internal sealed class QuickNoteInputBox : NativeNoteInputBox {
         if (code == 0x432) { message.Result = IntPtr.Zero; return; } // EM_CANPASTE: disable default paste availability
         if (code == 0x7b) { if (UserContextMenu != null) UserContextMenu(); message.Result = IntPtr.Zero; return; }
         if (code == 0x304 || code == 0xc7 || code == 0x454) { if (UndoOrRedo != null) UndoOrRedo(); }
+        if ((code == 0x100 || code == 0x102) && message.WParam.ToInt64() == 13 && !CompositionActive && !ReadOnly && InsertNewline != null && (ModifierKeys & (Keys.Control | Keys.Alt)) == Keys.None) {
+            // RichEdit50 edits on Return KeyDown as well as WM_CHAR. Keep the
+            // naturally translated character as the only insertion route.
+            if (!ProcessKeyMessage(ref message) && code == 0x102) InsertNewline();
+            message.Result = IntPtr.Zero; return;
+        }
         if (code == 0x102) {
             int character = unchecked((int)message.WParam.ToInt64());
             if (character == 22) { if (UserPaste != null) UserPaste(); message.Result = IntPtr.Zero; return; }
             if (character == 3 || character == 24) { if (UserCopyOrCut != null) UserCopyOrCut(character == 24); message.Result = IntPtr.Zero; return; }
-            if (character == 13 && !CompositionActive && !ReadOnly && InsertNewline != null) { InsertNewline(); message.Result = IntPtr.Zero; return; }
             if (character == 26 && UndoOrRedo != null) UndoOrRedo();
         }
         if (code == 0x10d) { compositionActive = true; if (CompositionChanged != null) CompositionChanged(true); }
