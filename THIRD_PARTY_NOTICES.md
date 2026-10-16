@@ -8,4 +8,4 @@
 - Python dependencies listed in `requirements.txt` / `requirements-api.txt` and PyTorch retain their own licenses.
 - [imageio-ffmpeg 0.6.0](https://github.com/imageio/imageio-ffmpeg/tree/v0.6.0): BSD-2-Clause for the Python wrapper. Its Windows wheel separately includes an FFmpeg executable; that executable and its compiled codecs retain their upstream licenses. See [FFmpeg legal information](https://ffmpeg.org/legal.html) and the installed binary's `-L` / `-buildconf` output. The executable is installed locally, not committed to this repository.
 
-The blue/red waveform artwork in `assets/` was created for this project. SVG sources and `Create-Icons.ps1` reproduce the PNG/ICO assets.
+The current candidate logo is `assets/verbit-logo.png`, generated for this project with the built-in image tool; its exact model version was not exposed. `assets/Create-Icons.ps1` packages that PNG into the current ICO resources and adds the recording-state indicator. The blue/red waveform SVG files are legacy artwork, not the source of the current icons. A replacement logo remains subject to user confirmation.
