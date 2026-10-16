@@ -1,4 +1,4 @@
-# 片言 Verbit：首次真实验收
+# verbit：首次真实验收
 
 `doctor --full` 只检查依赖、配置、模型文件、编码器及设备枚举。它不会录音、播放、加载转写模型或调用 API，不能用它的成功代替“这台电脑能开会”。
 
@@ -16,7 +16,7 @@
 .\.venv\Scripts\python.exe -B tingji.py verify --seconds 20 --consent-record --json
 ```
 
-如果需要片言播放测试音，先准备自己有权使用的、已知逐字稿的 PCM WAV。测试音必须小于 32 MiB、单/双声道、长度至少比录制时长短 1 秒。只有获得播放同意才加以下两个参数。播放使用 Windows 默认输出，保持原音量；命令不会替用户切换扬声器或耳机。
+如果需要 verbit 播放测试音，先准备自己有权使用的、已知逐字稿的 PCM WAV。测试音必须小于 32 MiB、单/双声道、长度至少比录制时长短 1 秒。只有获得播放同意才加以下两个参数。播放使用 Windows 默认输出，保持原音量；命令不会替用户切换扬声器或耳机。
 
 ```powershell
 .\.venv\Scripts\python.exe -B tingji.py verify --seconds 30 --consent-record `

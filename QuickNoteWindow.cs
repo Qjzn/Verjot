@@ -147,7 +147,7 @@ internal sealed class QuickNoteWindow : Form {
         this.store = store; this.stateRoot = Path.GetFullPath(stateRoot); this.beforeStorageWork = beforeStorageWork;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         uiFont = new Font("Microsoft YaHei UI", 9); editorFont = new Font("Microsoft YaHei UI", 10.5f); Font = uiFont;
-        Text = "片言 · 速记"; ShowInTaskbar = false; TopMost = true;
+        Text = "verbit · 速记"; ShowInTaskbar = false; TopMost = true;
         MaximizeBox = MinimizeBox = false; FormBorderStyle = FormBorderStyle.Sizable;
         ClientSize = new Size(360, 420); MinimumSize = new Size(280, 240);
         StartPosition = FormStartPosition.Manual; BackColor = Color.FromArgb(250, 250, 248);

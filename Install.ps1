@@ -45,8 +45,8 @@ function Assert-OrdinaryDirectory([string]$Path) {
 function Get-RecorderProcesses {
     foreach ($taskProcess in @(Get-Process -Name 'ObsidianMeeting*' -ErrorAction SilentlyContinue)) {
         try { $taskProcessPath = $taskProcess.Path }
-        catch { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出片言后再安装。" }
-        if (-not $taskProcessPath) { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出片言后再安装。" }
+        catch { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出 verbit 后再安装。" }
+        if (-not $taskProcessPath) { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出 verbit 后再安装。" }
         if ([IO.Path]::GetDirectoryName($taskProcessPath) -ieq $taskRoot) { $taskProcess }
     }
 }
@@ -140,7 +140,7 @@ try {
     [Console]::OutputEncoding = $taskUtf8
     $env:PYTHONIOENCODING = 'utf-8'
     if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) { throw '安装仅支持 64 位 Windows。' }
-    if ($taskRunning.Count) { throw '本目录片言正在运行。请从托盘正常退出后再安装；不要中断录音。' }
+    if ($taskRunning.Count) { throw '本目录 verbit 正在运行。请从托盘正常退出后再安装；不要中断录音。' }
     foreach ($taskRequired in @('Build.ps1', $taskRequirements, 'download_models.py', 'config.example.json', 'tingji.py', 'config.schema.json', 'Install-Shortcuts.ps1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $taskRoot $taskRequired) -PathType Leaf)) { throw "安装源码缺失：$taskRequired" }
     }
@@ -265,8 +265,8 @@ print(json.dumps(value))
     Invoke-Checked $taskPython $taskModelArguments
 
     $taskPhase = 'build'
-    Set-InstallStatus 'installing' '构建片言桌面程序'
-    if (@(Get-RecorderProcesses).Count) { throw '片言在安装过程中启动了。请从托盘正常退出后重试；未覆盖运行中的程序。' }
+    Set-InstallStatus 'installing' '构建 verbit 桌面程序'
+    if (@(Get-RecorderProcesses).Count) { throw 'verbit 在安装过程中启动了。请从托盘正常退出后重试；未覆盖运行中的程序。' }
     & (Join-Path $taskRoot 'Build.ps1')
     $taskPhase = 'config'
     if (-not $taskExistingConfig) {

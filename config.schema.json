@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "片言配置",
+  "title": "verbit 配置",
   "type": "object",
   "additionalProperties": false,
   "required": ["vault_root"],
@@ -25,7 +25,7 @@
     "silence_warning_seconds": {"type": "integer", "default": 60, "minimum": 0, "maximum": 3600, "description": "两路持续无明显输入时提醒一次；0关闭。整场暂停不提醒，有声恢复后重新计时。"},
     "open_in_obsidian": {"type": "boolean", "default": true, "description": "true 使用 Obsidian；false 只保存普通 Markdown，不自动打开应用。旧配置缺省 true。"},
     "show_processing_window": {"type": "boolean", "default": true, "description": "结束后用原有 186×68 浮窗显示后台阶段或真实片段进度；可收起。false 仍可通过托盘查看状态。"},
-    "animation_mode": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto", "description": "auto 跟随 Windows 客户区动画及高对比设置；on 仅为片言开启动效；off 关闭非必要动效。均不更改 Windows 设置，不影响真实输入和进度。"},
+    "animation_mode": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto", "description": "auto 跟随 Windows 客户区动画及高对比设置；on 仅为 verbit 开启动效；off 关闭非必要动效。均不更改 Windows 设置，不影响真实输入和进度。"},
     "notify_device_changes": {"type": "boolean", "default": true, "description": "提醒设备变化；关闭只影响提示，不关闭自动跟随/所有活动输出捕获。固定设备 ID 不随默认设备变化。不把安静当作故障。"},
     "auto_open_completed_note": {"type": "boolean", "default": true, "description": "仅在 open_in_obsidian 为 true 且当前没有录音时，自动打开刚完成的笔记；录音中完成或启动时找回的成品由托盘手动打开。"},
     "transcription_mode": {"type": "string", "enum": ["local", "api"], "default": "local"},

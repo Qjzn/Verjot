@@ -25,7 +25,7 @@ internal sealed class MeetingPlaybackRequest {
             !Uri.TryCreate(text, UriKind.Absolute, out uri) ||
             uri.Scheme != "pianyan" || uri.Host != "play" || uri.UserInfo.Length != 0 || !uri.IsDefaultPort ||
             (uri.AbsolutePath != "" && uri.AbsolutePath != "/") || uri.Fragment.Length != 0)
-            throw new InvalidOperationException("这不是有效的片言回听链接。");
+            throw new InvalidOperationException("这不是有效的verbit回听链接。");
         string session = null, seconds = null;
         foreach (string part in uri.Query.Substring(1).Split('&')) {
             if (part.StartsWith("session=", StringComparison.Ordinal) && session == null) session = part.Substring(8);
@@ -131,7 +131,7 @@ internal sealed class MeetingPlaybackWindow : Form {
         try {
             if (double.IsNaN(playback.Duration) || double.IsInfinity(playback.Duration) || playback.Duration <= 0)
                 throw new IOException("录音没有有效的可播放时长。");
-            Text = "片言 · 录音回听"; Font = dpiFont; AutoScaleMode = AutoScaleMode.Dpi;
+            Text = "verbit · 录音回听"; Font = dpiFont; AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96, 96); ClientSize = new Size(360, 125); MinimumSize = new Size(340, 160);
             Padding = new Padding(12); StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = true;
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, WrapContents = false };

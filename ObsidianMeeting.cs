@@ -13,19 +13,22 @@ using System.Windows.Forms;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
-[assembly: System.Reflection.AssemblyTitle("片言")]
-[assembly: System.Reflection.AssemblyProduct("片言 Verbit")]
+[assembly: System.Reflection.AssemblyTitle("verbit")]
+[assembly: System.Reflection.AssemblyProduct("verbit")]
 [assembly: System.Reflection.AssemblyDescription("轻量中文会议录音与转写")]
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
 
 internal static class MeetingBrand {
-    public const string Name = "片言";
-    public static readonly Icon IdleIcon = LoadIcon("Tingji.Idle.ico");
-    public static readonly Icon RecordingIcon = LoadIcon("Tingji.Recording.ico");
-    static Icon LoadIcon(string resource) {
+    public const string Name = "verbit";
+    public static readonly Icon IdleIcon = LoadIcon("Tingji.Idle.ico", SystemInformation.SmallIconSize.Width);
+    public static readonly Icon RecordingIcon = LoadIcon("Tingji.Recording.ico", SystemInformation.SmallIconSize.Width);
+    public static Bitmap LogoBitmap(int pixels) {
+        using (var icon = LoadIcon("Tingji.Idle.ico", pixels)) return icon.ToBitmap();
+    }
+    static Icon LoadIcon(string resource, int pixels) {
         using (var stream = typeof(MeetingBrand).Assembly.GetManifestResourceStream(resource)) {
-            if (stream == null) throw new IOException("片言图标资源缺失，请运行 Build.ps1 重新构建。");
-            using (var icon = new Icon(stream)) return (Icon)icon.Clone();
+            if (stream == null) throw new IOException("verbit图标资源缺失，请运行 Build.ps1 重新构建。");
+            using (var icon = new Icon(stream, new Size(pixels, pixels))) return (Icon)icon.Clone();
         }
     }
 }
@@ -99,7 +102,7 @@ internal static class MeetingConfig {
     }
     public static Dictionary<string, object> Validate(Dictionary<string, object> config) {
         var schema = MeetingFiles.ReadJson(Path.Combine(MeetingFiles.Home, "config.schema.json"));
-        if (!schema.ContainsKey("properties")) throw new IOException("缺少 config.schema.json，请保留完整片言源码目录。");
+        if (!schema.ContainsKey("properties")) throw new IOException("缺少 config.schema.json，请保留完整verbit源码目录。");
         var properties = (Dictionary<string, object>)schema["properties"];
         if (config == null) throw new InvalidOperationException("config.json 顶层必须是对象。");
         foreach (string key in config.Keys) if (!properties.ContainsKey(key)) throw new InvalidOperationException("未知配置字段：" + key);
@@ -167,7 +170,7 @@ internal static class MeetingConfig {
                 throw new InvalidOperationException("api_base_url 必须是无密钥、无查询参数的 HTTP(S) API 前缀。");
             if (string.IsNullOrWhiteSpace((string)config["api_model"])) throw new InvalidOperationException("API 模式必须填写 api_model 音频转写模型名。");
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable((string)config["api_key_env"])))
-                throw new InvalidOperationException("未设置 API 密钥环境变量：" + (string)config["api_key_env"] + "；设置后重新启动片言。");
+                throw new InvalidOperationException("未设置 API 密钥环境变量：" + (string)config["api_key_env"] + "；设置后重新启动verbit。");
         }
         return config;
     }
@@ -1436,7 +1439,7 @@ internal sealed class RecorderPanel : Form {
     Font processingHeadingFont = DpiFont("Microsoft YaHei UI", 9, 96);
     Font artifactFont = DpiFont("Microsoft YaHei UI", 8, 96);
     Font detailFont = DpiFont("Microsoft YaHei UI", 8, 96);
-    Font brandFont = DpiFont("Microsoft YaHei UI", 8, 96);
+    Font brandFont = DpiFont("Segoe UI Semibold", 8, 96);
     int fontDpi = 96;
     readonly System.Windows.Forms.Timer processingAnimation = new System.Windows.Forms.Timer { Interval = 33 };
     readonly Stopwatch processingClock = new Stopwatch();
@@ -1515,14 +1518,16 @@ internal sealed class RecorderPanel : Form {
         StopButton.SetBounds(148, 29, 28, 28);
         BackButton.SetBounds(4, 2, 22, 20);
         CollapseButton.SetBounds(160, 2, 22, 20);
-        BrandMark.SetBounds(68, 5, 14, 14);
-        BrandMark.Image = MeetingBrand.IdleIcon.ToBitmap();
-        BrandTitle.SetBounds(85, 3, 34, 18);
+        BrandMark.SetBounds(63, 4, 16, 16);
+        RefreshBrandBitmap();
+        BrandMark.SizeChanged += delegate { RefreshBrandBitmap(); };
+        BrandTitle.SetBounds(83, 3, 40, 18);
         BrandTitle.Font = brandFont;
         BrandTitle.ForeColor = Color.FromArgb(36, 59, 83);
         BrandTitle.TextAlign = ContentAlignment.MiddleLeft;
         BrandTitle.Text = MeetingBrand.Name;
-        BrandTitle.AccessibleName = "片言 Verbit";
+        BrandTitle.AccessibleName = MeetingBrand.Name;
+        BrandMark.AccessibleName = MeetingBrand.Name + " Logo";
         MicrophoneButton.AccessibleName = MicrophoneButton.Text = "关闭麦克风";
         StopButton.AccessibleName = StopButton.Text = "结束整个记录";
         CollapseButton.AccessibleName = CollapseButton.Text = "关闭浮窗";
@@ -1551,6 +1556,21 @@ internal sealed class RecorderPanel : Form {
         AutoScaleDimensions = new SizeF(96, 96);
         ResumeLayout(false);
     }
+    void RefreshBrandBitmap() {
+        int pixels = Math.Max(1, Math.Min(BrandMark.Width, BrandMark.Height));
+        Image previous = BrandMark.Image;
+        BrandMark.Image = MeetingBrand.LogoBitmap(pixels);
+        if (previous != null) previous.Dispose();
+    }
+    void LayoutBrandHeader() {
+        float scale = DeviceDpi / 96f;
+        int iconSize = (int)Math.Round(16 * scale);
+        int titleWidth = (int)Math.Round(40 * scale);
+        int gap = (int)Math.Round(4 * scale);
+        int left = (ClientSize.Width - iconSize - gap - titleWidth) / 2;
+        BrandMark.SetBounds(left, (int)Math.Round(4 * scale), iconSize, iconSize);
+        BrandTitle.SetBounds(left + iconSize + gap, (int)Math.Round(3 * scale), titleWidth, (int)Math.Round(18 * scale));
+    }
     static Font DpiFont(string family, float points, int dpi) {
         return new Font(family, points * dpi / 72f, FontStyle.Regular, GraphicsUnit.Pixel);
     }
@@ -1565,7 +1585,7 @@ internal sealed class RecorderPanel : Form {
             processingHeadingFont = DpiFont("Microsoft YaHei UI", 9, fontDpi);
             artifactFont = DpiFont("Microsoft YaHei UI", 8, fontDpi);
             detailFont = DpiFont("Microsoft YaHei UI", 8, fontDpi);
-            brandFont = DpiFont("Microsoft YaHei UI", 8, fontDpi);
+            brandFont = DpiFont("Segoe UI Semibold", 8, fontDpi);
         }
         // Pixel fonts avoid reusing a system-DPI GDI font at another monitor DPI.
         Time.Font = Time.Text.Length > 5 ? timeLong : timeNormal;
@@ -1573,6 +1593,7 @@ internal sealed class RecorderPanel : Form {
         Detail.Font = detailFont;
         AudioFile.Font = TranscriptFile.Font = artifactFont;
         BrandTitle.Font = brandFont;
+        LayoutBrandHeader();
         if (previous != null) foreach (Font font in previous) font.Dispose();
     }
     void Drag(object sender, MouseEventArgs e) {
@@ -1800,6 +1821,11 @@ internal sealed class RecorderPanel : Form {
         Location = new Point(Math.Max(work.Left, work.Right - Width - 24), Math.Max(work.Top, work.Bottom - Height - 24));
         RestoreDpiFonts();
     }
+    protected override void OnDpiChanged(DpiChangedEventArgs e) {
+        base.OnDpiChanged(e);
+        // Re-align after Windows/WinForms finish rounding the scaled child bounds.
+        if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(delegate { if (!IsDisposed) RestoreDpiFonts(); }));
+    }
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override void Dispose(bool disposing) {
         if (disposing) {
@@ -1974,7 +2000,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly ToolStripMenuItem toggle = new ToolStripMenuItem("开始录音");
     readonly ToolStripMenuItem pauseRecording = new ToolStripMenuItem("暂停整场录音");
     readonly ToolStripMenuItem pauseMicrophone = new ToolStripMenuItem("关闭麦克风");
-    readonly ToolStripMenuItem summary = new ToolStripMenuItem("片言已就绪") { Enabled = false };
+    readonly ToolStripMenuItem summary = new ToolStripMenuItem("verbit已就绪") { Enabled = false };
     readonly ToolStripMenuItem recent = new ToolStripMenuItem("最近会议");
     readonly ToolStripMenuItem bookmark = new ToolStripMenuItem("标记重点") { Name = "bookmark", Enabled = false };
     readonly ToolStripMenuItem rename = new ToolStripMenuItem("命名这场会议…") { Name = "rename", Enabled = false };
@@ -2053,7 +2079,7 @@ internal sealed class MeetingContext : ApplicationContext {
         menu.Items.Add("首次使用检查…", null, delegate { OpenFirstUseGuide(); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, delegate { RequestExit(); });
-        tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "片言 · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
+        tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "verbit · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
         tray.DoubleClick += delegate { RefreshFeedback(); panel.Show(); panel.Activate(); };
         panel.StopButton.Click += delegate { Stop(); };
         panel.MicrophoneButton.Click += delegate { ToggleMicrophone(); };
@@ -2061,7 +2087,7 @@ internal sealed class MeetingContext : ApplicationContext {
         panel.BackRequested += delegate { focusedSession = null; focusedRecord = null; RefreshFeedback(); };
         panel.Time.Text = "00:00";
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
-        panel.ShowStatus("片言已就绪", StartHotkey + " 开始录制");
+        panel.ShowStatus("verbit已就绪", StartHotkey + " 开始录制");
         timer = new System.Windows.Forms.Timer { Interval = 500 };
         timer.Tick += delegate { Tick(); };
         RestoreSessions();
@@ -2126,7 +2152,7 @@ internal sealed class MeetingContext : ApplicationContext {
             quickNote.Toggle();
         } catch (Exception error) { MeetingFiles.Log(error); Notice("无法打开速记便签", error.Message, ToolTipIcon.Warning); }
     }
-    void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "片言 · " + title, message, icon); }
+    void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "verbit · " + title, message, icon); }
     void OnUi(Action action) { if (!dispatch.IsDisposed) try { dispatch.BeginInvoke(action); } catch (InvalidOperationException) { } }
     void Toggle() {
         if (exiting) return;
@@ -2362,7 +2388,7 @@ internal sealed class MeetingContext : ApplicationContext {
                         worker_start_time_utc = process.StartTime.ToUniversalTime().ToString("o")
                     });
                 } catch (Exception fallbackError) { MeetingFiles.Log(fallbackError); }
-                Notice("进度信息保存异常", "转写仍在进行，请等待这场完成后退出片言；原始资料已保留。", ToolTipIcon.Warning);
+                Notice("进度信息保存异常", "转写仍在进行，请等待这场完成后退出verbit；原始资料已保留。", ToolTipIcon.Warning);
             }
             SaveLastSession(session, process);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
@@ -2453,7 +2479,7 @@ internal sealed class MeetingContext : ApplicationContext {
         rename.Enabled = recording == null && focusedRecord != null && focusedRecord.State == "completed" && !focusedRecord.WorkerAlive;
         if (recording != null) {
             string state = recording.Stopping ? "正在保存录音" : recording.RecordingPaused ? "整场已暂停" : recording.MicrophonePaused ? "麦克风已关闭 · 电脑声录制中" : "录音中";
-            string text = "片言 · " + state + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
+            string text = "verbit · " + state + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
             summary.Text = text; SetTrayText(text);
             return;
         }
@@ -2464,7 +2490,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     string label = focusedRecord == null ? Path.GetFileName(focusedSession) : focusedRecord.Label;
                     panel.ShowWorking(title, label);
                     summary.Text = label + " · " + title + (jobs.Count > 1 ? " · 后台 " + jobs.Count + " 场" : "");
-                    SetTrayText("片言 · " + summary.Text); return;
+                    SetTrayText("verbit · " + summary.Text); return;
                 }
             }
             {
@@ -2473,7 +2499,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     MeetingFiles.Log(error);
                     panel.ShowProcessing("会议资料需要检查", "资料未修改，请检查 work 中对应场次");
                     summary.Text = "会议资料需要检查" + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
-                    SetTrayText("片言 · " + summary.Text); return;
+                    SetTrayText("verbit · " + summary.Text); return;
                 }
             }
             if (focusedRecord != null && focusedRecord.State == "removed") {
@@ -2488,12 +2514,12 @@ internal sealed class MeetingContext : ApplicationContext {
                 else if (focusedRecord.WorkerAlive) panel.ShowWorking(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 else panel.ShowProcessing(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
-                SetTrayText("片言 · " + summary.Text); return;
+                SetTrayText("verbit · " + summary.Text); return;
             }
         }
-        panel.ShowStatus(jobs.Count > 0 ? "后台转写中" : "片言已就绪", jobs.Count > 0 ? jobs.Count + " 场 · 可开始新会议" : StartHotkey + " 开始录制");
+        panel.ShowStatus(jobs.Count > 0 ? "后台转写中" : "verbit已就绪", jobs.Count > 0 ? jobs.Count + " 场 · 可开始新会议" : StartHotkey + " 开始录制");
         panel.BackButton.Enabled = false;
-        summary.Text = "片言已就绪"; SetTrayText("片言 · " + StartHotkey);
+        summary.Text = "verbit已就绪"; SetTrayText("verbit · " + StartHotkey);
     }
     static string StateLabel(string state) {
         switch (state) {
@@ -2854,7 +2880,7 @@ internal static class Program {
                 MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home, "timeline-self-test.json"), new { passed = false, error = error.Message });
                 return 1;
             }
-            MessageBox.Show(error.Message, "片言", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(error.Message, "verbit", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }

@@ -39,7 +39,12 @@ internal static class TestRecorderPanel {
                 Application.DoEvents();
                 Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Panel must remain 186 x 68");
                 Check(panel.TopMost && !panel.ShowInTaskbar, "Panel must be topmost without a taskbar window");
-                Check(panel.BrandTitle.Text == "片言" && panel.BrandMark.Image != null, "The header must show the product logo and new name");
+                Check(panel.BrandTitle.Text == "verbit" && panel.BrandMark.Image != null, "The header must show the product logo and new name");
+                Size nameSize = TextRenderer.MeasureText(panel.BrandTitle.Text, panel.BrandTitle.Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                Check(nameSize.Width <= panel.BrandTitle.ClientSize.Width && nameSize.Height <= panel.BrandTitle.ClientSize.Height, "The separate verbit name must be fully readable without clipping");
+                Check(panel.BrandMark.Right < panel.BrandTitle.Left, "The logo and name must remain independent, non-overlapping elements");
+                Check(Math.Abs((panel.BrandMark.Left + panel.BrandTitle.Right) - panel.ClientSize.Width) <= 2, "The logo and name group must remain centered");
+                Check(panel.BrandMark.Image.Width >= panel.BrandMark.Width - 1 && panel.BrandMark.Image.Height >= panel.BrandMark.Height - 1, "The header must not upscale a smaller icon frame");
                 Check(panel.BackButton.Left < panel.BrandMark.Left && panel.CollapseButton.Left > panel.BrandTitle.Right, "Back, brand and close must follow the header navigation order");
                 Check(panel.CollapseButton.AccessibleName == "关闭浮窗" && !panel.BackButton.Enabled, "Close must hide only the float; recording has no previous page");
                 foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle, panel.BackButton, panel.CollapseButton }) {

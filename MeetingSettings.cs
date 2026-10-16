@@ -115,7 +115,7 @@ internal sealed class MeetingSettingsDialog : Form {
         if (snapshot == null || apply == null) throw new ArgumentNullException(snapshot == null ? "snapshot" : "apply");
         this.snapshot = snapshot; this.apply = apply;
         SuspendLayout();
-        Text = "片言 · 设置"; Icon = MeetingBrand.IdleIcon;
+        Text = "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
         ClientSize = new Size(460, 416); Padding = new Padding(16);

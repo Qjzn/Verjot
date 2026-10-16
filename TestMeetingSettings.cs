@@ -238,7 +238,7 @@ internal static class TestMeetingSettings {
         var snapshot = MeetingSettingsSnapshot.Open(path); int calls = 0;
         using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> value) { calls++; return "测试：快捷键被占用，请更换"; })) {
             form.Show(); Application.DoEvents();
-            Check(form.Text == "片言 · 设置", "Dialog displays the new product name");
+            Check(form.Text == "verbit · 设置", "Dialog displays the new product name");
             Check(form.TopMost && !form.ShowInTaskbar && form.FormBorderStyle == FormBorderStyle.FixedDialog, "Settings remain a lightweight native tool window");
             foreach (string key in new[] { "vault_root", "meeting_folder", "quick_note_folder", "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey" })
                 Check(Input(form, key).Visible && Input(form, key).AccessibleName.Length > 0, "Editable and labeled setting: " + key);
