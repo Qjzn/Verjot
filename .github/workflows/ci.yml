@@ -1,0 +1,48 @@
+name: Windows checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-and-contracts:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Restore verified NAudio 1.10.0
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path lib -Force | Out-Null
+          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/naudio/1.10.0/naudio.1.10.0.nupkg' -OutFile lib/naudio.zip
+          Expand-Archive -LiteralPath lib/naudio.zip -DestinationPath lib/package
+          Copy-Item lib/package/lib/net35/NAudio.dll lib/NAudio.dll
+          if ((Get-FileHash lib/NAudio.dll -Algorithm SHA256).Hash -ne 'BC4BACC3B8B28D898F1671B79F216CCA439F95EB60CD32D3E3ECAFBECAC42780') { throw 'NAudio hash mismatch' }
+      - name: Build desktop
+        run: .\Build.ps1 -OutputPath validation/ci-build/ObsidianMeeting.exe
+      - name: Native synthetic regressions
+        run: .\Test.ps1 -NativeOnly
+      - name: Install CPU audio test dependencies
+        run: |
+          python -m pip install -r requirements-api.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Test dependency installation failed' }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw 'Test dependency check failed' }
+      - name: Configuration, API and first-use contracts
+        run: |
+          python -B -m unittest test_tingji_config test_api_asr test_first_use
+          if ($LASTEXITCODE -ne 0) { throw 'Python contract tests failed' }

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>verbit · 快速开始</title>
+  <style>
+    :root{font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;color:#24334a;background:#f4f7fb;line-height:1.75}
+    body{max-width:700px;margin:48px auto;padding:0 24px 48px}header{display:flex;align-items:center;gap:14px;margin-bottom:30px}
+    img{width:48px;height:48px;object-fit:contain}h1{font:600 30px/1.2 "Segoe UI",sans-serif;margin:0}h2{font-size:19px;margin:26px 0 8px}
+    p{margin:8px 0}main{background:white;border:1px solid #e1e8f0;border-radius:16px;padding:8px 28px 24px}kbd{font:600 13px "Segoe UI",sans-serif;border:1px solid #dce3ed;border-radius:5px;padding:3px 7px;background:#f4f7fb;white-space:nowrap}
+    dt{margin-top:12px}dd{margin:3px 0 0;color:#53647a}a{color:#1769b3;text-underline-offset:3px}small{color:#53647a}@media(max-width:500px){body{margin:24px auto}main{padding:4px 18px 20px}}
+  </style>
+</head>
+<body>
+  <header><img src="../assets/verbit-logo.png" alt=""><div><h1>verbit</h1><small>随手记一句，轻松留下会议记录。</small></div></header>
+  <main>
+    <h2>先设置，再开始</h2>
+    <p>首次打开时，选择录音和笔记的保存目录，确认快捷键后点击「保存并启动」。之后程序驻留托盘，右键菜单中的「设置…」可以再次修改。</p>
+    <h2>速记可以直接用</h2>
+    <p>按 <kbd>Ctrl + Alt + J</kbd> 打开置顶便签。支持输入文字、粘贴图片和自动保存；收起后重新打开可继续写，不需要 Python、模型或 Obsidian。</p>
+    <h2>会议功能需要单独准备环境</h2>
+    <p>安装包不含 Python、语音模型或 FFmpeg。请先按 <a href="https://github.com/Qjzn/tingji/blob/main/documentation/install-windows.md">完整安装说明</a> 选择 API 转写或本地中文模型，再开始录音。仓库目前私有，在线说明需要仓库访问权限；离线原文位于程序目录 <a href="../documentation/install-windows.md">documentation/install-windows.md</a>。</p>
+    <dl>
+      <dt><kbd>Ctrl + Alt + L</kbd> 开始 / 结束会议</dt><dd>默认不足 5 秒的误触录音不保存、不转写。</dd>
+      <dt><kbd>Alt + Space</kbd> 暂停 / 继续整场录音</dt><dd>浮窗中的麦克风按钮只控制麦克风，电脑声音继续录制。</dd>
+      <dt><kbd>Ctrl + Alt + K</kbd> 标记重点时间</dt><dd>会后从 Markdown 中查看对应时间点。</dd>
+    </dl>
+    <h2>你的文件由你保管</h2>
+    <p>会议完成后只保留一条 MP3 和一份 Markdown。API 模式会将音频发送到你配置的服务；本地模式在本机处理。升级和卸载前，请从托盘正常退出。卸载保留配置、运行环境和已有记录。</p>
+    <p><a href="https://github.com/Qjzn/tingji">项目与最新使用说明</a> · <a href="../documentation/configuration.md">本地配置字段说明</a></p>
+  </main>
+</body>
+</html>

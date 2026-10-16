@@ -1,16 +1,39 @@
 # verbit
 
-项目名统一写作小写 **verbit**，此前显示名为「片言」「听记」。保留 `ObsidianMeeting.exe`、`tingji.py`、`TINGJI_API_KEY`、`pianyan://` 回听协议和既有状态格式，更新无需搬动笔记或重新填写模型配置。英文名与现有同领域产品重名；当前为按用户要求使用的项目名称，公开发布前需另行确认名称。
+<img src="assets/verbit-logo.png" alt="verbit Logo" width="80">
 
-项目源码采用 [MIT 许可](LICENSE)。第三方依赖、模型及 FFmpeg 的独立条款见 [第三方说明](THIRD_PARTY_NOTICES.md)；添加许可不改变仓库的私有状态。
+Windows 上随手记录想法、保存会议声音的小工具。用全局快捷键打开原生置顶便签，或用一个小浮窗控制双路录音；会议结束得到 **一条 192 kbps MP3 + 一份 Markdown 转录**。支持普通文件夹和 Obsidian，速记不依赖模型，会议可选本地中文模型或 API。
 
-浮窗仍为 186×68 逻辑像素：左上返回首页，中间独立 Logo 图形与小写名称 **verbit**，右上关闭浮窗。Logo 不含文字，托盘只使用图形；素材与小尺寸图标规则见[品牌说明](documentation/brand.md)。关闭只隐藏浮窗，录音和后台转写继续；结束会议仍点击红色方块或使用开始/结束快捷键。录音时返回按钮不可用，避免误认为可以离开录音流程而终止采集。
+[下载 Windows x64 安装版](https://github.com/Qjzn/tingji/releases/tag/v0.1.0-beta.1) · [安装与快速上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [交给 AI 安装](documentation/ai-install.md)
+
+## 界面预览
+
+186×68 逻辑像素的录音浮窗，麦克风可单独关闭，电脑声音继续收录：
+
+<img src="assets/screenshots/recording.png" alt="verbit 录音浮窗：计时、输入波形、麦克风开关与结束按钮" width="279">
+
+原生速记支持图片、置顶和自动保存；设置可修改保存目录与快捷键：
+
+<img src="assets/screenshots/quick-note.png" alt="verbit 速记：文字和图片的演示内容" width="340"> <img src="assets/screenshots/settings.png" alt="verbit 首次启动设置：保存目录、快捷键和录音保护" width="400">
+
+截图来自当前版本的原生窗口，文字、图片和音量数据为专用演示内容，不包含真实会议或个人路径；录音状态图用于展示界面，不作为硬件或转写质量证据。
+
+## 安装版快速上手
+
+1. 在 [Releases](https://github.com/Qjzn/tingji/releases/tag/v0.1.0-beta.1) 下载 EXE 并核对随包 SHA256。需要 **Windows 10 1809+ / Windows 11 x64、.NET Framework 4.8**，无需管理员权限。
+2. 安装后首次弹出设置，选择保存目录、确认快捷键，点击「保存并启动」。取消不创建配置，下次仍可设置；已有配置不会被覆盖。
+3. 程序驻留托盘，按 **`Ctrl+Alt+J`** 打开置顶速记，直接输入或粘贴图片，停顿后自动保存。
+4. 需要会议录音与转写时，再按 [安装说明](documentation/install-windows.md#启用会议转写) 配置本地或 API 引擎，并完成自检和一次真实验收。**轻量安装包不附带 Python、模型或 FFmpeg**，缺少环境时开始录音会先提示。
+
+当前版本是 `0.1.0-beta.1` 预发布版，仓库仍私有；下载需要仓库权限。录音质量、设备兼容及干净机器安装的实际覆盖范围见 [质量证据](documentation/quality.md)、[发布验收](documentation/release-readiness.md) 和 [开源准备检查](documentation/open-source-readiness.md)。本地模型会后处理仍可能占用较多内存与显存。
+
+## 会议操作
+
+浮窗顶部为左上返回、中间独立 Logo 与小写名称 **verbit**、右上隐藏。关闭只隐藏浮窗，录音和后台转写继续；结束会议请点击红色方块或使用开始/结束快捷键。录制时使用无损分段，转录和说话人分析使用无损音轨。
 
 浮窗或托盘右键 → **设置…** 可修改保存目录、会议/速记子文件夹及四组快捷键。结束录音并等待转写后修改；保存会先安全关闭已保存的速记，再验证快捷键并写入配置，成功后立即生效。快捷键被占用或配置被外部修改时留在设置窗口显示原因。新地址用于后续内容，已有文件留在原位置。
 
-新增[首次使用实际验收](documentation/first-use.md)与[发布验收清单](documentation/release-readiness.md)。环境检查不自动录音；`verify` 必须显式授权采集，播放与 API 上传另需授权。新转录时间戳可通过本机 `pianyan://` 协议定位回听：先运行 `Register-Playback.ps1`（或安装时加 `-EnablePlaybackLinks`），播放器打开后停在指定位置，按播放才发声。无需浏览器服务或新增会议附件；阅读器可能先要求确认打开外部应用。未启用协议时可从最近会议 → 回听录音手动定位；旧笔记不批量改写。
-
-一个 Windows 会议录音与中文转写小工具。按快捷键开始，会议结束后得到 **一条 192 kbps MP3 + 一份 Markdown 转录**。录制时使用无损分段，转录和说话人分析使用无损音轨。支持普通文件夹和 Obsidian；安装与模型配置可以交给 AI，日常可用小设置窗口修改路径和快捷键。
+转录时间戳可通过本机 `pianyan://` 协议定位回听：先运行 `Register-Playback.ps1`（或安装运行环境时加 `-EnablePlaybackLinks`），播放器打开后停在指定位置，按播放才发声；未启用协议时从最近会议 → 回听录音手动定位。旧笔记不批量改写。
 
 会议控制使用托盘和 **186×68 的置顶浮窗**：左侧计时与录音输入波形，中间麦克风开关与输入反馈，右侧纯红方块结束。顶部为返回、Logo 与名称、关闭浮窗。正常录音时不显示「录音中」文字；任一路有实际声音时左侧波形跳动，安静时回落。关闭麦克风用划线图标表示，电脑声音继续录制；整场暂停时波形停止，并在左侧显示「已暂停」。关闭浮窗后继续录音，双击托盘恢复。折角纸页与声波图标表示就绪，红色状态点表示录音。
 
@@ -147,4 +170,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
 
 成品清理前核对 MP3 的全部音频帧码率、完整解码长度与内容摘要，并核对 Markdown；已有发布目标须匹配本场记录，避免覆盖其他录音。正常成功后清理无损分段、RF64 混音和识别片段，只保留一条 MP3、一份 Markdown，以及工作目录内必要的控制元数据。失败或采集异常时保留恢复资料。旧 WAV 会议不自动转换。分段不解决磁盘写满、驱动丢音或转写全轨内存占用；实际验证与边界见 [质量说明](documentation/quality.md) 和 [隐患审查](documentation/risk-review.md)。
 
-产品边界与后续小功能候选见 [产品范围](documentation/product-scope.md)。第三方条款见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+## 许可与兼容
+
+项目源码采用 [MIT 许可](LICENSE)。安装包附带的 NAudio 及自行安装的 Python 依赖、模型、FFmpeg 分别适用自身条款，见 [第三方说明](THIRD_PARTY_NOTICES.md)。项目公开前的隐私、许可和发布检查见 [开源准备检查](documentation/open-source-readiness.md)。
+
+显示名称统一为小写 **verbit**；保留 `ObsidianMeeting.exe`、`tingji.py`、`TINGJI_API_KEY`、`pianyan://` 和既有状态格式以兼容原安装。英文名与现有同领域产品重名，当前仍为用户指定的项目名，公开发布前需另行确认名称，不以本项目的 MIT 许可说明名称可自由商用。
+
+产品边界与后续小功能候选见 [产品范围](documentation/product-scope.md)。

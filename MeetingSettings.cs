@@ -25,6 +25,16 @@ internal sealed class MeetingSettingsSnapshot {
         // Unknown keys and malformed existing values fail without touching disk.
         return new MeetingSettingsSnapshot(path, bytes, MeetingConfig.Validate(parsed));
     }
+    public static MeetingSettingsSnapshot CreateNew(string path, string suggestedRoot) {
+        path = Path.GetFullPath(path);
+        MeetingConfig.CheckOrdinaryPath(path);
+        if (File.Exists(path) || Directory.Exists(path)) throw new IOException("配置已经存在，请重新启动以加载；本次未覆盖配置。");
+        var defaults = MeetingConfig.Validate(new Dictionary<string, object> { { "vault_root", MeetingFiles.Home }, { "open_in_obsidian", false } });
+        // An unavailable/redirected Documents folder must still let the user
+        // choose a valid destination. Validate the selection only when saved.
+        defaults["vault_root"] = suggestedRoot ?? "";
+        return new MeetingSettingsSnapshot(path, null, defaults);
+    }
     static Dictionary<string, object> Clone(Dictionary<string, object> source) {
         return MeetingFiles.Json.Deserialize<Dictionary<string, object>>(MeetingFiles.Json.Serialize(source));
     }
@@ -64,6 +74,21 @@ internal sealed class MeetingSettingsSnapshot {
         var validated = MeetingConfig.Validate(Clone(candidate));
         byte[] replacement = Serialize(validated);
         MeetingConfig.CheckOrdinaryPath(path);
+        if (original == null) {
+            string firstTemporary = path + ".settings-" + Guid.NewGuid().ToString("N") + ".tmp";
+            try {
+                using (var stream = new FileStream(firstTemporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                    stream.Write(replacement, 0, replacement.Length); stream.Flush(true);
+                }
+                // Move does not overwrite a configuration created while the
+                // first-run window was open. Cancel never creates either file.
+                File.Move(firstTemporary, path);
+                original = replacement; values = validated;
+            } finally {
+                try { if (File.Exists(firstTemporary)) File.Delete(firstTemporary); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            return;
+        }
         if (!Same(original, File.ReadAllBytes(path)))
             throw new IOException("配置已被其他程序修改。请关闭设置后重新打开，再保存；本次未覆盖配置。");
         string token = Guid.NewGuid().ToString("N");
@@ -109,6 +134,22 @@ internal sealed class MeetingSettingsSnapshot {
     }
 }
 
+internal static class MeetingFirstRunSetup {
+    public static bool Run(string path, string suggestedRoot) {
+        MeetingConfig.CheckOrdinaryPath(path);
+        // Existing installations keep their config and normal startup path.
+        // Missing config is the only first-run marker; cancelling remains safe
+        // to retry and does not construct the recorder.
+        if (File.Exists(path)) return true;
+        var snapshot = MeetingSettingsSnapshot.CreateNew(path, suggestedRoot);
+        using (var dialog = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) {
+            using (var probe = new MeetingHotkey((string)next["hotkey"], (string)next["pause_hotkey"], (string)next["bookmark_hotkey"], (string)next["quick_note_hotkey"]))
+                probe.Reconfigure((string)next["hotkey"], (string)next["pause_hotkey"], (string)next["bookmark_hotkey"], (string)next["quick_note_hotkey"]);
+            snapshot.Commit(next); return null;
+        }, true)) return dialog.ShowDialog() == DialogResult.OK;
+    }
+}
+
 // Native controls keep the settings window small and retain normal keyboard,
 // IME, DPI and accessibility behavior. Show() makes this a modeless window.
 internal sealed class MeetingSettingsDialog : Form {
@@ -118,11 +159,11 @@ internal sealed class MeetingSettingsDialog : Form {
     readonly Label error = new Label { AutoSize = false, ForeColor = Color.FromArgb(171, 37, 37), Dock = DockStyle.Fill };
     readonly Button save = new Button { Text = "保存", AutoSize = true, MinimumSize = new Size(76, 28) };
     Font dpiFont;
-    public MeetingSettingsDialog(MeetingSettingsSnapshot snapshot, Func<Dictionary<string, object>, string> apply) {
+    public MeetingSettingsDialog(MeetingSettingsSnapshot snapshot, Func<Dictionary<string, object>, string> apply, bool firstRun = false) {
         if (snapshot == null || apply == null) throw new ArgumentNullException(snapshot == null ? "snapshot" : "apply");
         this.snapshot = snapshot; this.apply = apply;
         SuspendLayout();
-        Text = "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
+        Text = firstRun ? "verbit · 首次设置" : "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
         ClientSize = new Size(460, 492); Padding = new Padding(16);
@@ -158,6 +199,12 @@ internal sealed class MeetingSettingsDialog : Form {
         actions.Controls.Add(save); actions.Controls.Add(cancel);
         layout.Controls.Add(actions, 0, 12); layout.SetColumnSpan(actions, 3);
         Controls.Add(layout); AcceptButton = save; CancelButton = cancel;
+        if (firstRun) {
+            save.Text = "保存并启动";
+            ClientSize = new Size(460, 544);
+            var intro = new Label { Text = "先确认保存目录和快捷键。保存后驻留托盘，速记可直接使用；会议转写需另配本地模型或 API。", Dock = DockStyle.Top, Height = 52, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 0, 0, 8) };
+            Controls.Add(intro);
+        }
         ResumeLayout(false);
     }
     void AddField(TableLayoutPanel layout, int row, string label, string key, Dictionary<string, object> current) {

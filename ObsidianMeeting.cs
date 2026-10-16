@@ -195,6 +195,10 @@ internal static class MeetingConfig {
         string last = parts[parts.Length - 1];
         key = last == "Space" ? 32u : last.StartsWith("F") && last.Length > 1 ? (uint)(111 + int.Parse(last.Substring(1))) : last[0];
     }
+    public static void CheckRecordingRuntime(string home) {
+        if (!File.Exists(Path.Combine(home, ".venv", "Scripts", "python.exe")) || !File.Exists(Path.Combine(home, "meeting_worker.py")))
+            throw new IOException("会议转写环境尚未安装完整，未开始录音。请按程序目录中 documentation\\install-windows.md 配置本地模型或 API 并完成自检；速记仍可直接使用。");
+    }
 }
 
 // Audio callbacks are absent while WASAPI loopback is silent. Preserve that
@@ -2230,6 +2234,7 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void Start() {
         try {
+            if (workerLauncher == null) MeetingConfig.CheckRecordingRuntime(MeetingFiles.Home);
             preserveShortRecording = false;
             hotkey.EnablePause(true);
             RecordingSession startedSession = null;
@@ -2965,6 +2970,9 @@ internal static class Program {
                 if (!first) return 0;
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                string suggestedRoot = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                if (!Directory.Exists(suggestedRoot)) suggestedRoot = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!MeetingFirstRunSetup.Run(Path.Combine(MeetingFiles.Home, "config.json"), suggestedRoot)) return 0;
                 using (var context = new MeetingContext()) Application.Run(context);
             }
             return 0;

@@ -248,6 +248,72 @@ internal static class TestMeetingSettings {
     static TextBox Input(Form form, string name) {
         return (TextBox)form.Controls.Find(name, true)[0];
     }
+    static void FirstRun(string directory, string root) {
+        string path = Path.Combine(directory, "first-run-config.json");
+        var snapshot = MeetingSettingsSnapshot.CreateNew(path, root);
+        Check(!File.Exists(path), "Preparing first-run settings does not create a config");
+        Check(!(bool)snapshot.Values["open_in_obsidian"] && (string)snapshot.Values["transcription_mode"] == "local", "New installs use ordinary notes and local transcription without connecting to a service");
+        Check((string)snapshot.Values["quick_note_hotkey"] == "Ctrl+Alt+J" && Convert.ToInt32(snapshot.Values["recording_protection_seconds"]) == 5, "First-run defaults include current quick note and protection settings");
+        Check((string)MeetingSettingsSnapshot.CreateNew(path, "").Values["vault_root"] == "", "An unavailable suggested folder does not prevent the first-run chooser from opening");
+        var invalid = snapshot.Values; invalid["vault_root"] = Path.Combine(root, "missing");
+        Check(Reject(delegate { snapshot.Commit(invalid); }) && !File.Exists(path), "Invalid first-run settings do not create a config or directory");
+        for (int round = 0; round < 2; round++) {
+            int currentRound = round; bool appeared = false; Exception failure = null;
+            EventHandler idle = null;
+            idle = delegate {
+                var form = Application.OpenForms.OfType<MeetingSettingsDialog>().FirstOrDefault();
+                if (form == null) return;
+                Application.Idle -= idle;
+                try {
+                    appeared = true;
+                    Check(form.Text == "verbit · 首次设置", "Missing config opens the real first-run settings dialog");
+                    Check(!File.Exists(path), "First-run config remains absent until Save succeeds");
+                    Check(((Button)form.AcceptButton).Text == "保存并启动", "First-run action explains startup after saving without starting a recording");
+                    CheckLayout(form, Path.Combine(directory, "first-run-dialog-" + currentRound + ".png"));
+                    if (currentRound == 0) ((Button)form.CancelButton).PerformClick();
+                    else {
+                        Input(form, "quick_note_folder").Text = "首次便笺";
+                        string[] fields = { "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey" };
+                        for (int index = 0; index < fields.Length; index++) Input(form, fields[index]).Text = "Ctrl+Alt+Shift+F" + (13 + index);
+                        foreach (string field in fields) {
+                            using (var occupied = new ReservedKey(Input(form, field).Text)) {
+                                ((Button)form.AcceptButton).PerformClick();
+                                Check(form.Visible && !File.Exists(path) && ((Label)Field(form, "error")).Text.Contains("1409"), "First-run shortcut conflict stays editable without saving: " + field);
+                            }
+                            foreach (string key in fields) using (var released = new ReservedKey(Input(form, key).Text))
+                                Check(true, "First-run failed probe releases all its temporary shortcuts: " + key);
+                        }
+                        ((Button)form.AcceptButton).PerformClick();
+                        foreach (string key in fields) using (var released = new ReservedKey(Input(form, key).Text))
+                            Check(true, "Successful first-run probe releases its temporary shortcuts before controller startup: " + key);
+                    }
+                } catch (Exception error) { failure = error; form.Close(); }
+            };
+            bool configured;
+            Application.Idle += idle;
+            try { configured = MeetingFirstRunSetup.Run(path, root); }
+            finally { Application.Idle -= idle; }
+            if (failure != null) throw failure;
+            Check(appeared && configured == (round == 1), "Cancel exits setup and next startup presents it again; Save succeeds");
+            Check(File.Exists(path) == (round == 1), "Only a successful first-run save creates config.json");
+        }
+        Check((string)MeetingSettingsSnapshot.Open(path).Values["quick_note_folder"] == "首次便笺", "First-run save persists the actual selected fields");
+        byte[] saved = File.ReadAllBytes(path);
+        Check(MeetingFirstRunSetup.Run(path, "invalid-unused-root") && saved.SequenceEqual(File.ReadAllBytes(path)), "Existing config skips setup without rewriting or even validating new defaults");
+        Check(Reject(delegate { MeetingSettingsSnapshot.CreateNew(path, root); }), "New-config factory cannot replace an existing config");
+        string raced = Path.Combine(directory, "first-run-race.json");
+        var pending = MeetingSettingsSnapshot.CreateNew(raced, root);
+        Write(raced, Config(root)); byte[] concurrent = File.ReadAllBytes(raced);
+        Check(Reject(delegate { pending.Commit(pending.Values); }) && concurrent.SequenceEqual(File.ReadAllBytes(raced)), "Concurrent config creation is preserved byte-exact and rejects first-run save");
+        Check(Directory.GetFiles(directory, "*.settings-*").Length == 0, "First-run save and conflict leave no temporary files");
+        string runtime = Path.Combine(directory, "synthetic-runtime"); Directory.CreateDirectory(runtime);
+        Check(Reject(delegate { MeetingConfig.CheckRecordingRuntime(runtime); }), "Missing runtime is rejected before capture");
+        File.WriteAllText(Path.Combine(runtime, "meeting_worker.py"), "synthetic; never executed");
+        Check(Reject(delegate { MeetingConfig.CheckRecordingRuntime(runtime); }), "Worker alone cannot pass runtime preflight");
+        Directory.CreateDirectory(Path.Combine(runtime, ".venv", "Scripts"));
+        File.WriteAllText(Path.Combine(runtime, ".venv", "Scripts", "python.exe"), "synthetic; never executed");
+        MeetingConfig.CheckRecordingRuntime(runtime); Check(true, "Runtime preflight checks file presence without executing Python or loading models");
+    }
     static void CheckLayout(Form form, string screenshot) {
         form.Refresh(); Application.DoEvents();
         foreach (Control input in form.Controls[0].Controls) {
@@ -256,6 +322,11 @@ internal static class TestMeetingSettings {
                 Size needed = TextRenderer.MeasureText(input.Text, input.Font, new Size(input.Width, int.MaxValue), TextFormatFlags.WordBreak);
                 Check(needed.Height <= input.Height, "Settings label is not vertically clipped at " + form.DeviceDpi + " DPI: " + input.Text);
             }
+        }
+        foreach (Control control in form.Controls) if (control is Label && !string.IsNullOrEmpty(control.Text)) {
+            Check(form.ClientRectangle.Contains(control.Bounds), "First-run introduction fits the client area");
+            Size needed = TextRenderer.MeasureText(control.Text, control.Font, new Size(control.Width, int.MaxValue), TextFormatFlags.WordBreak);
+            Check(needed.Height <= control.Height, "First-run introduction is not clipped at " + form.DeviceDpi + " DPI");
         }
         using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height)); bitmap.Save(screenshot); }
     }
@@ -295,16 +366,16 @@ internal static class TestMeetingSettings {
     static void MonitorLayouts(string directory, string root) {
         string path = Path.Combine(directory, "synthetic-monitor-layout.json"); Write(path, Config(root));
         var snapshot = MeetingSettingsSnapshot.Open(path); int index = 0;
-        foreach (Screen screen in Screen.AllScreens) {
-            using (var form = new MeetingSettingsDialog(snapshot, delegate { throw new InvalidOperationException("Layout fixture must not apply settings"); })) {
+        foreach (Screen screen in Screen.AllScreens) foreach (bool firstRun in new[] { false, true }) {
+            using (var form = new MeetingSettingsDialog(snapshot, delegate { throw new InvalidOperationException("Layout fixture must not apply settings"); }, firstRun)) {
                 // Real monitor placement lets Windows supply both client and
                 // non-client DPI; synthetic WM_DPICHANGED cannot do the latter.
                 form.StartPosition = FormStartPosition.Manual;
                 form.Location = new Point(screen.WorkingArea.Left + 20, screen.WorkingArea.Top + 20);
                 form.Show(); Application.DoEvents();
                 Check(Screen.FromControl(form).DeviceName == screen.DeviceName, "Settings layout fixture opens on the intended monitor");
-                CheckLayout(form, Path.Combine(directory, "settings-monitor-" + index++ + "-dpi-" + form.DeviceDpi + ".png"));
-                Console.WriteLine("Settings layout: " + screen.DeviceName + ", " + form.DeviceDpi + " DPI, client " + form.ClientSize);
+                CheckLayout(form, Path.Combine(directory, "settings-monitor-" + index++ + "-dpi-" + form.DeviceDpi + (firstRun ? "-first-run" : "") + ".png"));
+                Console.WriteLine("Settings layout: " + screen.DeviceName + ", " + form.DeviceDpi + " DPI, first-run " + firstRun + ", client " + form.ClientSize);
                 ((Button)form.CancelButton).PerformClick();
             }
         }
@@ -316,7 +387,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
-            Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
+            Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

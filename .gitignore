@@ -5,6 +5,8 @@
 !/LICENSE
 !/LICENSE.md
 !/THIRD_PARTY_NOTICES.md
+!/SECURITY.md
+!/CONTRIBUTING.md
 !/Build.ps1
 !/config.example.json
 !/requirements.txt
@@ -91,6 +93,34 @@
 !/documentation/first-use.md
 !/documentation/release-readiness.md
 !/documentation/brand.md
+!/documentation/open-source-readiness.md
+
+!/documentation/install-windows.md
+
+# Explicit release/CI sources and synthetic documentation screenshots only.
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/ci.yml
+!/packaging/
+/packaging/*
+!/packaging/verbit.iss
+!/packaging/INSTALL.txt
+!/packaging/Get-InnoCompiler.ps1
+!/packaging/Build-Installer.ps1
+!/packaging/Test-Installer.ps1
+!/packaging/Check-InstallSafety.ps1
+!/packaging/README.md
+!/packaging/quick-start.html
+!/packaging/licenses/
+/packaging/licenses/*
+!/packaging/licenses/NAudio.txt
+!/assets/screenshots/
+/assets/screenshots/*
+!/assets/screenshots/recording.png
+!/assets/screenshots/quick-note.png
+!/assets/screenshots/settings.png
 
 # Personal configuration, captured audio, models, caches, logs, validation
 # screenshots and build products remain local even when placed in subfolders.
