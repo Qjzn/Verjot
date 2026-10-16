@@ -603,16 +603,25 @@ internal sealed class QuickNoteWindow : Form {
     }
     void RestoreWindowState() {
         Rectangle area = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(area.Right - Width - 24, area.Top + 60);
+        Rectangle wanted = new Rectangle(area.Right - Width - 24, area.Top + 60, Width, Height);
+        bool pinned = TopMost;
         try {
             string[] parts = File.ReadAllText(Path.Combine(stateRoot, "quick-note-window.txt")).Split(','); int x, y, width, height;
-            if (parts.Length != 5 || !int.TryParse(parts[0], out x) || !int.TryParse(parts[1], out y) || !int.TryParse(parts[2], out width) || !int.TryParse(parts[3], out height)) return;
-            var wanted = new Rectangle(x, y, Math.Max(MinimumSize.Width, width), Math.Max(MinimumSize.Height, height));
-            Rectangle screen = Screen.FromRectangle(wanted).WorkingArea;
-            wanted.Width = Math.Min(wanted.Width, screen.Width); wanted.Height = Math.Min(wanted.Height, screen.Height);
-            wanted.X = Math.Max(screen.Left, Math.Min(wanted.X, screen.Right - wanted.Width)); wanted.Y = Math.Max(screen.Top, Math.Min(wanted.Y, screen.Bottom - wanted.Height));
-            Bounds = wanted; TopMost = parts[4] != "0"; pin.Pinned = TopMost; pin.AccessibleName = TopMost ? "取消置顶" : "置顶"; tips.SetToolTip(pin, pin.AccessibleName);
+            if (parts.Length == 5 && int.TryParse(parts[0], out x) && int.TryParse(parts[1], out y) && int.TryParse(parts[2], out width) && int.TryParse(parts[3], out height)) {
+                wanted = new Rectangle(x, y, width, height); area = Screen.FromRectangle(wanted).WorkingArea; pinned = parts[4] != "0";
+            }
         } catch { }
+        // The first window must use the same screen constraint as a restored
+        // window; otherwise a short working area moves it only after reopening.
+        Bounds = FitWindowBounds(wanted, area, MinimumSize);
+        TopMost = pinned; pin.Pinned = TopMost; pin.AccessibleName = TopMost ? "取消置顶" : "置顶"; tips.SetToolTip(pin, pin.AccessibleName);
+    }
+    internal static Rectangle FitWindowBounds(Rectangle wanted, Rectangle area, Size minimum) {
+        wanted.Width = Math.Min(Math.Max(minimum.Width, wanted.Width), area.Width);
+        wanted.Height = Math.Min(Math.Max(minimum.Height, wanted.Height), area.Height);
+        wanted.X = Math.Max(area.Left, Math.Min(wanted.X, area.Right - wanted.Width));
+        wanted.Y = Math.Max(area.Top, Math.Min(wanted.Y, area.Bottom - wanted.Height));
+        return wanted;
     }
     protected override void Dispose(bool disposing) {
         if (disposing) {

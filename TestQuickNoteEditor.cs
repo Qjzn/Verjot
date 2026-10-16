@@ -280,6 +280,46 @@ internal static class TestQuickNoteEditor {
             return true;
         }
     }
+    static void CheckWindowGeometry(QuickNoteStore store, string root) {
+        var minimum = new Size(280, 240);
+        Rectangle[,] samples = {
+            { new Rectangle(0, 0, 1024, 700), new Rectangle(444, 60, 556, 669), new Rectangle(444, 31, 556, 669) },
+            { new Rectangle(-1024, 40, 1024, 680), new Rectangle(-580, 100, 556, 669), new Rectangle(-580, 51, 556, 669) },
+            { new Rectangle(0, 0, 480, 360), new Rectangle(-100, 60, 556, 669), new Rectangle(0, 0, 480, 360) },
+            { new Rectangle(1024, 0, 800, 600), new Rectangle(1800, 580, 300, 260), new Rectangle(1524, 340, 300, 260) },
+            { new Rectangle(0, 0, 640, 480), new Rectangle(30, 40, 100, 100), new Rectangle(30, 40, 280, 240) }
+        };
+        for (int index = 0; index < samples.GetLength(0); index++) {
+            Rectangle fitted = QuickNoteWindow.FitWindowBounds(samples[index, 1], samples[index, 0], minimum);
+            Check(fitted == samples[index, 2], "Default/restored bounds match the expected small-screen or offset-monitor rectangle: " + index);
+            Check(QuickNoteWindow.FitWindowBounds(fitted, samples[index, 0], minimum) == fitted, "Screen constraints are idempotent across reopen: " + index);
+        }
+        foreach (bool initialScale in new bool[] { false, true }) foreach (bool nearScreenHeight in new bool[] { false, true }) {
+            Rectangle? previousBounds = null;
+            for (int cycle = 0; cycle < 3; cycle++) {
+                using (var geometry = new QuickNoteWindow(store, Path.Combine(root, "geometry-state-" + initialScale + "-" + nearScreenHeight))) {
+                    // A persisted rectangle is already in screen pixels. Force
+                    // an initial 150% WinForms scale transition independently
+                    // of the machine's current display DPI.
+                    if (initialScale) geometry.AutoScaleDimensions = new SizeF(64, 64);
+                    if (nearScreenHeight) {
+                        geometry.PerformAutoScale();
+                        // Reproduce a short screen without changing the user's
+                        // display settings: the initial 60px inset cannot fit.
+                        geometry.Size = new Size(geometry.Width, Screen.PrimaryScreen.WorkingArea.Height - 20);
+                    }
+                    geometry.Toggle(); Pump(100);
+                    Rectangle bounds = geometry.Bounds, area = Screen.FromRectangle(bounds).WorkingArea;
+                    Console.WriteLine("Quick note geometry scale=" + initialScale + " nearScreenHeight=" + nearScreenHeight + " cycle " + cycle + ": " + bounds + "; DPI=" + geometry.DeviceDpi + "; workingArea=" + area);
+                    Check(area.Contains(bounds), "The first and restored windows fit the working area, including a short screen");
+                    if (previousBounds.HasValue) Check(bounds == previousBounds.Value, "Persisted bounds must not grow across recreated windows: previous=" + previousBounds.Value + "; next=" + bounds + "; workingArea=" + area);
+                    previousBounds = bounds;
+                    geometry.Toggle(); Check(!geometry.Visible, "Geometry probe hides after flushing");
+                    Check(geometry.FlushAndClose(), "Geometry probe closes without pending text");
+                }
+            }
+        }
+    }
     [STAThread] static int Main() {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         string root = Path.Combine(Path.GetTempPath(), "tingji-quick-note-editor-" + Guid.NewGuid().ToString("N"));
@@ -293,24 +333,7 @@ internal static class TestQuickNoteEditor {
             CheckDeferredImageComposition(vault, root);
             CheckFailedImportRecovery(vault, root);
             CheckSyntheticNewlines(vault, root);
-            foreach (bool initialScale in new bool[] { false, true }) {
-                Rectangle? previousBounds = null;
-                for (int cycle = 0; cycle < 3; cycle++) {
-                    using (var geometry = new QuickNoteWindow(store, Path.Combine(root, "geometry-state-" + initialScale))) {
-                        // A persisted rectangle is already in screen pixels. Force
-                        // an initial 150% WinForms scale transition independently
-                        // of the machine's current display DPI.
-                        if (initialScale) geometry.AutoScaleDimensions = new SizeF(64, 64);
-                        geometry.Toggle(); Pump(100);
-                        Rectangle bounds = geometry.Bounds;
-                        Console.WriteLine("Quick note geometry scale=" + initialScale + " cycle " + cycle + ": " + bounds.Width + "x" + bounds.Height + "; DPI=" + geometry.DeviceDpi);
-                        if (previousBounds.HasValue) Check(bounds == previousBounds.Value, "Persisted bounds must not grow across recreated windows");
-                        previousBounds = bounds;
-                        geometry.Toggle(); Check(!geometry.Visible, "Geometry probe hides after flushing");
-                        Check(geometry.FlushAndClose(), "Geometry probe closes without pending text");
-                    }
-                }
-            }
+            CheckWindowGeometry(store, root);
             float[] imageDpis = new float[] { 96, 144, 192 };
             var originals = new byte[imageDpis.Length][];
             var encodedImages = new byte[imageDpis.Length][];
