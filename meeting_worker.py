@@ -84,6 +84,21 @@ def timestamp(seconds: float):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
+def playback_timestamp(session: Path, seconds: float, label=None, *, enabled=False):
+    """Owned meeting links are handled locally; no arbitrary audio path is encoded.
+
+    Plain media #t fragments are not used because Markdown readers and external
+    default players do not consistently implement their seek semantics.
+    """
+    text = timestamp(seconds) if label is None else label
+    if (not enabled or type(seconds) not in (int, float) or not math.isfinite(seconds)
+            or not 0 <= seconds <= 604800
+            or not re.fullmatch(r"[0-9]{8}-[0-9]{6}(?:-[0-9a-f]{8})?", session.name)):
+        return f"[{text}]"
+    position = f"{seconds:.3f}".rstrip("0").rstrip(".")
+    return f"[{text}](pianyan://play?session={session.name}&seconds={position})"
+
+
 def safe_path(path: Path):
     """Reject symbolic links and Windows junctions before resolving a path."""
     path = Path(os.path.abspath(path))
@@ -275,6 +290,7 @@ def transcript_rows(result):
 def render_note(session: Path, vault: Path, metadata: dict, result=None, error=None,
                 mixed_audio=None, merge_error=None):
     lines = []
+    playback_enabled = mixed_audio is not None and not merge_error
     if mixed_audio is not None:
         default_audio = audio_output_path(session, vault, metadata)
         published = Path(mixed_audio.get("published_path", default_audio))
@@ -287,7 +303,7 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
         lines.extend(["## 重点时刻", ""])
         for item in sorted(bookmarks, key=lambda item: item["time_seconds"]):
             label = " ".join(clean_transcript_text(item.get("label", "重点")).splitlines()) or "重点"
-            lines.append(f"- [{timestamp(item['time_seconds'])}] {label}")
+            lines.append(f"- {playback_timestamp(session, item['time_seconds'], enabled=playback_enabled)} {label}")
         lines.append("")
     if metadata.get("recording_pauses"):
         lines.append("整场暂停区间（录音中保持静音，时间戳保持会议时间轴）：")
@@ -325,7 +341,10 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
                     label = f"{source} · 说话人 {speaker.rsplit('_', 1)[-1]}"
                 text = clean_transcript_text(row.get("text", ""))
                 if text:
-                    lines.extend([f"**[{timestamp(row['start'])}–{timestamp(row['end'])}] {label}**",
+                    time = playback_timestamp(session, row['start'],
+                                              f"{timestamp(row['start'])}–{timestamp(row['end'])}",
+                                              enabled=playback_enabled)
+                    lines.extend([f"**{time} {label}**",
                                   text, ""])
             caveat = ("说话人按跨音轨声纹匿名分组，待确认段不作身份归并；重叠讲话与串音仍需核对原音频。"
                       if any("speaker_global" in row for row in rows) else

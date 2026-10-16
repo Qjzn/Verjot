@@ -15,14 +15,14 @@ $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewG
 $taskDesktopRunner = Join-Path $taskOutput 'TestDesktopRunner.exe'
 & $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskRoot 'TestDesktopRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw "Isolated test desktop runner compilation failed: $LASTEXITCODE" }
-foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestNativeNoteDocument', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput', 'TestQuickNoteNewlines')) {
+foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestMeetingSettings', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestNativeNoteDocument', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput', 'TestQuickNoteNewlines')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
     $taskArguments = @('/nologo', '/utf8output', '/target:exe', "/main:$taskTest", "/out:$taskBinary", '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Web.Extensions.dll',
         ('/r:' + (Join-Path $taskRoot 'lib\NAudio.dll')), ('/resource:' + (Join-Path $taskRoot 'assets\tingji.ico') + ',Tingji.Idle.ico'),
         ('/resource:' + (Join-Path $taskRoot 'assets\tingji-recording.ico') + ',Tingji.Recording.ico'), (Join-Path $taskRoot 'ObsidianMeeting.cs'),
-        (Join-Path $taskRoot 'SessionCatalog.cs'), (Join-Path $taskRoot 'MeetingActions.cs'), (Join-Path $taskRoot 'QuickNoteStore.cs'), (Join-Path $taskRoot 'QuickNoteWindow.cs'), (Join-Path $taskRoot 'NativeNoteDocument.cs'),
+        (Join-Path $taskRoot 'SessionCatalog.cs'), (Join-Path $taskRoot 'MeetingActions.cs'), (Join-Path $taskRoot 'MeetingSettings.cs'), (Join-Path $taskRoot 'QuickNoteStore.cs'), (Join-Path $taskRoot 'QuickNoteWindow.cs'), (Join-Path $taskRoot 'NativeNoteDocument.cs'),
         ('/win32manifest:' + (Join-Path $taskRoot 'app.manifest')), (Join-Path $taskRoot ($taskTest + '.cs')))
     & $taskCompiler @taskArguments
     if ($LASTEXITCODE -ne 0) { throw "$taskTest compilation failed: $LASTEXITCODE" }
@@ -44,7 +44,7 @@ if (-not $NativeOnly) {
     Push-Location $taskRoot
     try {
         $env:TEMP = $env:TMP = $taskPythonTemp
-        & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker test_legacy_migration test_download_models test_mp3_audio
+        & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker test_legacy_migration test_download_models test_mp3_audio test_first_use
         if ($LASTEXITCODE -ne 0) { throw "Python regressions failed: $LASTEXITCODE" }
     } finally {
         $env:TEMP = $taskPreviousTemp; $env:TMP = $taskPreviousTmp

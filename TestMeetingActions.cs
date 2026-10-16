@@ -6,8 +6,19 @@ using System.Reflection;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Windows.Forms;
+using NAudio.Wave;
 
 internal static class TestMeetingActions {
+    sealed class FakePlayback : IMeetingPlayback {
+        public int Disposals;
+        public double Duration { get { return 7200; } }
+        public double Position { get; set; }
+        public bool Playing { get; private set; }
+        public Exception Error { get { return null; } }
+        public void Play() { Playing = true; }
+        public void Pause() { Playing = false; }
+        public void Dispose() { Disposals++; }
+    }
     static int assertions;
     static void Check(bool value, string message) { assertions++; if (!value) throw new Exception(message); }
     static void Reject(Action action, string message) {
@@ -72,6 +83,61 @@ internal static class TestMeetingActions {
             string caseOnly = MeetingRename.Apply(catalog, session, "meeting");
             metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
             Check((string)metadata["note_filename"] == Path.GetFileName(caseOnly), "Case-only naming must retain the exact retry path spelling");
+
+            var playbackRequest = MeetingPlaybackRequest.Parse("pianyan://play?session=20261015-120000&seconds=12.345");
+            Check(playbackRequest.SessionName == "20261015-120000" && playbackRequest.Seconds == 12.345, "Playback links retain meeting identity and millisecond position");
+            Check(MeetingPlaybackRequest.Parse("pianyan://play/?seconds=604800&session=20261015-120000-ab0123ef").Seconds == 604800,
+                "Playback accepts reversed key order and a valid collision suffix at its finite upper boundary");
+            foreach (string bad in new[] {
+                "https://play?session=20261015-120000&seconds=1", "pianyan://other?session=20261015-120000&seconds=1",
+                "pianyan://user@play?session=20261015-120000&seconds=1", "pianyan://play:2?session=20261015-120000&seconds=1",
+                "pianyan://play/else?session=20261015-120000&seconds=1", "pianyan://play?session=20261015-120000&seconds=1#run",
+                "pianyan://play?session=../other&seconds=1", "pianyan://play?session=%2E%2E&seconds=1",
+                "pianyan://play?session=20261015-120000%2fother&seconds=1", "pianyan://play?session=20261015-120000&seconds=NaN",
+                "pianyan://play?session=20261015-120000&seconds=Infinity", "pianyan://play?session=20261015-120000&seconds=-1",
+                "pianyan://play?session=20261015-120000&seconds=604800.001", "pianyan://play?session=20261015-120000&seconds=1e3",
+                "pianyan://play?session=20261015-120000&seconds=1&seconds=2", "pianyan://play?session=20261015-120000&session=20261015-120001&seconds=1",
+                "pianyan://play?session=20261015-120000&seconds=1&path=C:\\secret.mp3", "pianyan://play?session=20261015-120000",
+                "pianyan://play/../?session=20261015-120000&seconds=1", "pianyan://play??session=20261015-120000&seconds=1",
+                "pianyan://play?seconds=1", "pianyan://play?session=20261015-120000&seconds=1\n", "pianyan://play?session=20261015-120000&seconds=1&" })
+                Reject(delegate { MeetingPlaybackRequest.Parse(bad); }, "Playback accepted unsafe URI: " + bad.Replace('\n', ' '));
+            Check(MeetingPlayback.ResolveAudio(catalog, session, 1) == audio, "Playback resolves only a catalog-owned audio artifact");
+            // The audio fixture still has a deliberately invalid three-byte header:
+            // building a launch must not create a decoder or scan a long MP3.
+            var playbackStart = MeetingPlayback.StartInfo(catalog, session);
+            Check(playbackStart.FileName == Application.ExecutablePath && !playbackStart.UseShellExecute && playbackStart.CreateNoWindow,
+                "Recent-meeting playback launches only the current EXE directly without a shell");
+            Check(playbackStart.Arguments == "--play-uri \"pianyan://play?session=20261015-120000&seconds=0\"" && playbackStart.WorkingDirectory == MeetingFiles.Home,
+                "Standalone playback uses one strictly validated quoted URI and the program directory");
+            Reject(delegate { MeetingPlayback.ResolveAudio(catalog, Path.Combine(vault, "outside"), 0); }, "Playback cannot address a session outside work");
+            foreach (double bad in new[] { -1, double.NaN, double.PositiveInfinity, 604801 })
+                Reject(delegate { MeetingPlayback.ResolveAudio(catalog, session, bad); }, "Playback rejects invalid seek positions before opening audio");
+            using (var wave = new WaveFileWriter(audio, new WaveFormat(16000, 16, 1))) wave.Write(new byte[64000], 0, 64000);
+            using (var reader = new MeetingAudioPlayback(audio)) {
+                Check(Math.Abs(reader.Duration - 2) < .0001, "WAV playback reads real synthetic duration without an output device");
+                reader.Position = .75;
+                Check(Math.Abs(reader.Position - .75) < .0001 && !reader.Playing, "Decoder seeks without recording or playing any audio");
+            }
+            var fake = new FakePlayback();
+            using (var player = new MeetingPlaybackWindow(audio, 12.345, delegate(string path) { Check(path == audio, "Player factory receives resolved audio only"); return fake; })) {
+                Check(player.PositionSeconds == 12.345 && !fake.Playing, "Linked player opens paused at requested position");
+                player.Show(); Application.DoEvents();
+                player.SeekSeconds(10); Check(fake.Position == 10, "Native player applies seek to its bounded decoder");
+                player.SeekSeconds(8000); Check(fake.Position == 7200, "Seek past audio end clamps to actual duration");
+                Reject(delegate { player.SeekSeconds(double.NaN); }, "Player cannot accept nonfinite seek");
+                var button = (Button)typeof(MeetingPlaybackWindow).GetField("toggle", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+                button.PerformClick(); Check(fake.Playing && fake.Position == 0, "Playback from end restarts from zero");
+                button.PerformClick(); Check(!fake.Playing, "Playback pause is scoped to the local player");
+            }
+            Check(fake.Disposals == 1, "Closing the player releases its timer, reader and output exactly once");
+            double seekTime;
+            Check(MeetingPlaybackWindow.TryTime("90:35", out seekTime) && seekTime == 5435, "Minute entry supports a long meeting");
+            Check(MeetingPlaybackWindow.TryTime("01:02:03", out seekTime) && seekTime == 3723, "Hour entry has unambiguous positions");
+            foreach (string bad in new[] { "-1:00", "01:60", "01:60:00", "999:00:00", "NaN", "1", "1:2" })
+                Check(!MeetingPlaybackWindow.TryTime(bad, out seekTime), "Invalid time entry must not move playback: " + bad);
+            File.Move(audio, audio + ".removed");
+            Reject(delegate { MeetingPlayback.ResolveAudio(catalog, session, 0); }, "Manually removed audio cannot be played through a stale transcript link");
+            File.Move(audio + ".removed", audio);
 
             string marks = Path.Combine(MeetingFiles.Home, "work", "20261015-120001"); Directory.CreateDirectory(marks);
             var recording = (RecordingSession)FormatterServices.GetUninitializedObject(typeof(RecordingSession));

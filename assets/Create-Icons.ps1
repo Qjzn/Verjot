@@ -7,7 +7,29 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 public static class TingjiArtwork {
+    static string logoPath;
     static Bitmap Draw(int size, Color color) {
+        if (logoPath != null) {
+            var result = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+            using (var source = new Bitmap(logoPath))
+            using (var g = Graphics.FromImage(result)) {
+                int left = source.Width, top = source.Height, right = -1, bottom = -1;
+                for (int y = 0; y < source.Height; y++) for (int x = 0; x < source.Width; x++)
+                    if (source.GetPixel(x, y).A >= 128) { left = Math.Min(left, x); top = Math.Min(top, y); right = Math.Max(right, x); bottom = Math.Max(bottom, y); }
+                if (right < left) throw new InvalidDataException("Logo is fully transparent.");
+                float margin = size / 16f, scale = (size - margin * 2) / Math.Max(right - left + 1f, bottom - top + 1f);
+                float width = (right - left + 1) * scale, height = (bottom - top + 1) * scale;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.DrawImage(source, new RectangleF((size - width) / 2, (size - height) / 2, width, height), new RectangleF(left, top, right - left + 1, bottom - top + 1), GraphicsUnit.Pixel);
+                // The recording badge is application state, not part of the source logo.
+                if (color.R > 150) {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var border = new SolidBrush(Color.White)) g.FillEllipse(border, size * .64f, size * .02f, size * .34f, size * .34f);
+                    using (var badge = new SolidBrush(color)) g.FillEllipse(badge, size * .68f, size * .06f, size * .26f, size * .26f);
+                }
+            }
+            return result;
+        }
         using (var large = new Bitmap(size * 4, size * 4, PixelFormat.Format32bppArgb)) {
             using (var g = Graphics.FromImage(large)) {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -60,6 +82,8 @@ public static class TingjiArtwork {
         }
     }
     public static void Save(string directory, string name, Color color) {
+        string source = Path.Combine(directory, "verbit-logo.png");
+        logoPath = File.Exists(source) ? source : null;
         int[] sizes = {16, 20, 24, 32, 48, 64, 128, 256};
         var frames = new List<byte[]>();
         foreach (int size in sizes) using (var bitmap = Draw(size, color)) {
@@ -85,4 +109,4 @@ public static class TingjiArtwork {
 '@
 [TingjiArtwork]::Save($PSScriptRoot, 'tingji', [Drawing.Color]::FromArgb(40,104,168))
 [TingjiArtwork]::Save($PSScriptRoot, 'tingji-recording', [Drawing.Color]::FromArgb(216,57,69))
-Write-Output 'Generated Tingji idle and recording icons (16 through 256 pixels).'
+Write-Output 'Generated Pianyan / Verbit icons (16 through 256 pixels); resource filenames retained for compatibility.'

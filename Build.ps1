@@ -8,6 +8,7 @@ $taskRoot = $PSScriptRoot
 $taskSource = Join-Path $taskRoot 'ObsidianMeeting.cs'
 $taskCatalog = Join-Path $taskRoot 'SessionCatalog.cs'
 $taskActions = Join-Path $taskRoot 'MeetingActions.cs'
+$taskSettings = Join-Path $taskRoot 'MeetingSettings.cs'
 $taskNoteStore = Join-Path $taskRoot 'QuickNoteStore.cs'
 $taskNoteWindow = Join-Path $taskRoot 'QuickNoteWindow.cs'
 $taskNoteDocument = Join-Path $taskRoot 'NativeNoteDocument.cs'
@@ -24,7 +25,7 @@ if (-not $taskCompiler) { throw '.NET Framework 4.x C# compiler was not found.' 
 if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf)) {
     throw 'NAudio 1.10.0 is missing. Download the official NAudio 1.10.0 NuGet package and extract lib/net35/NAudio.dll to this project''s lib/NAudio.dll; see README.md.'
 }
-foreach ($taskInput in @($taskSource, $taskCatalog, $taskActions, $taskNoteStore, $taskNoteWindow, $taskNoteDocument, $taskManifest, $taskApplicationConfig, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
+foreach ($taskInput in @($taskSource, $taskCatalog, $taskActions, $taskSettings, $taskNoteStore, $taskNoteWindow, $taskNoteDocument, $taskManifest, $taskApplicationConfig, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
     if (-not (Test-Path -LiteralPath $taskInput -PathType Leaf)) { throw "Required build input is missing: $taskInput" }
 }
 if (-not [IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $taskRoot $OutputPath }
@@ -41,7 +42,7 @@ $taskArguments = @(
     "/win32manifest:$taskManifest",
     "/resource:$taskIdleIcon,Tingji.Idle.ico",
     "/resource:$taskRecordingIcon,Tingji.Recording.ico",
-    $taskSource, $taskCatalog, $taskActions, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
+    $taskSource, $taskCatalog, $taskActions, $taskSettings, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
 )
 & $taskCompiler @taskArguments
 if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE." }

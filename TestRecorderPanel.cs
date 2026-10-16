@@ -39,6 +39,13 @@ internal static class TestRecorderPanel {
                 Application.DoEvents();
                 Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Panel must remain 186 x 68");
                 Check(panel.TopMost && !panel.ShowInTaskbar, "Panel must be topmost without a taskbar window");
+                Check(panel.BrandTitle.Text == "片言" && panel.BrandMark.Image != null, "The header must show the product logo and new name");
+                Check(panel.BackButton.Left < panel.BrandMark.Left && panel.CollapseButton.Left > panel.BrandTitle.Right, "Back, brand and close must follow the header navigation order");
+                Check(panel.CollapseButton.AccessibleName == "关闭浮窗" && !panel.BackButton.Enabled, "Close must hide only the float; recording has no previous page");
+                foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle, panel.BackButton, panel.CollapseButton }) {
+                    Check(panel.ClientRectangle.Contains(control.Bounds), "Header control must fit the 186 x 68 panel");
+                    Check(control.Bottom <= panel.MicrophoneButton.Top, "Header must not overlap recording actions");
+                }
                 Check(!panel.Heading.Visible, "Recording must not put a whole-meeting label under the microphone");
                 using (var stop = new Bitmap(panel.StopButton.Width, panel.StopButton.Height)) {
                     panel.StopButton.DrawToBitmap(stop, panel.StopButton.ClientRectangle);
@@ -84,6 +91,10 @@ internal static class TestRecorderPanel {
                 Check(panel.Heading.Visible && panel.Detail.Visible, "Processing title and detail must both be visible");
                 Check(!panel.MicrophoneButton.Visible && !panel.StopButton.Visible && !panel.AudioLevel.Visible, "Processing must hide obsolete recording controls");
                 Check(panel.CollapseButton.Visible, "Processing must retain collapse");
+                int backRequests = 0;
+                panel.BackRequested += delegate { backRequests++; };
+                panel.BackButton.PerformClick();
+                Check(backRequests == 1 && panel.Visible, "Return must route to the parent without closing the float");
                 Check(panel.ClientRectangle.Contains(panel.Heading.Bounds) && panel.ClientRectangle.Contains(panel.Detail.Bounds), "Processing labels must fit the compact panel");
                 Snapshot(panel, Path.Combine(output, "panel-processing.png"));
                 string longDetail = new string('会', 100) + "识别失败，请从托盘重试对应会议";

@@ -90,6 +90,33 @@ class NoteTests(unittest.TestCase):
             self.assertNotIn("[[audio/mic.wav|麦克风分轨]]", content)
             self.assertNotIn("![[", content)
 
+    def test_timestamp_links_address_only_owned_meeting_ids_and_preserve_precise_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            vault = Path(folder)
+            session = vault / "20261016-123456-ab0123ef"
+            session.mkdir()
+            metadata = {"start_time": "2026-10-16T12:34:56+08:00",
+                        "bookmarks": [{"time_seconds": 62.125, "label": "确认预算"}]}
+            result = {"segments": [{"start": 1.234, "end": 3.456, "speaker": "mic_01",
+                                     "status": "done", "text": "周五确认预算。"}]}
+            note = worker.render_note(session, vault, metadata, result=result,
+                                      mixed_audio={"path": "meeting.wav"})
+            self.assertIn("[01:02](pianyan://play?session=20261016-123456-ab0123ef&seconds=62.125)", note)
+            self.assertIn("**[00:01–00:03](pianyan://play?session=20261016-123456-ab0123ef&seconds=1.234) 麦克风", note)
+            self.assertNotIn(vault.as_posix(), note)
+            self.assertNotIn("#t=", note)
+            self.assertEqual(note.count("pianyan://play?"), 2)
+            incomplete = worker.render_note(session, vault, metadata, result=result, merge_error="没有合并成品")
+            self.assertNotIn("pianyan://", incomplete)
+            self.assertIn("[00:01–00:03]", incomplete)
+
+    def test_playback_link_is_plain_for_legacy_ids_or_positions_outside_handler_range(self):
+        self.assertEqual(worker.playback_timestamp(Path("20261016-123456"), 0, enabled=True),
+                         "[00:00](pianyan://play?session=20261016-123456&seconds=0)")
+        self.assertEqual(worker.playback_timestamp(Path("20261016-123456"), 604801, enabled=True), "[168:00:01]")
+        self.assertEqual(worker.playback_timestamp(Path("audio"), 62, enabled=True), "[01:02]")
+        self.assertEqual(worker.playback_timestamp(Path("20261016-123456"), 62, enabled=False), "[01:02]")
+
     def test_retry_preserves_user_notes_and_single_transcript(self):
         with tempfile.TemporaryDirectory() as folder:
             note = Path(folder) / "note.md"

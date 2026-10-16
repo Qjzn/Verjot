@@ -7,6 +7,7 @@ param(
     [string]$PythonExe,
     [switch]$UseObsidian,
     [switch]$StartWithWindows,
+    [switch]$EnablePlaybackLinks,
     [switch]$Plan
 )
 
@@ -44,8 +45,8 @@ function Assert-OrdinaryDirectory([string]$Path) {
 function Get-RecorderProcesses {
     foreach ($taskProcess in @(Get-Process -Name 'ObsidianMeeting*' -ErrorAction SilentlyContinue)) {
         try { $taskProcessPath = $taskProcess.Path }
-        catch { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出听记后再安装。" }
-        if (-not $taskProcessPath) { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出听记后再安装。" }
+        catch { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出片言后再安装。" }
+        if (-not $taskProcessPath) { throw "无法确认录音进程 $($taskProcess.Id) 的路径；请正常退出片言后再安装。" }
         if ([IO.Path]::GetDirectoryName($taskProcessPath) -ieq $taskRoot) { $taskProcess }
     }
 }
@@ -104,6 +105,9 @@ try {
     $taskRunning = @(Get-RecorderProcesses)
     $taskTorchVersion = if ($Backend -eq 'cpu') { '2.11.0+cpu' } else { '2.11.0+cu128' }
     $taskRequirements = if ($Mode -eq 'api') { 'requirements-api.txt' } else { 'requirements.txt' }
+    if ($EnablePlaybackLinks -and -not (Test-Path -LiteralPath (Join-Path $taskRoot 'Register-Playback.ps1') -PathType Leaf)) {
+        throw '安装源码缺失：Register-Playback.ps1'
+    }
 
     if ($Plan) {
         [ordered]@{
@@ -112,6 +116,7 @@ try {
             config = $(if ($taskExistingConfig) { '保留现有 config.json' } else { '从 config.example.json 创建，写入 vault_root / open_in_obsidian / transcription_mode' })
             open_in_obsidian_on_first_install = [bool]$UseObsidian
             start_with_windows = [bool]$StartWithWindows
+            enable_playback_links = [bool]$EnablePlaybackLinks
             running_recorder_pids = @($taskRunning | ForEach-Object { $_.Id })
             steps = @(
                 '检查 Windows x64、Python 3.12 x64；不自动安装系统 Python',
@@ -122,7 +127,8 @@ try {
                 '构建 ObsidianMeeting.exe；已有配置原样保留；首次输出目录可新建',
                 $(if ($Mode -eq 'api') { '首次 API 配置需填写 api_base_url / api_model，并设置 TINGJI_API_KEY；未填写时 doctor 会失败，补齐后重跑' } else { '本地转写使用已下载模型，不上传音频' }),
                 '运行 tingji.py doctor --full --json；不启动应用、不录音',
-                $(if ($StartWithWindows) { '健康后运行 Install-Shortcuts.ps1，建立开始菜单与 Startup 快捷方式' } else { '不修改 Startup' })
+                $(if ($StartWithWindows) { '健康后运行 Install-Shortcuts.ps1，建立开始菜单与 Startup 快捷方式' } else { '不修改 Startup' }),
+                $(if ($EnablePlaybackLinks) { '健康后为当前用户注册 HKCU Software\Classes\pianyan 时间点回听协议；不覆盖其他安装' } else { '不注册时间点回听协议' })
             )
             runtime_evidence = $taskInstallation
             network_sources = $(if ($Mode -eq 'local') { @('api.nuget.org', 'download.pytorch.org', 'pypi.org', 'huggingface.co', 'github.com/k2-fsa/sherpa-onnx') } else { @('api.nuget.org', 'pypi.org', 'github.com/k2-fsa/sherpa-onnx') })
@@ -134,7 +140,7 @@ try {
     [Console]::OutputEncoding = $taskUtf8
     $env:PYTHONIOENCODING = 'utf-8'
     if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) { throw '安装仅支持 64 位 Windows。' }
-    if ($taskRunning.Count) { throw '本目录听记正在运行。请从托盘正常退出后再安装；不要中断录音。' }
+    if ($taskRunning.Count) { throw '本目录片言正在运行。请从托盘正常退出后再安装；不要中断录音。' }
     foreach ($taskRequired in @('Build.ps1', $taskRequirements, 'download_models.py', 'config.example.json', 'tingji.py', 'config.schema.json', 'Install-Shortcuts.ps1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $taskRoot $taskRequired) -PathType Leaf)) { throw "安装源码缺失：$taskRequired" }
     }
@@ -259,8 +265,8 @@ print(json.dumps(value))
     Invoke-Checked $taskPython $taskModelArguments
 
     $taskPhase = 'build'
-    Set-InstallStatus 'installing' '构建听记桌面程序'
-    if (@(Get-RecorderProcesses).Count) { throw '听记在安装过程中启动了。请从托盘正常退出后重试；未覆盖运行中的程序。' }
+    Set-InstallStatus 'installing' '构建片言桌面程序'
+    if (@(Get-RecorderProcesses).Count) { throw '片言在安装过程中启动了。请从托盘正常退出后重试；未覆盖运行中的程序。' }
     & (Join-Path $taskRoot 'Build.ps1')
     $taskPhase = 'config'
     if (-not $taskExistingConfig) {
@@ -293,6 +299,11 @@ print(json.dumps(value))
     if ($StartWithWindows) {
         $taskPhase = 'shortcuts'
         & (Join-Path $taskRoot 'Install-Shortcuts.ps1')
+    }
+    if ($EnablePlaybackLinks) {
+        $taskPhase = 'playback-links'
+        & (Join-Path $taskRoot 'Register-Playback.ps1')
+        if ($LASTEXITCODE -ne 0) { throw "时间点回放协议注册失败：$LASTEXITCODE" }
     }
     $taskPhase = 'completed'
     Set-InstallStatus 'completed' '安装与环境检查完成；应用尚未启动。请人工完成首次麦克风和电脑声音录音验收。'
