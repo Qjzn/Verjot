@@ -15,7 +15,7 @@
 
 源码仓库是 [Qjzn/tingji](https://github.com/Qjzn/tingji)，当前为私有仓库。使用已有授权的 Git 访问方式取得源码；已有目录优先复用。无法访问时先处理账号授权，不索取用户的明文 token，也不修改仓库公开权限。
 
-安装或更新应取得同一版本的完整源码。不要只替换 `ObsidianMeeting.cs` 或 EXE：原生程序还依赖 `SessionCatalog.cs`，字段校验依赖 `config.schema.json`，Python 转写脚本与配置示例也需要保持同版。构建入口为 `Build.ps1`；回归入口为 `Test.ps1`。`app.manifest` 嵌入 Windows 10 兼容声明，构建自动复制同名 `.exe.config`，为 .NET Framework 4.8 启用 `PerMonitorV2`；正式运行必须保留 `ObsidianMeeting.exe.config`，不能仅部署 EXE。更新前保留现有 `config.json`、`work/` 与成品，不把本机资料复制进 Git。
+安装或更新应取得同一版本的完整源码。不要只替换 `ObsidianMeeting.cs` 或 EXE：原生程序还依赖 `SessionCatalog.cs`、`MeetingActions.cs`、`QuickNoteStore.cs`、`NativeNoteDocument.cs` 与 `QuickNoteWindow.cs`，字段校验依赖 `config.schema.json`，Python 转写脚本与配置示例也需要保持同版。构建入口为 `Build.ps1`；回归入口为 `Test.ps1`。`app.manifest` 嵌入 Windows 10 兼容声明，构建自动复制同名 `.exe.config`，为 .NET Framework 4.8 启用 `PerMonitorV2`；正式运行必须保留 `ObsidianMeeting.exe.config`，不能仅部署 EXE。更新前保留现有 `config.json`、`work/` 与成品，不把本机资料复制进 Git。
 
 目标机器需要 Windows 10/11 x64、Python 3.12 x64、.NET Framework 4.8，以及可用的 Framework C# 编译器。检查已经安装的 Python：
 
@@ -150,9 +150,9 @@ AI 的交付记录至少应说明所选模式、实际保存位置、已有配�
 
 速记自动回归与桌面探针必须使用隔离目录和自建数据，禁止读取、写入或清空用户的系统剪贴板，也禁止「先备份、测试后恢复」。不要调用 `Clipboard.GetDataObject`、`SetImage`、`SetDataObject`、`SetText` 或 `Clear`；不能为测试点击实际「复制当前内容」动作。禁止使用 `SendInput`、`SendKeys`、`keybd_event` 等全局输入注入，不能向当前前台窗口发送真实粘贴、复制或速记快捷键。需要观察真实安装入口时，保留未验证项，由用户主动操作；不能用桌面注入补齐证据。
 
-图片与文字粘贴按 `TestQuickNoteEditor.cs` 的方法验证：在内存创建 `System.Windows.DataObject`，放入自建图片或 Unicode 文本，构造 `DataObjectPastingEventArgs`，调用生产 `Paste` 事件处理函数；拖入则使用指向隔离图片的 `DataObject` 和 `DragEventArgs` 调用生产 `Drop` 处理函数。局部 `DataObject.SetData` 不写入系统剪贴板。检查真实编辑器内容、相对图片引用、撤销重做、自动保存及错误状态；快捷键消息分发和 Esc 使用目标控件的本地事件或消息。性能测试使用同类隔离数据，分别记录实际处理耗时与界面响应。这些证据覆盖生产处理函数，不代表真实系统剪贴板、全局按键或用户设备入口已经验收。
+图片与文字粘贴按 `TestQuickNoteEditor.cs` 的方法验证：在内存创建 `System.Windows.Forms.DataObject`，放入自建图片或 Unicode 文本，调用生产 `PasteData` 处理函数；拖入则将指向隔离图片的局部数据交给 `DropData`。局部 `DataObject.SetData` 不写入系统剪贴板。检查真实编辑器内容、相对图片引用、撤销重做、自动保存及错误状态；快捷键消息分发和 Esc 使用目标控件的本地事件或消息。性能测试使用同类隔离数据，分别记录实际处理耗时与界面响应。这些证据覆盖生产处理函数，不代表真实系统剪贴板、全局按键或用户设备入口已经验收。
 
-逐字符输入使用 `TestQuickNoteInput.cs`：真实 `Application.Run` 消息泵向测试 HWND 定向投递 `WM_CHAR`，在收到消息与 `TextChanged` 事件内计时，核对中英文正文、撤销重做、取消预览输入、关闭落盘和闲时调度；不要用 `AppendText` 或消息泵返回后的计时替代。性能测试串行执行，记录 p50/p95/最大值、实际字符数、投递排队和实际发送间隔，不能同时跑多个界面压力测试。该测试使用生产 manifest 和 `.exe.config`；Unicode 字符输入不等于真实拼音候选组合验证，也不能换算为屏幕帧率。此输入修正不增加配置字段，保留现有用户配置即可。
+逐字符输入使用 `TestQuickNoteInput.cs`：真实 `Application.Run` 消息泵向原生编辑器自己的 HWND 定向投递 `WM_CHAR`；混合组的空格用 `WM_KEYDOWN/WM_KEYUP`，由消息泵自然生成字符。在收到消息与 `TextChanged` 事件内计时，核对中英文正文、撤销重做、取消和只读输入以及关闭落盘；不要用 `AppendText` 或消息泵返回后的计时替代。性能测试串行执行，记录 p50/p95/最大值、实际字符数、投递排队和实际发送间隔，不能同时跑多个界面压力测试。该测试使用生产 manifest 和 `.exe.config`；Unicode 字符输入不等于真实拼音候选组合验证，也不能换算为屏幕帧率。原生编辑器不增加配置字段，保留现有用户配置即可。
 
 `TestMeetingHotkeys` 真实调用 `RegisterHotKey` 验证注册、占用与释放，再向测试自身窗口投递 `WM_HOTKEY` 检查事件分发，不注入全局按键。Windows 收到真实按键后能否将其投递给已安装的听记，仍需用户主动按键验证并单独记录；本地 `WM_HOTKEY` 通过不能报告为真实全局按键已经通过。
 

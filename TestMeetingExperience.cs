@@ -335,7 +335,7 @@ internal static class TestMeetingExperience {
             while ((bool)Field(noteWindow, "workerBusy") && noteWait.ElapsedMilliseconds < 5000) { Application.DoEvents(); Thread.Sleep(2); }
             Check(!(bool)Field(noteWindow, "workerBusy"), "The isolated quick note must load before exit validation");
             rejectNoteSave = true;
-            var noteEditor = (System.Windows.Controls.RichTextBox)Field(noteWindow, "editor");
+            var noteEditor = (System.Windows.Forms.RichTextBox)Field(noteWindow, "editor");
             noteEditor.AppendText("退出保护样本");
             Set(context, "quickNote", noteWindow);
             var protectedRecording = FakeActiveRecording(warned);

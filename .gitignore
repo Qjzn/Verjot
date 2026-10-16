@@ -54,6 +54,8 @@
 !/TestSegmentedTimeline.cs
 !/QuickNoteStore.cs
 !/QuickNoteWindow.cs
+!/NativeNoteDocument.cs
+!/TestNativeNoteDocument.cs
 !/TestQuickNoteStore.cs
 !/TestQuickNoteEditor.cs
 !/TestQuickNoteResponsiveness.cs

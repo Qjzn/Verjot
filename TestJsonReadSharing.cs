@@ -27,6 +27,23 @@ internal static class TestJsonReadSharing {
     static Dictionary<string, object> Snapshot(int revision) {
         return new Dictionary<string, object> { { "revision", revision }, { "payload", new string('x', 2048) }, { "tail", revision } };
     }
+    static object DescribeInvalidSnapshot(Dictionary<string, object> value) {
+        var classifications = new List<string>();
+        var keys = new string[value.Count]; value.Keys.CopyTo(keys, 0); Array.Sort(keys, StringComparer.Ordinal);
+        bool hasRevision = value.ContainsKey("revision"), hasTail = value.ContainsKey("tail"), hasPayload = value.ContainsKey("payload");
+        object revision = hasRevision ? value["revision"] : null, tail = hasTail ? value["tail"] : null, payloadValue = hasPayload ? value["payload"] : null;
+        string payload = payloadValue as string;
+        if (value.Count == 0) classifications.Add("empty_dictionary");
+        if (!hasRevision) classifications.Add("missing_revision");
+        if (!hasTail) classifications.Add("missing_tail");
+        if (!hasPayload) classifications.Add("missing_payload");
+        if (hasRevision && hasTail && Convert.ToInt32(revision) != Convert.ToInt32(tail)) classifications.Add("revision_tail_mismatch");
+        if (hasPayload && payload == null) classifications.Add("payload_not_string");
+        if (payload != null && payload.Length != 2048) classifications.Add("payload_length_mismatch");
+        return new { classifications = classifications.ToArray(), count = value.Count, keynames = keys,
+            revision = revision, tail = tail, payload_length = payload == null ? -1 : payload.Length,
+            payload_type = payloadValue == null ? null : payloadValue.GetType().FullName };
+    }
     static Dictionary<string, object> CatalogRead(SessionCatalog catalog, string path, bool optional) {
         try { return (Dictionary<string, object>)catalogRead.Invoke(catalog, new object[] { path, optional }); }
         catch (TargetInvocationException error) { throw error.InnerException; }
@@ -87,7 +104,7 @@ internal static class TestJsonReadSharing {
     static void Race(string label, int round, Func<string, Dictionary<string, object>> read, Action<string, Dictionary<string, object>> write) {
         string path = Path.Combine(root, label + "-race-" + round + ".json"); write(path, Snapshot(0));
         int reads = 0, readErrors = 0, writes = 0, writeErrors = 0, invalidSnapshots = 0;
-        string firstError = ""; var gate = new object();
+        string firstError = ""; object firstInvalidSnapshot = null; var gate = new object();
         var start = new ManualResetEvent(false); var done = new ManualResetEvent(false); var watch = Stopwatch.StartNew();
         var writer = new Thread(delegate() {
             start.WaitOne();
@@ -104,17 +121,21 @@ internal static class TestJsonReadSharing {
                     var value = read(path); reads++;
                     if (!value.ContainsKey("revision") || !value.ContainsKey("tail") || !value.ContainsKey("payload") ||
                         Convert.ToInt32(value["revision"]) != Convert.ToInt32(value["tail"]) || ((string)value["payload"]).Length != 2048)
+                    {
                         invalidSnapshots++;
+                        if (firstInvalidSnapshot == null) firstInvalidSnapshot = DescribeInvalidSnapshot(value);
+                    }
                 } catch (Exception error) { readErrors++; lock (gate) if (firstError.Length == 0) firstError = error.ToString(); }
             }
         });
         writer.Start(); reader.Start(); start.Set(); writer.Join(); reader.Join(); watch.Stop();
         start.Dispose(); done.Dispose();
         results.Add(new { kind = "race", source = label, round = round, elapsed_ms = watch.ElapsedMilliseconds,
-            reads = reads, read_errors = readErrors, writes = writes, write_errors = writeErrors, invalid_snapshots = invalidSnapshots, first_error = firstError });
+            reads = reads, read_errors = readErrors, writes = writes, write_errors = writeErrors, invalid_snapshots = invalidSnapshots,
+            first_invalid_snapshot = firstInvalidSnapshot, first_error = firstError });
         Check(writes == 100 && reads >= 250, label + ": bounded race must complete both sides");
         Check(readErrors == 0 && writeErrors == 0 && invalidSnapshots == 0,
-            label + ": atomic replacement must produce complete snapshots without read/write errors or empty states; got " + firstError + " empty=" + invalidSnapshots);
+            label + ": atomic replacement must produce complete snapshots without read/write errors or invalid states; got " + firstError + " invalid_snapshots=" + invalidSnapshots + " first_invalid_snapshot=" + new JavaScriptSerializer().Serialize(firstInvalidSnapshot));
     }
     static void LongerTransientSharingLock(string label, Func<string, Dictionary<string, object>> read) {
         string path = Path.Combine(root, label + "-longer-sharing-lock.json");
@@ -208,11 +229,49 @@ internal static class TestJsonReadSharing {
         Check(delays == 0, "SessionCatalog: existing readable metadata does not request a retry delay");
         results.Add(new { kind = "optional_missing_delay_contract", source = "SessionCatalog", missing_file_delays = 0, missing_directory_delays = 0, required_missing_delays = 3 });
     }
+    static void RecentlyObservedOptionalMissingRetries() {
+        // The real target is already known to this catalog. Move it out before
+        // ReadJson starts, then restore it at the exact first retry boundary.
+        // This models a replacement window without scheduler/timing guesses.
+        foreach (bool observedByWrite in new[] { false, true }) {
+            string mode = observedByWrite ? "write" : "read";
+            string path = Path.Combine(root, "recently-observed-" + mode + ".json"), held = path + ".held";
+            int delays = 0;
+            var catalog = new SessionCatalog(root, root, delegate(int milliseconds) {
+                delays++;
+                if (delays == 1 && File.Exists(held)) File.Move(held, path);
+            });
+            if (observedByWrite) CatalogWrite(catalog, path, Snapshot(239));
+            else {
+                File.WriteAllText(path, new JavaScriptSerializer().Serialize(Snapshot(239)), Utf8);
+                Check(Convert.ToInt32(CatalogRead(catalog, path, true)["revision"]) == 239, "SessionCatalog: successful read establishes the known synthetic path");
+            }
+            File.Move(path, held);
+            Dictionary<string, object> recovered = null; Exception failure = null;
+            try { recovered = CatalogRead(catalog, path, true); }
+            catch (Exception error) { failure = error; }
+            finally { if (File.Exists(held)) File.Move(held, path); }
+            results.Add(new { kind = "recently_observed_missing_at_entry", source = "SessionCatalog", observed_by = mode,
+                delay_requests = delays, returned_count = recovered == null ? -1 : recovered.Count, error = failure == null ? null : failure.GetType().FullName });
+            Check(failure == null && recovered != null && recovered.ContainsKey("revision") && recovered.ContainsKey("tail") && recovered.ContainsKey("payload") &&
+                Convert.ToInt32(recovered["revision"]) == 239 && Convert.ToInt32(recovered["tail"]) == 239 && ((string)recovered["payload"]).Length == 2048,
+                "SessionCatalog: a path successfully " + mode + " before a replacement window must recover complete metadata instead of optional-empty; count=" + (recovered == null ? -1 : recovered.Count) + " delays=" + delays + " error=" + failure);
+            Check(delays == 1, "SessionCatalog: known replacement recovers at the deterministic first retry boundary");
+        }
+    }
     public static int Main(string[] args) {
         try {
+            int raceRounds = 1;
+            for (int i = 1; i < args.Length; i++) {
+                const string option = "--race-rounds=";
+                if (!args[i].StartsWith(option, StringComparison.Ordinal)) throw new ArgumentException("Unknown diagnostic option: " + args[i]);
+                if (!Int32.TryParse(args[i].Substring(option.Length), out raceRounds) || raceRounds < 1 || raceRounds > 20)
+                    throw new ArgumentException("--race-rounds must be between 1 and 20");
+            }
             root = Path.Combine(Path.GetFullPath(args[0]), "json-read-sharing-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(root, "work"));
             UnobservedOptionalMissingSkipsRetry();
+            RecentlyObservedOptionalMissingRetries();
             var catalog = new SessionCatalog(root, root);
             Func<string, Dictionary<string, object>> meetingReader = MeetingFiles.ReadJson;
             Action<string, Dictionary<string, object>> meetingWriter = delegate(string path, Dictionary<string, object> value) { MeetingFiles.WriteJson(path, value); };
@@ -232,11 +291,15 @@ internal static class TestJsonReadSharing {
             bool nullFailed = false;
             try { CatalogRead(catalog, nullJson, false); } catch (IOException) { nullFailed = true; }
             Check(nullFailed, "SessionCatalog: null top-level JSON is not converted to empty metadata");
-            for (int round = 1; round <= 1; round++) {
+            var raceBudget = Stopwatch.StartNew();
+            for (int round = 1; round <= raceRounds; round++) {
+                if (raceBudget.ElapsedMilliseconds >= 60000) throw new TimeoutException("Bounded JSON race diagnostic exceeded 60 seconds");
                 Race("MeetingFiles", round, meetingReader, meetingWriter);
+                if (raceBudget.ElapsedMilliseconds >= 60000) throw new TimeoutException("Bounded JSON race diagnostic exceeded 60 seconds");
                 Race("SessionCatalog", round, catalogReader, catalogWriter);
             }
-            string report = new JavaScriptSerializer().Serialize(new { assertions = assertions, passed = true, results = results });
+            if (raceBudget.ElapsedMilliseconds >= 60000) throw new TimeoutException("Bounded JSON race diagnostic exceeded 60 seconds");
+            string report = new JavaScriptSerializer().Serialize(new { assertions = assertions, passed = true, race_rounds = raceRounds, race_elapsed_ms = raceBudget.ElapsedMilliseconds, results = results });
             File.WriteAllText(Path.Combine(root, "report.json"), report, Utf8);
             Console.WriteLine(report); Console.WriteLine("PASS: " + assertions + " assertions; no audio, device, model or UI operations; " + root); return 0;
         } catch (Exception error) {

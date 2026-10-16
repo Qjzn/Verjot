@@ -30,6 +30,13 @@ internal sealed class SessionCatalog {
     readonly string home, work, artifactRoot;
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
     readonly Action<int> retryDelay;
+    // A recently read/written file can be briefly absent during replacement.
+    // Keep that observation across calls without slowing never-present files.
+    // The small instance cache owns no handles and never locks around file IO.
+    const int RecentPathCapacity = 128;
+    static readonly long RecentPathLifetime = Stopwatch.Frequency * 5;
+    readonly object recentPathGate = new object();
+    readonly Dictionary<string, long> recentPaths = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
     public SessionCatalog(string home, string artifactRoot) : this(home, artifactRoot, System.Threading.Thread.Sleep) { }
 
@@ -347,8 +354,27 @@ internal sealed class SessionCatalog {
         } catch { return new Dictionary<string, object>(); }
     }
 
+    bool RecentlySucceeded(string path) {
+        string fullPath = Path.GetFullPath(path); long now = Stopwatch.GetTimestamp(), stamp;
+        lock (recentPathGate) {
+            if (!recentPaths.TryGetValue(fullPath, out stamp)) return false;
+            if (now - stamp <= RecentPathLifetime) return true;
+            recentPaths.Remove(fullPath); return false;
+        }
+    }
+    void RememberSuccess(string path) {
+        string fullPath = Path.GetFullPath(path); long now = Stopwatch.GetTimestamp();
+        lock (recentPathGate) {
+            if (!recentPaths.ContainsKey(fullPath) && recentPaths.Count >= RecentPathCapacity) {
+                string oldest = null; long oldestStamp = Int64.MaxValue;
+                foreach (var item in recentPaths) if (item.Value < oldestStamp) { oldest = item.Key; oldestStamp = item.Value; }
+                if (oldest != null) recentPaths.Remove(oldest);
+            }
+            recentPaths[fullPath] = now;
+        }
+    }
     Dictionary<string, object> ReadJson(string path, bool optional) {
-        bool observed = File.Exists(path);
+        bool observed = File.Exists(path) || RecentlySucceeded(path);
         var retryClock = Stopwatch.StartNew();
         string snapshot;
         for (int attempt = 0; ; attempt++) {
@@ -383,6 +409,7 @@ internal sealed class SessionCatalog {
         }
         var data = json.Deserialize<Dictionary<string, object>>(snapshot);
         if (data == null) throw new IOException("会议状态 JSON 顶层必须为对象");
+        RememberSuccess(path);
         return data;
     }
 
@@ -393,6 +420,7 @@ internal sealed class SessionCatalog {
         File.WriteAllText(temporary, json.Serialize(value), new UTF8Encoding(false));
         if (File.Exists(path)) File.Replace(temporary, path, null);
         else File.Move(temporary, path);
+        RememberSuccess(path);
     }
 
     static void CheckOrdinary(string path) {
