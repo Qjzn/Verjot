@@ -6,15 +6,15 @@
 
 | 项目 | 实际结果 | 后续要求 |
 | --- | --- | --- |
-| Git 内容与历史 | 以 `0cb6533` 为基线检查本地全部 refs：23 个提交、352 个唯一 blob、82 个历史路径；未发现录音、模型、个人 `config.json`、工作目录、验证材料、EXE 或 DLL 入库。高置信 provider token、私钥和个人目录模式未命中；唯一带凭据 URL 是拒绝该输入的合成测试占位。 | 这是明确模式扫描和路径清单检查，不是所有秘密或隐私的穷尽证明。发布前对最终 diff、历史新增提交和安装包再检查；更换凭据时需先撤销旧值。 |
+| Git 内容与历史 | 安装候选 `3966231` 检查本地全部 refs：28 个提交、389 个唯一 blob、107 个历史路径；未发现录音、模型、个人 `config.json`、工作目录、验证材料、EXE 或 DLL 入库。高置信 provider token、私钥和个人目录模式未命中；唯一带凭据 URL 是拒绝该输入的合成测试占位。 | 这是明确模式扫描和路径清单检查，不是所有秘密或隐私的穷尽证明。发布前对最终 diff、历史新增提交和安装包再检查；更换凭据时需先撤销旧值。 |
 | Git 元数据 | 提交作者包含个人邮箱；文件忽略规则不能隐藏作者信息。 | 公开前由维护者确认是否接受披露。未擅自重写历史。 |
 | 自有与第三方许可 | 根目录 MIT 完整；确认 NAudio **1.10.0 是 Ms-PL**，已修正旧 MIT 说明并加入原版全文。当前图形为本项目按用户参考生成、独立文字显示的图标。 | 安装包保留 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `packaging/licenses/NAudio.txt`。图形参考来源及公开使用权需维护者确认；没有作第三方授权或独占性保证。 |
 | 运行时分发 | 本机 imageio-ffmpeg wheel 的 FFmpeg 7.1 启用 GPL/version3；本次轻量安装包不含它、Python 环境或模型，按说明从官方来源单独安装。 | 全离线/全运行时包需逐个确认原生库、模型、完整许可证和对应源码的提供方式，不能从 `.venv` 直接打包发布。详见 [第三方通知](../THIRD_PARTY_NOTICES.md)。 |
 | 名称 | [Verbit 官网](https://verbit.ai/about-us/)及其[转录产品](https://verbit.ai/solutions-transcription/)已使用相同英文名称，且业务领域接近。 | 存在可核实的品牌混淆风险；这不是已确认侵权结论。公开推广前决定是否换名或进行专业名称/商标检索，未擅自更改用户选定名称。 |
-| CI 与仓库门禁 | 新增 Windows workflow：固定 action commit、只读 contents 权限、官方 NAudio 固定 DLL SHA-256、桌面构建、原生合成回归、配置/API/首次使用合成测试。已读取仓库元数据确认仍为私有、Issues 开启。 | 新 workflow 在仓库首次执行成功前只称“已配置”。本次主分支保护 API 返回 403，提示当前私有仓库需要 GitHub Pro 或公开才可使用该功能；没有声称已启用保护。安全分析元数据返回空，私密报告、依赖/secret 扫描及 required checks 也未确认启用。 |
+| CI 与仓库门禁 | Windows workflow 固定 action commit、只读 contents 权限、官方 NAudio 固定 DLL SHA-256，执行桌面构建、19 组原生合成回归与 66 项配置/API/首次使用测试。实际执行发现并修复首次窗口定位、结果文件时间精度和英文 Windows 中文输出问题；最终结果见 [Actions](https://github.com/Qjzn/tingji/actions/workflows/ci.yml)。 | 发布要求对应源码提交的 CI 通过。主分支保护 API 返回 403，提示当前私有仓库需要 GitHub Pro 或公开才可使用该功能；没有声称已启用保护。安全分析元数据返回空，私密报告、依赖/secret 扫描及 required checks 也未确认启用。 |
 | 真实使用质量 | 现有测试、首次使用步骤与局限均有记录。 | 干净 Windows 10/11、30/60/120 分钟会议、休眠/断电/磁盘满、蓝牙热切换、已标注中文/跨轨身份准确率仍按 [发布验收](release-readiness.md) 分别验证，不由 CI 绿色替代。 |
 
-本地历史扫描报告保存于 `validation/open-source-audit-20261016/history-scan.json`，不随源码发布。不把真实用户音频、转录或完整日志作为公开测试素材。
+本地历史扫描报告保存于 `validation/open-source-audit-20261016/final-history-scan.json`，不随源码发布。不把真实用户音频、转录或完整日志作为公开测试素材。模块交接与审查入口见 [架构](architecture.md)、[流程](flows.md)、[权限](permissions.md)、[配置与密钥](variables.md)、[测试映射](tests.md)、[后台任务](cron.md) 和 [AI 边界](automation.md)。
 
 ## 架构与信任边界
 

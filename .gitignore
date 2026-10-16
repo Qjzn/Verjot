@@ -96,6 +96,13 @@
 !/documentation/open-source-readiness.md
 
 !/documentation/install-windows.md
+!/documentation/architecture.md
+!/documentation/flows.md
+!/documentation/permissions.md
+!/documentation/variables.md
+!/documentation/tests.md
+!/documentation/cron.md
+!/documentation/automation.md
 
 # Explicit release/CI sources and synthetic documentation screenshots only.
 !/.github/

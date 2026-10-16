@@ -6,6 +6,12 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 [下载 Windows x64 安装版](https://github.com/Qjzn/tingji/releases/tag/v0.1.0-beta.1) · [安装与快速上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [交给 AI 安装](documentation/ai-install.md)
 
+- **随手记**：`Ctrl+Alt+J` 打开置顶便签，中文输入、粘贴图片，停顿后自动保存。
+- **轻量开会**：小浮窗控制麦克风和电脑声音，支持暂停、重点时间标记及默认 5 秒误触保护。
+- **文件自己留**：会后保留一条 MP3 和一份 Markdown；识别可选本地中文模型或自己的兼容 API。
+
+准备参与开发或审查？从 [架构与边界](documentation/architecture.md)、[测试覆盖](documentation/tests.md) 和 [开源检查](documentation/open-source-readiness.md) 开始。
+
 ## 界面预览
 
 186×68 逻辑像素的录音浮窗，麦克风可单独关闭，电脑声音继续收录：

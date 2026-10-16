@@ -33,6 +33,8 @@ $taskFiles = @(
     'documentation\brand.md', 'documentation\product-scope.md',
     'documentation\quality.md', 'documentation\release-readiness.md',
     'documentation\risk-review.md', 'documentation\open-source-readiness.md',
+    'documentation\architecture.md', 'documentation\flows.md', 'documentation\permissions.md',
+    'documentation\variables.md', 'documentation\tests.md', 'documentation\cron.md', 'documentation\automation.md',
     'assets\screenshots\recording.png', 'assets\screenshots\quick-note.png', 'assets\screenshots\settings.png',
     'packaging\licenses\NAudio.txt', 'packaging\quick-start.html', 'packaging\Check-InstallSafety.ps1'
 )
