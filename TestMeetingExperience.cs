@@ -35,6 +35,20 @@ internal static class TestMeetingExperience {
         File.WriteAllBytes(audio, new byte[] { 1, 2 });
         MeetingFiles.WriteJson(Path.Combine(session, "status.json"), new { state = "completed", note_path = note, merged_audio = new { published_path = audio }, message = "完成", updated_at = DateTimeOffset.Now.ToString("o") });
     }
+    static string CompletionDiagnostic(MeetingContext context, RecorderPanel panel, string session, TranscriptionJob job) {
+        try {
+            var record = ((SessionCatalog)Field(context, "catalog")).Get(session);
+            string statusPath = Path.Combine(session, "status.json");
+            var status = MeetingFiles.ReadJson(statusPath);
+            return "; heading=" + panel.Heading.Text + "; record=" + (record == null ? "missing" : record.State) +
+                "; detail=" + (record == null ? "" : record.Message) + "; workerAlive=" + (record != null && record.WorkerAlive) +
+                "; focused=" + Path.GetFileName(Field(context, "focusedSession") as string) + "; recording=" + (Field(context, "recording") != null) +
+                "; status=" + MeetingFiles.Text(status, "state", "missing") + "; statusWrite=" + File.GetLastWriteTimeUtc(statusPath).ToString("o") +
+                "; attempt=" + (job == null ? "missing" : job.WorkerStartedUtc.ToString("o")) +
+                "; previousStatusWrite=" + (job == null ? "missing" : job.PreviousStatusWriteUtc.ToString("o")) +
+                "; workerStart=" + (record == null ? "missing" : record.WorkerStartUtc.ToString("o"));
+        } catch (Exception error) { return "; completion diagnostic failed: " + error.GetType().Name + ": " + error.Message; }
+    }
     static Process Child(bool success) {
         Process process = Process.Start(new ProcessStartInfo {
             FileName = Assembly.GetExecutingAssembly().Location, Arguments = "--child " + (success ? "0" : "1"), UseShellExecute = false, CreateNoWindow = true
@@ -311,6 +325,7 @@ internal static class TestMeetingExperience {
             MeetingFiles.WriteJson(Path.Combine(warned, "session.json"), warnedMetadata);
             Set(context, "workerLauncher", new Func<string, Process>(delegate(string session) { return Child(true); }));
             Call(context, "LaunchWorker", warned);
+            var warningJob = ((List<TranscriptionJob>)Field(context, "jobs")).Find(delegate(TranscriptionJob value) { return value.Session == warned; });
             string warningNote = Path.Combine((string)config["vault_root"], "warning.md");
             string warningAudio = Path.Combine((string)config["vault_root"], "warning.wav");
             Complete(warned, warningNote, warningAudio);
@@ -318,7 +333,8 @@ internal static class TestMeetingExperience {
             int opensBeforeWarning = autoOpens;
             children[children.Count - 1].WaitForExit(10000); Call(context, "Tick");
             Check(((List<TranscriptionJob>)Field(context, "jobs")).Count == 0, "Capture warning must finish the job without restarting ASR");
-            Check(panel.Heading.Text == "采集异常 · 检查录音", "Completed transcription must retain an explicit capture warning");
+            Check(panel.Heading.Text == "采集异常 · 检查录音", "Completed transcription must retain an explicit capture warning" +
+                (panel.Heading.Text == "采集异常 · 检查录音" ? "" : CompletionDiagnostic(context, panel, warned, warningJob)));
             Check(autoOpens == opensBeforeWarning, "Capture warning must not automatically open the note as a normal success");
             var warningItem = OpenRecent(menu, recent, "Native capture-warning fixture");
             Check(warningItem != null && warningItem.Text.Contains("采集异常") && !warningItem.Text.Contains("成品缺失"), "Capture errors with existing files must not become a missing-artifact alarm");
