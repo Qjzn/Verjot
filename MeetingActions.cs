@@ -131,7 +131,8 @@ internal sealed class MeetingPlaybackWindow : Form {
         try {
             if (double.IsNaN(playback.Duration) || double.IsInfinity(playback.Duration) || playback.Duration <= 0)
                 throw new IOException("录音没有有效的可播放时长。");
-            Text = "verbit · 录音回听"; Font = dpiFont; AutoScaleMode = AutoScaleMode.Dpi;
+            SuspendLayout();
+            Text = MeetingBrand.Name + " · 录音回听"; Icon = MeetingBrand.IdleIcon; Font = dpiFont; AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96, 96); ClientSize = new Size(360, 125); MinimumSize = new Size(340, 160);
             Padding = new Padding(12); StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = true;
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, WrapContents = false };
@@ -155,6 +156,7 @@ internal sealed class MeetingPlaybackWindow : Form {
             SeekSeconds(Math.Min(seconds, playback.Duration));
             seek.Text = FormatTime(playback.Position);
             timer.Start();
+            ResumeLayout(false);
         } catch { playback.Dispose(); timer.Dispose(); dpiFont.Dispose(); throw; }
     }
     internal double PositionSeconds { get { return playback.Position; } }
@@ -272,7 +274,7 @@ internal sealed class MeetingNameDialog : Form {
     public string MeetingTitle { get { return name.Text; } }
     public MeetingNameDialog(string current) {
         SuspendLayout();
-        Text = "命名这场会议";
+        Text = MeetingBrand.Name + " · 命名会议"; Icon = MeetingBrand.IdleIcon;
         dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel);
         Font = dpiFont;
         AutoScaleMode = AutoScaleMode.Dpi;

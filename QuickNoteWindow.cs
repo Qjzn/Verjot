@@ -109,6 +109,7 @@ internal sealed class QuickNoteWindow : Form {
     readonly Timer saveTimer = new Timer { Interval = 100 };
     readonly Timer dayTimer = new Timer { Interval = 30000 };
     readonly ToolTip tips = new ToolTip();
+    readonly System.ComponentModel.Container transientMenus = new System.ComponentModel.Container();
     QuickNoteDocument note;
     internal Exception LastLoadError { get; private set; }
     bool loading, dirty, composing, closeAllowed;
@@ -372,16 +373,16 @@ internal sealed class QuickNoteWindow : Form {
         } catch (Exception error) { SetStatus("无法打开文件夹：" + error.Message, true); }
     }
     void ShowSaveMenu() {
-        var menu = new ContextMenuStrip { Font = Font, RenderMode = ToolStripRenderMode.System };
+        var menu = CreateTransientMenu();
         menu.Items.Add("打开速记文件夹", null, delegate { OpenFolder(); });
         menu.Items.Add("复制当前内容", null, delegate { try { string text = ReadMarkdown(); if (text.Length > 0) Clipboard.SetText(text); } catch (Exception error) { SetStatus("无法复制：" + error.Message, true); } });
         string draftPath = loadFailureRecoveryPath ?? archivedRecovery ?? recoveryPath;
         if (!string.IsNullOrEmpty(draftPath)) menu.Items.Add("打开草稿所在文件夹", null, delegate { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + draftPath.Replace("\"", "") + "\""); } catch (Exception error) { tips.SetToolTip(status, error.Message); } });
         if (note != null && failedText != null) menu.Items.Add("保留草稿并载入磁盘版本", null, delegate { ReloadDiskKeepingDraft(); });
-        menu.Closed += delegate { menu.Dispose(); }; menu.Show(status, new Point(0, status.Height));
+        menu.Show(status, new Point(0, status.Height));
     }
     void ShowEditorMenu() {
-        var menu = new ContextMenuStrip { Font = Font, RenderMode = ToolStripRenderMode.System };
+        var menu = CreateTransientMenu();
         menu.Items.Add("撤销", null, delegate { CancelPendingImages(); editor.Undo(); }).Enabled = !editor.ReadOnly && editor.CanUndo;
         menu.Items.Add("重做", null, delegate { CancelPendingImages(); editor.Redo(); }).Enabled = !editor.ReadOnly && editor.CanRedo;
         menu.Items.Add(new ToolStripSeparator());
@@ -389,7 +390,18 @@ internal sealed class QuickNoteWindow : Form {
         menu.Items.Add("复制", null, delegate { CopyOrCut(false); }).Enabled = editor.SelectionLength > 0;
         menu.Items.Add("粘贴", null, delegate { PasteFromClipboard(); }).Enabled = !editor.ReadOnly;
         menu.Items.Add("全选", null, delegate { editor.SelectAll(); });
-        menu.Closed += delegate { menu.Dispose(); }; menu.Show(editor, editor.PointToClient(Cursor.Position));
+        menu.Show(editor, editor.PointToClient(Cursor.Position));
+    }
+    ContextMenuStrip CreateTransientMenu() {
+        var menu = new ContextMenuStrip(transientMenus) { Font = Font, RenderMode = ToolStripRenderMode.System };
+        menu.Closed += delegate {
+            // WinForms still uses the menu handle after Closed returns.
+            // The container owns cleanup if the host closes before this runs.
+            if (IsDisposed || Disposing || !IsHandleCreated) return;
+            try { BeginInvoke((Action)delegate { if (!menu.IsDisposed) menu.Dispose(); }); }
+            catch (InvalidOperationException) { }
+        };
+        return menu;
     }
     void ReloadDiskKeepingDraft() {
         if (IsComposing || note == null || editor.ReadOnly && workerBusy) return;
@@ -604,7 +616,7 @@ internal sealed class QuickNoteWindow : Form {
     }
     protected override void Dispose(bool disposing) {
         if (disposing) {
-            saveTimer.Dispose(); dayTimer.Dispose(); tips.Dispose();
+            saveTimer.Dispose(); dayTimer.Dispose(); tips.Dispose(); transientMenus.Dispose();
             while (imageQueue.Count > 0) ReleaseImage(imageQueue.Dequeue());
             if (completedImage != null) { ReleaseImage(completedImage); completedImage = null; }
             ClearImageAnchors(); nativeDocument.Dispose();

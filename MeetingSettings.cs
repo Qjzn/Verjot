@@ -167,7 +167,7 @@ internal sealed class MeetingSettingsDialog : Form {
         if (key != "vault_root") layout.SetColumnSpan(input, 2);
     }
     void Browse() {
-        using (var dialog = new FolderBrowserDialog { Description = "选择会议与速记的保存目录", ShowNewFolderButton = true }) {
+        using (var dialog = new FolderBrowserDialog { Description = MeetingBrand.Name + " · 选择会议与速记的保存目录", ShowNewFolderButton = true }) {
             string root = inputs["vault_root"].Text;
             if (Directory.Exists(root)) dialog.SelectedPath = root;
             if (dialog.ShowDialog(this) == DialogResult.OK) inputs["vault_root"].Text = dialog.SelectedPath;

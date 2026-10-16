@@ -25,6 +25,34 @@ internal static class TestQuickNoteEditor {
         Check(window.IsDisposed || (!(bool)Field(window, "workerBusy") && Field(window, "pendingText") == null && (int)Field(window, "queuedImageCount") == 0), "Background storage and image work complete without blocking the UI pump");
     }
     static NativeNoteDocument Document(QuickNoteWindow window) { return (NativeNoteDocument)Field(window, "nativeDocument"); }
+    static void CheckMenuClose(string vault, string root) {
+        foreach (string method in new string[] { "ShowSaveMenu", "ShowEditorMenu" }) {
+            for (int shutdown = 0; shutdown < 3; shutdown++) {
+                var store = new QuickNoteStore(vault, "menu-fixture", Path.Combine(root, "menu-recovery"));
+                using (var window = new QuickNoteWindow(store, Path.Combine(root, "menu-state"))) {
+                    // Show without Toggle: no note is loaded and no clipboard action is invoked.
+                    window.Show(); Pump(20);
+                    var menus = (System.ComponentModel.Container)Field(window, "transientMenus");
+                    int rounds = shutdown == 0 ? 3 : 1;
+                    for (int round = 0; round < rounds; round++) {
+                        Call(window, method);
+                        Check(menus.Components.Count == 1, method + " owns one temporary menu");
+                        var menu = (ContextMenuStrip)menus.Components[0];
+                        Check(menu.Visible && !menu.IsDisposed, method + " opens normally");
+                        if (shutdown != 2) {
+                            var message = Message.Create(menu.Handle, 0x100, new IntPtr((int)Keys.Escape), IntPtr.Zero);
+                            menu.PreProcessMessage(ref message);
+                            Check(!menu.Visible, method + " Escape closes without a disposal exception");
+                        }
+                        if (shutdown != 0) window.Dispose();
+                        Pump(30);
+                        Check(menu.IsDisposed && menus.Components.Count == 0, method + " releases menus after close or host shutdown");
+                    }
+                }
+            }
+        }
+        Console.WriteLine("Quick-note menu Escape, repeated reopen and host shutdown passed; clipboard actions were never invoked.");
+    }
     static void Append(QuickNoteWindow window, string text) {
         var editor = (RichTextBox)Field(window, "editor"); editor.Select(editor.TextLength, 0); Document(window).InsertText(text);
     }
@@ -260,6 +288,7 @@ internal static class TestQuickNoteEditor {
             string vault = Path.Combine(root, "vault"), recovery = Path.Combine(root, "recovery");
             Directory.CreateDirectory(vault);
             var store = new QuickNoteStore(vault, "速记", recovery);
+            CheckMenuClose(vault, root);
             CheckShortcutRouting();
             CheckDeferredImageComposition(vault, root);
             CheckFailedImportRecovery(vault, root);

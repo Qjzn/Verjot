@@ -26,6 +26,8 @@ try {
     try {
         $taskKey.SetValue('OwnerExecutable', $taskExe)
         $taskKey.SetValue('', 'URL:verbit 音频回放')
+        $taskIconKey = $taskKey.CreateSubKey('DefaultIcon')
+        try { $taskIconKey.SetValue('', '"' + $taskExe + '",0') } finally { $taskIconKey.Dispose() }
         $taskSubkey = $taskKey.CreateSubKey('shell\open\command')
         try { $taskSubkey.SetValue('', $taskCommand) } finally { $taskSubkey.Dispose() }
         # Activate the URI protocol only after its quoted command is complete.
