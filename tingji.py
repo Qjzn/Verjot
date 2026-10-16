@@ -413,6 +413,10 @@ def verify(args):
 
 
 def main():
+    # The public CLI emits UTF-8 even when redirected on an English Windows host.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     health = commands.add_parser("doctor", help="离线自检；不录音、不调用 API")

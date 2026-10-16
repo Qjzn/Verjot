@@ -93,6 +93,7 @@ class FirstUseTests(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 process = subprocess.run([tingji.sys.executable, "-B", str(script), "verify", *arguments],
                                          capture_output=True, encoding="utf-8", timeout=15,
+                                         env={**tingji.os.environ, "PYTHONIOENCODING": "cp1252"},
                                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 self.assertEqual(process.returncode, expected, process.stderr)
                 report = json.loads(process.stdout)
