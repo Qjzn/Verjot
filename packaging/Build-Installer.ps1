@@ -1,8 +1,8 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.1',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.2',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -13,7 +13,7 @@ if (-not $CompilerPath) {
     $CompilerPath = @( (Join-Path $taskRoot 'validation\installer-toolchain\inno-6.7.3\ISCC.exe'), (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'), (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe') ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
 }
 if (-not $CompilerPath -or -not (Test-Path -LiteralPath $CompilerPath -PathType Leaf)) { throw 'Inno Setup 6 ISCC.exe is required. Supply -CompilerPath, or explicitly run packaging\Get-InnoCompiler.ps1 to download the pinned signed portable compiler.' }
-$taskLibrary = Join-Path $taskRoot 'lib\NAudio.dll'
+$taskLibrary = Join-Path $taskRoot 'src\lib\NAudio.dll'
 if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf) -or (Get-FileHash -LiteralPath $taskLibrary -Algorithm SHA256).Hash -ne 'BC4BACC3B8B28D898F1671B79F216CCA439F95EB60CD32D3E3ECAFBECAC42780') { throw 'The reviewed NAudio 1.10.0 DLL is missing or has a different SHA256; restore it using Install.ps1.' }
 
 # Explicit reviewed allowlist. No checkout wildcard, personal config, models,
@@ -33,13 +33,20 @@ $taskFiles = @(
     'documentation\brand.md', 'documentation\product-scope.md',
     'documentation\quality.md', 'documentation\release-readiness.md',
     'documentation\risk-review.md', 'documentation\open-source-readiness.md',
+    'documentation\new-user-validation.md',
     'documentation\architecture.md', 'documentation\flows.md', 'documentation\permissions.md',
     'documentation\variables.md', 'documentation\tests.md', 'documentation\cron.md', 'documentation\automation.md',
     'assets\screenshots\recording.png', 'assets\screenshots\quick-note.png', 'assets\screenshots\settings.png',
     'packaging\licenses\NAudio.txt', 'packaging\quick-start.html', 'packaging\Check-InstallSafety.ps1'
 )
+function Get-PackageInput([string]$Relative) {
+    if ($Relative -notmatch '[\\/]' -and $Relative -notin @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'SECURITY.md', 'CONTRIBUTING.md')) {
+        return (Join-Path (Join-Path $taskRoot 'src') $Relative)
+    }
+    return (Join-Path $taskRoot $Relative)
+}
 foreach ($taskRelative in $taskFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $taskRoot $taskRelative) -PathType Leaf)) { throw "Package allowlist input is missing: $taskRelative" }
+    if (-not (Test-Path -LiteralPath (Get-PackageInput $taskRelative) -PathType Leaf)) { throw "Package allowlist input is missing: $taskRelative" }
 }
 $taskBuildRoot = Join-Path $taskOutput ('build-' + [Guid]::NewGuid().ToString('N'))
 $taskPayload = Join-Path $taskBuildRoot 'payload'
@@ -47,8 +54,12 @@ $taskPayload = Join-Path $taskBuildRoot 'payload'
 foreach ($taskRelative in $taskFiles) {
     $taskTarget = Join-Path $taskPayload $taskRelative
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($taskTarget)) | Out-Null
-    Copy-Item -LiteralPath (Join-Path $taskRoot $taskRelative) -Destination $taskTarget
+    Copy-Item -LiteralPath (Get-PackageInput $taskRelative) -Destination $taskTarget
 }
+# README links follow the repository layout online and the flat runtime offline.
+$taskReadme = Join-Path $taskPayload 'README.md'
+$taskReadmeText = [IO.File]::ReadAllText($taskReadme).Replace('](src/', '](')
+[IO.File]::WriteAllText($taskReadme, $taskReadmeText, (New-Object Text.UTF8Encoding($false)))
 # Install.ps1 restores lib/NAudio.dll only if needed; retaining the reviewed
 # copy also lets a user rebuild the controller without an additional download.
 [IO.Directory]::CreateDirectory((Join-Path $taskPayload 'lib')) | Out-Null

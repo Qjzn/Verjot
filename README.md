@@ -4,13 +4,15 @@
 
 Windows 上随手记录想法、保存会议声音的小工具。用全局快捷键打开原生置顶便签，或用一个小浮窗控制双路录音；会议结束得到 **一条 192 kbps MP3 + 一份 Markdown 转录**。支持普通文件夹和 Obsidian，速记不依赖模型，会议可选本地中文模型或 API。
 
-[下载 Windows x64 安装版](https://github.com/Qjzn/tingji/releases/tag/v0.1.0-beta.1) · [安装与快速上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [交给 AI 安装](documentation/ai-install.md)
+[下载 Windows x64 安装版](https://github.com/Qjzn/verbit/releases/tag/v0.1.0-beta.2) · [安装与快速上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [交给 AI 安装](documentation/ai-install.md)
 
 - **随手记**：`Ctrl+Alt+J` 打开置顶便签，中文输入、粘贴图片，停顿后自动保存。
 - **轻量开会**：小浮窗控制麦克风和电脑声音，支持暂停、重点时间标记及默认 5 秒误触保护。
 - **文件自己留**：会后保留一条 MP3 和一份 Markdown；识别可选本地中文模型或自己的兼容 API。
 
 准备参与开发或审查？从 [架构与边界](documentation/architecture.md)、[测试覆盖](documentation/tests.md) 和 [开源检查](documentation/open-source-readiness.md) 开始。
+
+安装包的新用户路径、空环境依赖与实际转写结果见 [新用户验证](documentation/new-user-validation.md)；未测项目单独标记，不用自检通过代替真实使用。
 
 ## 界面预览
 
@@ -26,12 +28,12 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 ## 安装版快速上手
 
-1. 在 [Releases](https://github.com/Qjzn/tingji/releases/tag/v0.1.0-beta.1) 下载 EXE 并核对随包 SHA256。需要 **Windows 10 1809+ / Windows 11 x64、.NET Framework 4.8**，无需管理员权限。
+1. 在 [Releases](https://github.com/Qjzn/verbit/releases/tag/v0.1.0-beta.2) 下载 EXE 并核对随包 SHA256。需要 **Windows 10 1809+ / Windows 11 x64、.NET Framework 4.8**，无需管理员权限。
 2. 安装后首次弹出设置，选择保存目录、确认快捷键，点击「保存并启动」。取消不创建配置，下次仍可设置；已有配置不会被覆盖。
 3. 程序驻留托盘，按 **`Ctrl+Alt+J`** 打开置顶速记，直接输入或粘贴图片，停顿后自动保存。
 4. 需要会议录音与转写时，再按 [安装说明](documentation/install-windows.md#启用会议转写) 配置本地或 API 引擎，并完成自检和一次真实验收。**轻量安装包不附带 Python、模型或 FFmpeg**，缺少环境时开始录音会先提示。
 
-当前版本是 `0.1.0-beta.1` 预发布版，仓库仍私有；下载需要仓库权限。录音质量、设备兼容及干净机器安装的实际覆盖范围见 [质量证据](documentation/quality.md)、[发布验收](documentation/release-readiness.md) 和 [开源准备检查](documentation/open-source-readiness.md)。本地模型会后处理仍可能占用较多内存与显存。
+当前版本是 `0.1.0-beta.2` 预发布版，仓库仍私有；下载需要仓库权限。录音质量、设备兼容及干净机器安装的实际覆盖范围见 [质量证据](documentation/quality.md)、[发布验收](documentation/release-readiness.md) 和 [开源准备检查](documentation/open-source-readiness.md)。本地模型会后处理仍可能占用较多内存与显存。
 
 ## 会议操作
 
@@ -106,9 +108,9 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 > 请按 `documentation/ai-install.md` 安装 verbit。先核对保存目录、local/api 模式与已有环境，运行 `Install.ps1 -Plan`，再执行安装。保留已有配置和会议；密钥仅使用环境变量。完成后运行 doctor，说明实际验证与未验证的部分；不要默认修改开机启动。
 
-完整步骤见 [AI 安装说明](documentation/ai-install.md)。配置字段、默认值、示例与排障见 [配置说明](documentation/configuration.md)；机器可读约束在 [config.schema.json](config.schema.json)，首次配置模板为 [config.example.json](config.example.json)。
+完整步骤见 [AI 安装说明](documentation/ai-install.md)。配置字段、默认值、示例与排障见 [配置说明](documentation/configuration.md)；机器可读约束在 [config.schema.json](src/config.schema.json)，首次配置模板为 [config.example.json](src/config.example.json)。
 
-需要 **Windows 10/11 x64、Python 3.12 x64、.NET Framework 4.8**。以下命令在源码目录执行，保存位置请换成自己的路径：
+需要 **Windows 10/11 x64、Python 3.12 x64、.NET Framework 4.8**。Git 源码版先进入 `src`，再执行以下命令；EXE 安装版在程序安装目录执行，不追加 `src`。保存位置请换成自己的路径：
 
 ```powershell
 # 先看计划；不下载、不创建配置、不修改启动项
@@ -121,6 +123,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath
 本地 CPU 模式改为 `-Mode local -Backend cpu`；NVIDIA CUDA 环境可选 `-Mode local -Backend cuda128`。首次使用 Obsidian 加 `-UseObsidian`，需要登录自启才加 `-StartWithWindows`。安装器保留现有 `config.json`；已有 Torch 后端与参数不一致时会停止，需按实际环境选择参数。安装过程不启动录音，也不调用 API。
 
 首次 API 安装会留下模板，服务地址和模型名未填写时自检失败并返回非零退出码。补齐配置与密钥环境变量后重跑安装，不能把模板生成当作安装就绪。
+
+## 源码目录
+
+| 目录 | 内容 |
+| --- | --- |
+| `src/` | 控制器、转写、配置模板、依赖和安装/构建入口；源码安装在这里执行。 |
+| `tests/` | 原生与 Python 回归，由 `src/Test.ps1` 启动。 |
+| `documentation/` | 上手、配置、质量证据和开源检查。 |
+| `packaging/` | EXE 打包、安装器和新用户流程验证。 |
+| `assets/` | 当前 Logo 与演示截图。 |
+
+安装后的程序保持独立运行目录结构，不包含测试代码；源码整理不改变已有安装的配置、保存路径与快捷键。
 
 ## 选择转写方式
 
@@ -159,18 +173,22 @@ API 兼容 **`POST /audio/transcriptions`**，使用 WAV、`model`、`language=z
 ```powershell
 .\.venv\Scripts\python.exe -B tingji.py doctor --full --json
 .\.venv\Scripts\python.exe -B tingji.py status --json
-.\.venv\Scripts\python.exe -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio -v
-# 完整源码回归：Python + 编译执行原生控制器、浮窗和会议目录测试
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
 ```
 
 `doctor` 检查配置、依赖、模型文件、写入权限与空间；`--full` 进一步导入依赖并检查音频设备，始终不录音、不加载识别模型、不调用 API。健康退出码为 `0`，失败为 `2`。`status` 读取最近一次会议的处理状态。自检通过后，仍需用一段明确授权的音频验证目标机器的真实输入、输出和转写服务。
+
+完整回归用于源码维护者，安装包不附带测试代码。在仓库根目录执行以下命令；已按前文进入 `src` 时直接执行第二行：
+
+```powershell
+Set-Location .\src
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
+```
 
 自动化回归覆盖配置、API 请求与断点恢复、混音时间轴、原子发布、成品校验和手写区保护。原生回归覆盖按会议重试、进程接回、启动恢复提示、两路输入反馈和轻量处理浮窗。真实硬件切换、API 供应方与全新机器安装需分别验证；模拟接口和界面测试不能证明供应方可用、中文准确率或目标机器的设备行为。
 
 运行 `ObsidianMeeting.exe` 启动 verbit，此文件名为兼容现有快捷方式保留。开发更新可用 `Build.ps1 -OutputPath ObsidianMeeting.next.exe` 生成候选；构建需要同版 `ObsidianMeeting.cs`、`SessionCatalog.cs`、`MeetingActions.cs`、`QuickNoteStore.cs`、`NativeNoteDocument.cs`、`QuickNoteWindow.cs`、`app.manifest`、应用配置与图标资源。构建同时生成候选名对应的 `.exe.config`，安装为正式文件名时也须对应改名为 `ObsidianMeeting.exe.config`。更新前完成会议及转写并正常退出托盘，保留本机 `config.json` 与 `work/`。`assets/Create-Icons.ps1` 可重新生成图标。
 
-旧版附件整理工具默认只规划：`Compact-Completed-Meetings.py`；未合并但完整的旧记录可先用 `Prepare-Legacy-Merged-Meetings.py`。实际变更需明确传入 `--apply`，后者还要求 `--only-session` 名单。只清理已验证的生成文件，未知文件与缺少成品的记录保留。
+源码版 `src/` 中的旧版附件整理工具默认只规划：`Compact-Completed-Meetings.py`；未合并但完整的旧记录可先用 `Prepare-Legacy-Merged-Meetings.py`。安装包不包含这两个维护工具。实际变更需明确传入 `--apply`，后者还要求 `--only-session` 名单。只清理已验证的生成文件，未知文件与缺少成品的记录保留。
 
 录制时默认每 300 秒按精确帧切为一个原设备格式的无损 WAV 段，另有单段安全字节边界；切段不重启设备、不重置时钟、不删掉暂停时长。同一设备各段仍是一条逻辑音轨，避免交界讲话被拆成不同来源。混音使用支持大文件的临时 RF64，随后流式编码 MP3。`recording_segment_seconds` 可设 10–600 秒；`mp3_bitrate_kbps` 默认 192，可选 128、192、256、320。192 kbps 成品约 86.4 MB/小时，临时无损音轨仍需要空间。
 

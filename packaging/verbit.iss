@@ -5,7 +5,7 @@
   #error OutputDir is required. Run Build-Installer.ps1.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-beta.1"
+  #define ReleaseVersion "0.1.0-beta.2"
 #endif
 #ifndef NumericVersion
   #define NumericVersion "0.1.0.0"
@@ -18,8 +18,8 @@ AppVersion={#ReleaseVersion}
 UninstallDisplayName=verbit
 VersionInfoVersion={#NumericVersion}
 AppPublisher=Qjzn
-AppPublisherURL=https://github.com/Qjzn/tingji
-AppSupportURL=https://github.com/Qjzn/tingji/issues
+AppPublisherURL=https://github.com/Qjzn/verbit
+AppSupportURL=https://github.com/Qjzn/verbit/issues
 DefaultDirName={localappdata}\Programs\verbit
 DefaultGroupName=verbit
 PrivilegesRequired=lowest

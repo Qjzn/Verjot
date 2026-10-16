@@ -2,6 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
+import tingji_config
 from tingji_config import parse_hotkey, validate_config
 from meeting_worker import audio_link
 
@@ -35,7 +36,7 @@ class ConfigurationTests(unittest.TestCase):
         for seconds in (0, 1, 5, 300):
             with self.subTest(seconds=seconds):
                 self.assertEqual(self.validate(recording_protection_seconds=seconds)["recording_protection_seconds"], seconds)
-        example = json.loads(Path(__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
+        example = json.loads(Path(tingji_config.__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
         self.assertEqual(example["recording_protection_seconds"], 5)
 
     def test_recording_protection_rejects_out_of_range_and_non_integer_values(self):
@@ -91,7 +92,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config["pause_hotkey"], "Alt+Space")
 
     def test_new_example_explicitly_selects_plain_markdown(self):
-        example = json.loads(Path(__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
+        example = json.loads(Path(tingji_config.__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
         self.assertFalse(validate_config(example, check_directory=False)["open_in_obsidian"])
 
     def test_legacy_config_enables_lightweight_feedback_defaults(self):
@@ -129,7 +130,7 @@ class ConfigurationTests(unittest.TestCase):
                     self.validate(**{field: value})
 
     def test_new_example_enables_all_three_feedback_options(self):
-        example = json.loads(Path(__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
+        example = json.loads(Path(tingji_config.__file__).with_name("config.example.json").read_text(encoding="utf-8-sig"))
         for field in ("show_processing_window", "notify_device_changes", "auto_open_completed_note"):
             with self.subTest(field=field):
                 self.assertIs(example[field], True)

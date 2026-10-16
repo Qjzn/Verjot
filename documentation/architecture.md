@@ -2,6 +2,8 @@
 
 verbit 是当前 Windows 用户的桌面工具：.NET Framework 4.8 / WinForms / RichEdit 处理托盘、快捷键、速记和 WASAPI 采集；Python worker 处理音频、转录与成品发布。没有远端账户、数据库或服务端授权系统。
 
+以下桌面、转写与配置文件在源码仓库的 `src/`，测试在 `tests/`。源码版进入 `src/` 安装和运行；EXE 安装版保留平铺的程序目录，安装步骤不追加 `src`。仓库根目录只展示产品说明与政策文件。
+
 | 模块 | 入口与职责 |
 | --- | --- |
 | 桌面与首次设置 | `ObsidianMeeting.cs`、`MeetingSettings.cs`；首次没有配置才弹窗，保存通过后进入托盘。 |

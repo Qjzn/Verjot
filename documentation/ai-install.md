@@ -17,7 +17,7 @@
 | 本地后端 | 本地模式默认 `cpu`；只有用户选择 NVIDIA CUDA 环境时使用 `cuda128`。安装脚本不自动猜 GPU。 |
 | API 服务 | API 模式需要服务前缀、实际支持的音频转写模型名，以及密钥环境变量名。密钥值由用户在机器上提供，不写入配置或安装记录。 |
 
-源码仓库是 [Qjzn/tingji](https://github.com/Qjzn/tingji)，当前为私有仓库。使用已有授权的 Git 访问方式取得源码；已有目录优先复用。无法访问时先处理账号授权，不索取用户的明文 token，也不修改仓库公开权限。
+源码仓库是 [Qjzn/verbit](https://github.com/Qjzn/verbit)，当前为私有仓库。使用已有授权的 Git 访问方式取得源码；已有目录优先复用。无法访问时先处理账号授权，不索取用户的明文 token，也不修改仓库公开权限。
 
 安装或更新应取得同一版本的完整源码。不要只替换 `ObsidianMeeting.cs` 或 EXE：原生程序还依赖 `SessionCatalog.cs`、`MeetingActions.cs`、`QuickNoteStore.cs`、`NativeNoteDocument.cs` 与 `QuickNoteWindow.cs`，字段校验依赖 `config.schema.json`，Python 转写脚本与配置示例也需要保持同版。构建入口为 `Build.ps1`；回归入口为 `Test.ps1`。`app.manifest` 嵌入 Windows 10 兼容声明，构建自动复制同名 `.exe.config`，为 .NET Framework 4.8 启用 `PerMonitorV2`；正式运行必须保留 `ObsidianMeeting.exe.config`，不能仅部署 EXE。更新前保留现有 `config.json`、`work/` 与成品，不把本机资料复制进 Git。
 
@@ -29,6 +29,8 @@ py -3.12 -c "import sys, struct; print(sys.executable); print(sys.version); prin
 
 位数应为 `64`。没有 `py` 时，可向安装命令追加 `-PythonExe "已安装的 Python 3.12\python.exe 完整路径"`。脚本不会安装系统 Python、切换全局 Python 或删除已有虚拟环境；缺少 Python 时由用户安装，或在用户明确授权后另行安装。
 
+本轮测试使用 Python 3.12.10，普通 x64 安装器见 [Python 官方发布页](https://www.python.org/downloads/release/python-31210/)。需要 pip 与 venv，不使用 embeddable package；已有 Python 3.12 x64 可通过明确路径复用，不要求切换机器全局版本。
+
 已有 `config.json` 时先只读核对它。安装脚本保留原文件；模式参数省略时继承已有 `transcription_mode`，旧配置缺省为 `local`。显式模式与已有配置冲突、已有 Torch 版本或后端与本地安装参数不匹配，都会停止并说明原因。不要用重建虚拟环境或覆盖配置来绕过提示。
 
 verbit 正在运行时不能安装或重建。等用户结束录音和转写，再让用户从托盘正常退出；不要结束录音进程来腾出安装位置。
@@ -37,12 +39,12 @@ verbit 正在运行时不能安装或重建。等用户结束录音和转写，�
 
 ## 先运行安装计划
 
-以下命令假设源码已放在 `E:\Tools\tingji`，保存目录为 `D:\Meetings`。替换为实际路径。`-ExecutionPolicy Bypass` 只作用于这次 PowerShell 进程，不修改机器或用户的执行策略。
+EXE 安装版在程序安装目录执行以下命令，不追加 src。Git 源码版先进入 `E:\Tools\verbit\src`；运行环境安装在 src 下，测试统一在 tests 下。保存目录示例为 `D:\Meetings`，替换为实际路径。`-ExecutionPolicy Bypass` 只作用于这次 PowerShell 进程，不修改机器或用户的执行策略。
 
 API 模式计划：
 
 ```powershell
-Set-Location 'E:\Tools\tingji'
+Set-Location 'E:\Tools\verbit\src'
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath 'D:\Meetings' -Mode api -Plan
 ```
 
@@ -183,13 +185,13 @@ AI 的交付记录至少应说明所选模式、实际保存位置、已有配�
 
 异常恢复测试使用独立测试目录和无敏感的复制资料。检查活跃转写进程接回且不重复启动、退出期间完成后出现结果入口、有原始录音的失败场次对应重试、中断录音仅提供状态和资料检查而不提供普通重试。核对同一可读状态的提示去重，以及重试或状态变化后的新提示；异常 JSON 或路径无法安全记录提示时允许每次启动提醒。不要为了测试而结束用户会议或删除其恢复文件。
 
-维护者在完整源码目录运行回归：
+维护者在完整源码的 src 目录运行回归；EXE 安装包不包含测试代码：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
 ```
 
-`Test.ps1` 启动测试前扫描源码根目录的 `Test*.cs`，发现共享剪贴板访问、全局输入注入或 `SetForegroundWindow` 调用就停止，要求改用局部 `DataObject` 或目标窗口消息。随后编译执行原生会议目录、浮窗、动效、控制器与速记回归，再运行 Python 定向回归。
+`Test.ps1` 启动测试前扫描 tests 目录中的 `Test*.cs`，发现共享剪贴板访问、全局输入注入或 `SetForegroundWindow` 调用就停止，要求改用局部 `DataObject` 或目标窗口消息。随后编译执行原生会议目录、浮窗、动效、控制器与速记回归，再运行 Python 定向回归。
 
 所有原生测试都由 `TestDesktopRunner.cs` 通过 `CreateDesktop` 和 `CreateProcess` 放到各自的独立测试桌面，始终不调用 `SwitchDesktop`。测试窗口可在自己的桌面显示和激活，不会激活用户正在使用的窗口，也不切换用户屏幕；桌面创建或子进程启动失败就报错，不回退到用户桌面。独立桌面用于隔离窗口与焦点，剪贴板访问仍受前述源码禁令约束。子进程标准输出与退出码用于记录结果；原生测试不录制音频、不调用转写 API。记录实际退出码，失败先处理原因再重跑；不能把未运行的项目报告为通过。
 

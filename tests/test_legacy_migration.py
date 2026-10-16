@@ -12,7 +12,7 @@ import meeting_worker as worker
 
 
 def load_script(name, filename):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / filename)
+    spec = importlib.util.spec_from_file_location(name, Path(worker.__file__).parent / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

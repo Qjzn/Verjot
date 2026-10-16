@@ -11,7 +11,9 @@
 | API → 危险 URL/重定向拒绝、响应限制与密钥不泄漏 | `test_api_asr.py`；[AI 边界](automation.md) | 已有模拟服务测试，CI 执行；不调用真实服务。 |
 | 安装/升级/卸载 → 归属、占用拒绝与个人数据保留 | `packaging/Test-Installer.ps1`；[发布验收](release-readiness.md) | 已有本机隔离安装器回归，不在当前 CI 中。 |
 
-CI 定义见 [workflow](../.github/workflows/ci.yml)，实际通过以对应提交的 Actions 结果为准；尚未启用 required checks，不把“配置了 CI”写成合并门禁。
+源码测试统一放在 `tests/`，由 `src/Test.ps1` 执行；源码运行代码与依赖位于 `src/`。安装包不包含测试或 CI 文件。CI 定义见 [workflow](https://github.com/Qjzn/verbit/blob/main/.github/workflows/ci.yml)，实际通过以对应提交的 Actions 结果为准；尚未启用 required checks，不把“配置了 CI”写成合并门禁。
+
+本轮新用户的实际安装、空环境依赖与真实模型处理结果见 [新用户验证](new-user-validation.md)。实际 EXE 首次启动回归为 `packaging/Test-NewUser.ps1`，要求当前会话正常退出 verbit 且没有其他安装登记；`-InstallOnly` 不等于首次设置和速记已经验证。
 
 ## 建议新增的验证
 

@@ -1,4 +1,4 @@
-﻿verbit 0.1.0-beta.1
+verbit 0.1.0-beta.2
 
 适用系统：Windows 10 1809 / Windows 11 x64，.NET Framework 4.8。
 

@@ -11,10 +11,12 @@
 | 自有与第三方许可 | 根目录 MIT 完整；确认 NAudio **1.10.0 是 Ms-PL**，已修正旧 MIT 说明并加入原版全文。当前图形为本项目按用户参考生成、独立文字显示的图标。 | 安装包保留 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `packaging/licenses/NAudio.txt`。图形参考来源及公开使用权需维护者确认；没有作第三方授权或独占性保证。 |
 | 运行时分发 | 本机 imageio-ffmpeg wheel 的 FFmpeg 7.1 启用 GPL/version3；本次轻量安装包不含它、Python 环境或模型，按说明从官方来源单独安装。 | 全离线/全运行时包需逐个确认原生库、模型、完整许可证和对应源码的提供方式，不能从 `.venv` 直接打包发布。详见 [第三方通知](../THIRD_PARTY_NOTICES.md)。 |
 | 名称 | [Verbit 官网](https://verbit.ai/about-us/)及其[转录产品](https://verbit.ai/solutions-transcription/)已使用相同英文名称，且业务领域接近。 | 存在可核实的品牌混淆风险；这不是已确认侵权结论。公开推广前决定是否换名或进行专业名称/商标检索，未擅自更改用户选定名称。 |
-| CI 与仓库门禁 | Windows workflow 固定 action commit、只读 contents 权限、官方 NAudio 固定 DLL SHA-256，执行桌面构建、19 组原生合成回归与 66 项配置/API/首次使用测试。实际执行发现并修复首次窗口定位、结果文件时间精度和英文 Windows 中文输出问题；最终结果见 [Actions](https://github.com/Qjzn/tingji/actions/workflows/ci.yml)。 | 发布要求对应源码提交的 CI 通过。主分支保护 API 返回 403，提示当前私有仓库需要 GitHub Pro 或公开才可使用该功能；没有声称已启用保护。安全分析元数据返回空，私密报告、依赖/secret 扫描及 required checks 也未确认启用。 |
+| CI 与仓库门禁 | Windows workflow 固定 action commit、只读 contents 权限、官方 NAudio 固定 DLL SHA-256，执行桌面构建、19 组原生合成回归与 66 项配置/API/首次使用测试。实际执行发现并修复首次窗口定位、结果文件时间精度和英文 Windows 中文输出问题；最终结果见 [Actions](https://github.com/Qjzn/verbit/actions/workflows/ci.yml)。 | 发布要求对应源码提交的 CI 通过。主分支保护 API 返回 403，提示当前私有仓库需要 GitHub Pro 或公开才可使用该功能；没有声称已启用保护。安全分析元数据返回空，私密报告、依赖/secret 扫描及 required checks 也未确认启用。 |
 | 真实使用质量 | 现有测试、首次使用步骤与局限均有记录。 | 干净 Windows 10/11、30/60/120 分钟会议、休眠/断电/磁盘满、蓝牙热切换、已标注中文/跨轨身份准确率仍按 [发布验收](release-readiness.md) 分别验证，不由 CI 绿色替代。 |
 
 本地历史扫描报告保存于 `validation/open-source-audit-20261016/final-history-scan.json`，不随源码发布。不把真实用户音频、转录或完整日志作为公开测试素材。模块交接与审查入口见 [架构](architecture.md)、[流程](flows.md)、[权限](permissions.md)、[配置与密钥](variables.md)、[测试映射](tests.md)、[后台任务](cron.md) 和 [AI 边界](automation.md)。
+
+本轮进一步将仓库改名为 `Qjzn/verbit` 并保持私有，源码与测试分别移入 `src/`、`tests/`，根目录仅保留 6 个产品说明与政策文件。目录迁移后的回归、新装 API/本地 CPU 环境与真实模型转写证据见 [新用户验证](new-user-validation.md)。实际 EXE 首次设置、速记和重启路径已完成 28 项断言，不以程序集回归替代；本轮按维护者选择不进行真实录音，硬件与回听仍保留后续验收。
 
 ## 架构与信任边界
 

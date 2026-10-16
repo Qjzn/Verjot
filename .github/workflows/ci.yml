@@ -16,6 +16,7 @@ jobs:
     defaults:
       run:
         shell: powershell
+        working-directory: src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -44,5 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Test dependency check failed' }
       - name: Configuration, API and first-use contracts
         run: |
+          $env:PYTHONPATH = "$PWD;$PWD\..\tests"
+          New-Item -ItemType Directory -Path ../tests/validation -Force | Out-Null
           python -B -m unittest test_tingji_config test_api_asr test_first_use
           if ($LASTEXITCODE -ne 0) { throw 'Python contract tests failed' }

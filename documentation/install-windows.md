@@ -2,15 +2,15 @@
 
 ## 下载与首次启动
 
-从 [GitHub Releases](https://github.com/Qjzn/tingji/releases) 下载 `verbit-0.1.0-beta.1-setup-x64.exe` 和 `SHA256SUMS.txt`。仓库目前私有，需有仓库访问权限才能下载。安装包没有数字签名，Windows 可能提示未知发布者；先核对来源及 SHA256，不关闭系统安全防护。
+从 [GitHub Releases](https://github.com/Qjzn/verbit/releases) 下载 `verbit-0.1.0-beta.2-setup-x64.exe` 和 `SHA256SUMS.txt`。仓库目前私有，需有仓库访问权限才能下载。安装包没有数字签名，Windows 可能提示未知发布者；先核对来源及 SHA256，不关闭系统安全防护。
 
 ```powershell
-Get-FileHash .\verbit-0.1.0-beta.1-setup-x64.exe -Algorithm SHA256
+Get-FileHash .\verbit-0.1.0-beta.2-setup-x64.exe -Algorithm SHA256
 ```
 
 需要 Windows 10 1809 或更新版本 / Windows 11 x64，以及 .NET Framework 4.8。安装到当前用户目录，默认 `%LOCALAPPDATA%\Programs\verbit`，不要求管理员权限。安装程序只包含桌面程序、NAudio、配置模板、安装脚本与说明，**不包含个人配置、会议数据、Python、模型或 FFmpeg**，不自动安装转写依赖或上传音频。
 
-首次打开会显示设置窗口：选择保存地址，确认四组快捷键及默认 5 秒误触保护，点击「保存并启动」。保存成功后才创建 `config.json`；取消会退出，下次打开仍显示首次设置。已有配置的安装不会反复弹出首次窗口，也不会覆盖原配置。保存前会检测快捷键占用，有冲突可直接修改。
+首次打开会显示设置窗口：点击「选择…」指定已有保存目录（可在目录选择器里新建文件夹），确认四组快捷键及默认 5 秒误触保护，点击「保存并启动」。直接填写尚不存在的目录时会提示先创建，设置窗口保持可编辑；不会静默改用其他位置。保存成功后才创建 `config.json`；取消会退出，下次打开仍显示首次设置。已有配置的安装不会反复弹出首次窗口，也不会覆盖原配置。保存前会检测快捷键占用，有冲突可直接修改。
 
 完成设置后程序驻留托盘，按 `Ctrl+Alt+J` 即可使用置顶速记，支持文字、图片和自动保存。速记无需 Python、模型或 Obsidian。托盘或浮窗右键 →「设置…」可再次修改目录与快捷键。
 
@@ -21,6 +21,8 @@ Get-FileHash .\verbit-0.1.0-beta.1-setup-x64.exe -Algorithm SHA256
 安装桌面程序不等于会议引擎已就绪。首次设置页会说明这一点；缺少 Python 环境或 worker 时，开始录音会在采集前提示安装，不会让用户录完才发现这两项缺失。文件存在检查不能替代下面的完整自检。
 
 先从托盘退出 verbit，安装 **Python 3.12 x64**，再在程序安装目录打开 PowerShell。可将 [AI 安装说明](ai-install.md) 交给 AI，并明确选择以下一种方式：
+
+本轮验证使用 Python 3.12.10；其[官方发布页](https://www.python.org/downloads/release/python-31210/)提供 **Windows installer (64-bit)**。选择普通安装器，不选 embeddable package 或 ARM64。安装时保留 pip/venv 和 Python Launcher；如果已有其他 Python，不需要替换全局版本。先用 `py -3.12 -c "import sys; print(sys.executable)"` 确认，缺少 `py` 时给 `Install.ps1` 追加 `-PythonExe "Python 3.12 的 python.exe 完整路径"`。安装脚本不会代装系统 Python；可先运行 `-Plan` 检查路径和所选模式。
 
 | 方式 | 安装内容 | 音频去向 |
 | --- | --- | --- |
@@ -66,4 +68,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 ## 预发布边界
 
-`0.1.0-beta.1` 是预发布版。安装器在本机隔离目录完成安装、升级保留与卸载检查，不代表已经覆盖干净 Windows、SmartScreen、所有声卡、API 服务及数小时会议。测试结果与公开前阻断项见 [开源准备检查](open-source-readiness.md) 和 [发布验收清单](release-readiness.md)。
+`0.1.0-beta.2` 是预发布版。安装器在本机隔离目录完成安装、升级保留与卸载检查，不代表已经覆盖干净 Windows、SmartScreen、所有声卡、API 服务及数小时会议。测试结果与公开前阻断项见 [开源准备检查](open-source-readiness.md) 和 [发布验收清单](release-readiness.md)。

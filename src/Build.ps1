@@ -5,6 +5,10 @@ $ErrorActionPreference = 'Stop'
 
 # Build the desktop controller only. Python packages and models are installed separately.
 $taskRoot = $PSScriptRoot
+$taskAssets = Join-Path $taskRoot 'assets'
+$taskRepo = Split-Path $taskRoot -Parent
+$taskCheckout = Test-Path -LiteralPath (Join-Path $taskRepo 'packaging\Build-Installer.ps1') -PathType Leaf
+if ($taskCheckout) { $taskAssets = Join-Path $taskRepo 'assets' }
 $taskSource = Join-Path $taskRoot 'ObsidianMeeting.cs'
 $taskCatalog = Join-Path $taskRoot 'SessionCatalog.cs'
 $taskActions = Join-Path $taskRoot 'MeetingActions.cs'
@@ -15,8 +19,8 @@ $taskNoteDocument = Join-Path $taskRoot 'NativeNoteDocument.cs'
 $taskManifest = Join-Path $taskRoot 'app.manifest'
 $taskApplicationConfig = Join-Path $taskRoot 'ObsidianMeeting.exe.config'
 $taskLibrary = Join-Path $taskRoot 'lib\NAudio.dll'
-$taskIdleIcon = Join-Path $taskRoot 'assets\tingji.ico'
-$taskRecordingIcon = Join-Path $taskRoot 'assets\tingji-recording.ico'
+$taskIdleIcon = Join-Path $taskAssets 'tingji.ico'
+$taskRecordingIcon = Join-Path $taskAssets 'tingji-recording.ico'
 $taskCompiler = @(
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
     (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
@@ -56,4 +60,18 @@ if ($taskRuntimeLibrary -ine [IO.Path]::GetFullPath($taskLibrary)) {
     if (-not $taskLibraryMatches) { Copy-Item -LiteralPath $taskLibrary -Destination $taskRuntimeLibrary -Force }
 }
 Write-Output "Built: $taskOutput"
+if ($taskCheckout -and $taskOutputFolder -ieq $taskRoot) {
+    # Source installs provide the same offline setup guide as the installer.
+    Copy-Item -LiteralPath (Join-Path $taskRepo 'documentation') -Destination $taskRoot -Recurse -Force
+    foreach ($taskPolicy in @('LICENSE', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md')) {
+        Copy-Item -LiteralPath (Join-Path $taskRepo $taskPolicy) -Destination $taskRoot -Force
+    }
+    [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'assets')) | Out-Null
+    foreach ($taskName in @('verbit-logo.png', 'tingji.ico', 'tingji-recording.ico')) {
+        Copy-Item -LiteralPath (Join-Path $taskAssets $taskName) -Destination (Join-Path $taskRoot 'assets') -Force
+    }
+    [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'packaging')) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $taskRepo 'packaging\quick-start.html') -Destination (Join-Path $taskRoot 'packaging') -Force
+    Copy-Item -LiteralPath (Join-Path $taskRepo 'packaging\licenses') -Destination (Join-Path $taskRoot 'packaging') -Recurse -Force
+}
 Write-Output 'Keep the executable in the project folder when running it, alongside config.json, Python scripts, .venv and models.'

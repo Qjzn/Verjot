@@ -258,7 +258,7 @@ raise SystemExit(api_asr.main())
         process = subprocess.run([sys.executable, "-c", code, "--segments", self.args.segments,
                                   "--api-base-url", self.base_url, "--api-model", "speech-model",
                                   "--api-timeout-seconds", "10"],
-                                 cwd=Path(__file__).resolve().parent, capture_output=True,
+                                 cwd=Path(api_asr.__file__).resolve().parent, capture_output=True,
                                  text=True, encoding="utf-8", timeout=20)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(self.read("result.json")["segments"][0]["text"], "仅API识别")
@@ -329,7 +329,7 @@ class DownloadRoutingTests(unittest.TestCase):
         # Import the downloader with an isolated fake requests module: tests must
         # neither require a downloader dependency installation nor open the network.
         spec = importlib.util.spec_from_file_location(
-            "download_models_test", Path(__file__).resolve().parent / "download_models.py")
+            "download_models_test", Path(api_asr.__file__).resolve().parent / "download_models.py")
         downloader = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"requests": SimpleNamespace(Session=lambda: MagicMock())}):
             spec.loader.exec_module(downloader)
@@ -378,7 +378,7 @@ class DownloadResumeTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         spec = importlib.util.spec_from_file_location(
-            "download_resume_test", Path(__file__).resolve().parent / "download_models.py")
+            "download_resume_test", Path(api_asr.__file__).resolve().parent / "download_models.py")
         self.downloader = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"requests": SimpleNamespace(Session=lambda: MagicMock())}):
             spec.loader.exec_module(self.downloader)

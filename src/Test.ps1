@@ -1,11 +1,13 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
-param([switch]$NativeOnly)
+param([switch]$NativeOnly, [string]$PythonExe)
 $ErrorActionPreference = 'Stop'
 $taskRoot = $PSScriptRoot
+$taskRepo = Split-Path $taskRoot -Parent
+$taskTests = Join-Path $taskRepo 'tests'
 # Fail before starting any fixture if a test tries to use shared user input.
 $taskUnsafeTestCalls = '\b(?:Clipboard\s*\.\s*(?:Get\w*|Set\w*|Clear|Contains\w*)|SendInput|SendKeys\s*\.\s*\w+|keybd_event|SetForegroundWindow|OpenClipboard|EmptyClipboard|SetClipboardData|GetClipboardData)\s*\('
-$taskUnsafeSources = Get-ChildItem -LiteralPath $taskRoot -Filter 'Test*.cs' -File | Select-String -Pattern $taskUnsafeTestCalls
+$taskUnsafeSources = Get-ChildItem -LiteralPath $taskTests -Filter 'Test*.cs' -File | Select-String -Pattern $taskUnsafeTestCalls
 if ($taskUnsafeSources) { throw 'A native test contains a shared clipboard or global input call. Use a local DataObject or targeted window message.' }
 $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $taskCompiler)) { $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
@@ -13,17 +15,17 @@ if (-not (Test-Path -LiteralPath $taskCompiler)) { throw '.NET Framework C# comp
 $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($taskOutput) | Out-Null
 $taskDesktopRunner = Join-Path $taskOutput 'TestDesktopRunner.exe'
-& $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskRoot 'TestDesktopRunner.cs')
+& $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskTests 'TestDesktopRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw "Isolated test desktop runner compilation failed: $LASTEXITCODE" }
 foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestMeetingSettings', 'TestRecordingProtection', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestQuickNoteStore', 'TestNativeNoteDocument', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput', 'TestQuickNoteNewlines')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
     $taskArguments = @('/nologo', '/utf8output', '/target:exe', "/main:$taskTest", "/out:$taskBinary", '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Web.Extensions.dll',
-        ('/r:' + (Join-Path $taskRoot 'lib\NAudio.dll')), ('/resource:' + (Join-Path $taskRoot 'assets\tingji.ico') + ',Tingji.Idle.ico'),
-        ('/resource:' + (Join-Path $taskRoot 'assets\tingji-recording.ico') + ',Tingji.Recording.ico'), (Join-Path $taskRoot 'ObsidianMeeting.cs'),
+        ('/r:' + (Join-Path $taskRoot 'lib\NAudio.dll')), ('/resource:' + (Join-Path $taskRepo 'assets\tingji.ico') + ',Tingji.Idle.ico'),
+        ('/resource:' + (Join-Path $taskRepo 'assets\tingji-recording.ico') + ',Tingji.Recording.ico'), (Join-Path $taskRoot 'ObsidianMeeting.cs'),
         (Join-Path $taskRoot 'SessionCatalog.cs'), (Join-Path $taskRoot 'MeetingActions.cs'), (Join-Path $taskRoot 'MeetingSettings.cs'), (Join-Path $taskRoot 'QuickNoteStore.cs'), (Join-Path $taskRoot 'QuickNoteWindow.cs'), (Join-Path $taskRoot 'NativeNoteDocument.cs'),
-        ('/win32manifest:' + (Join-Path $taskRoot 'app.manifest')), (Join-Path $taskRoot ($taskTest + '.cs')))
+        ('/win32manifest:' + (Join-Path $taskRoot 'app.manifest')), (Join-Path $taskTests ($taskTest + '.cs')))
     & $taskCompiler @taskArguments
     if ($LASTEXITCODE -ne 0) { throw "$taskTest compilation failed: $LASTEXITCODE" }
     Copy-Item -LiteralPath (Join-Path $taskRoot 'lib\NAudio.dll') -Destination $taskFolder
@@ -35,8 +37,9 @@ foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecord
     if ($LASTEXITCODE -ne 0) { throw "$taskTest failed: $LASTEXITCODE; fixture: $taskFolder" }
 }
 if (-not $NativeOnly) {
-    $taskPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
+    $taskPython = if ($PythonExe) { [IO.Path]::GetFullPath($PythonExe) } else { Join-Path $taskRoot '.venv\Scripts\python.exe' }
     if (-not (Test-Path -LiteralPath $taskPython)) { throw 'Install the selected Python dependencies before running worker regressions.' }
+    $taskPreviousPythonPath = $env:PYTHONPATH
     $taskPreviousTemp = $env:TEMP
     $taskPreviousTmp = $env:TMP
     $taskPythonTemp = Join-Path $taskOutput 'python-temp'
@@ -44,9 +47,12 @@ if (-not $NativeOnly) {
     Push-Location $taskRoot
     try {
         $env:TEMP = $env:TMP = $taskPythonTemp
+        $env:PYTHONPATH = $taskRoot + ';' + $taskTests
+        [IO.Directory]::CreateDirectory((Join-Path $taskTests 'validation')) | Out-Null
         & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker test_legacy_migration test_download_models test_mp3_audio test_first_use
         if ($LASTEXITCODE -ne 0) { throw "Python regressions failed: $LASTEXITCODE" }
     } finally {
+        $env:PYTHONPATH = $taskPreviousPythonPath
         $env:TEMP = $taskPreviousTemp; $env:TMP = $taskPreviousTmp
         Pop-Location
     }
