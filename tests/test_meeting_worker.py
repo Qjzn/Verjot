@@ -62,7 +62,7 @@ class NoteTests(unittest.TestCase):
     def process_fixture(self, merge_fails=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        vault = Path(temporary.name)
+        vault = Path(temporary.name).resolve()
         session = vault / "audio"
         session.mkdir()
         metadata = {"start_time": "2026-10-14T15:00:00+08:00", "duration_seconds": 0.1}
@@ -341,7 +341,7 @@ class NoteTests(unittest.TestCase):
 
     def test_same_second_sessions_have_distinct_note_paths(self):
         with tempfile.TemporaryDirectory() as folder:
-            vault = Path(folder)
+            vault = Path(folder).resolve()
             metadata = {"start_time": "2026-10-14T15:00:00+08:00"}
             config = {"vault_root": str(vault)}
             first = worker.note_location(vault / "附件" / "20261014-150000-aaaaaa", config, metadata)[1]
@@ -352,7 +352,7 @@ class NoteTests(unittest.TestCase):
 
     def test_named_note_path_is_local_and_completed_retry_uses_it(self):
         with tempfile.TemporaryDirectory() as folder:
-            vault = Path(folder)
+            vault = Path(folder).resolve()
             metadata = {"start_time": "2026-10-14T15:00:00+08:00", "note_filename": "预算确认.md"}
             config = {"vault_root": str(vault)}
             session = vault / "audio"
@@ -385,7 +385,9 @@ class MinimalStorageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.folder = Path(temporary.name)
+        # Windows runner TEMP may use the 8.3 RUNNER~1 alias. Match production's
+        # canonical paths so exact fault hooks still intercept the same file.
+        self.folder = Path(temporary.name).resolve()
         self.home = self.folder / "program"
         self.vault = self.folder / "vault"
         self.session = self.home / "work" / "20261014-150000-aaaaaa"
