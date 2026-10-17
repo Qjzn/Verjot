@@ -896,6 +896,19 @@ internal sealed class CaptureTrack : IDisposable {
     }
 }
 
+internal sealed class CaptureRetryState {
+    readonly Dictionary<string, int> failures = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, double> deadlines = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+    public bool CanRetry(string key, double nowMs) { double until; return !deadlines.TryGetValue(key, out until) || nowMs >= until; }
+    public bool Fail(string key, double nowMs) {
+        int count; failures.TryGetValue(key, out count); count = Math.Min(count + 1, 6); failures[key] = count;
+        deadlines[key] = nowMs + Math.Min(60000, 3000 * (1 << (count - 1)));
+        return count == 1;
+    }
+    public void Succeeded(string key) { failures.Remove(key); deadlines.Remove(key); }
+    public void Clear() { failures.Clear(); deadlines.Clear(); }
+}
+
 internal static class CaptureEndpointSelection {
     public static string[] Outputs(string mode, string configured, string defaultId, IEnumerable<string> active) {
         if (!string.IsNullOrWhiteSpace(configured)) return new string[] { configured };
@@ -930,7 +943,7 @@ internal sealed class RecordingSession : IDisposable {
     readonly MMDeviceEnumerator devices = new MMDeviceEnumerator();
     readonly List<Source> sources = new List<Source>();
     readonly Dictionary<string, Source> active = new Dictionary<string, Source>(StringComparer.OrdinalIgnoreCase);
-    readonly HashSet<string> failedDevices = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    readonly CaptureRetryState failedDevices = new CaptureRetryState();
     readonly Dictionary<string, double> notificationsAt = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
     readonly Queue<string> notices = new Queue<string>();
     readonly List<string> captureProblems = new List<string>();
@@ -1045,9 +1058,17 @@ internal sealed class RecordingSession : IDisposable {
     }
     void CaptureFailed(Source source, string endpointKey, Exception error) {
         lock (gate) {
-            source.Error = error.Message; source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
-            source.EndReason = "capture_error"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
-            notices.Enqueue(IsStorageFailure(error) ? "录音文件无法继续保存，正在停止并保留已录内容。" : "音频设备采集中断：" + source.Name + "；其他设备继续录制。");
+            source.Error = error.Message;
+            if (!source.Ended) {
+                source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
+                source.EndReason = "capture_error";
+            }
+            Source current;
+            if (active.TryGetValue(endpointKey, out current) && ReferenceEquals(current, source)) {
+                active.Remove(endpointKey);
+                bool firstFailure = failedDevices.Fail(endpointKey, clock.Elapsed.TotalMilliseconds);
+                if (firstFailure || IsStorageFailure(error)) notices.Enqueue(IsStorageFailure(error) ? "录音文件无法继续保存，正在停止并保留已录内容。" : "音频设备采集中断：" + source.Name + "；其他设备继续录制。");
+            }
         }
         MeetingFiles.Log(error);
         Problem(source.Name + "：音频设备采集异常（错误码 0x" + error.HResult.ToString("X8") + "），此前音频已保留，请检查设备连接。");
@@ -1058,7 +1079,7 @@ internal sealed class RecordingSession : IDisposable {
         string endpointKey = EndpointKey(kind, device.ID);
         Source source;
         lock (gate) {
-            if (stopping || active.ContainsKey(endpointKey) || failedDevices.Contains(endpointKey)) return;
+            if (stopping || HasStorageFailure || active.ContainsKey(endpointKey) || !failedDevices.CanRetry(endpointKey, clock.Elapsed.TotalMilliseconds)) return;
             int number = kind == "microphone" ? ++microphoneCount : ++outputCount;
             string key = (kind == "microphone" ? "mic" : "system") + (number == 1 ? "" : "_" + number.ToString("00", CultureInfo.InvariantCulture));
             double at;
@@ -1075,13 +1096,15 @@ internal sealed class RecordingSession : IDisposable {
                 track.SetPaused(recordingPaused || (kind == "microphone" && microphonePaused), clock.Elapsed.TotalMilliseconds);
             }
             source.Track.Start();
+            lock (gate) if (!source.Ended) failedDevices.Succeeded(endpointKey);
             if (stopping) source.Track.SetEndBoundary(stopBoundaryMs);
             lock (gate) if (!initializing) notices.Enqueue((kind == "microphone" ? "麦克风已接入：" : "已覆盖电脑输出：") + source.Name);
         } catch (Exception error) {
             lock (gate) {
                 source.Error = error.Message; source.Ended = true; source.EndMs = clock.Elapsed.TotalMilliseconds;
-                source.EndReason = "open_failed"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
-                notices.Enqueue(IsStorageFailure(error) ? "录音文件无法创建或继续保存，正在停止并保留已录内容。" : "暂时无法捕获设备：" + source.Name + "；其他设备继续录制。");
+                source.EndReason = "open_failed"; active.Remove(endpointKey);
+                bool firstFailure = failedDevices.Fail(endpointKey, clock.Elapsed.TotalMilliseconds);
+                if (firstFailure || IsStorageFailure(error)) notices.Enqueue(IsStorageFailure(error) ? "录音文件无法创建或继续保存，正在停止并保留已录内容。" : "暂时无法捕获设备：" + source.Name + "；其他设备继续录制。");
             }
             Problem(source.Name + "：" + error.Message);
             NotifyStorageFailure(error);

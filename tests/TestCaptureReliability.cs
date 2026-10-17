@@ -145,7 +145,7 @@ internal static class TestCaptureReliability {
         var gate=new object();var changed=new AutoResetEvent(false);var completed=new ManualResetEvent(false);
         Set(session,"gate",gate);Set(session,"clock",Stopwatch.StartNew());Set(session,"devicesChanged",changed);
         Set(session,"captureProblems",new List<string>());Set(session,"notices",new Queue<string>());
-        Set(session,"failedDevices",new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        Set(session,"failedDevices",new CaptureRetryState());
         var dictionaryType=typeof(Dictionary<,>).MakeGenericType(typeof(string),sourceType);
         var active=(IDictionary)Activator.CreateInstance(dictionaryType);Set(session,"active",active);
         int callbacks=0;bool outsideCaptureThread=false,outsideGate=false;
@@ -180,7 +180,7 @@ internal static class TestCaptureReliability {
         var changed=new AutoResetEvent(false);int callbacks=0;
         Set(session,"gate",new object());Set(session,"clock",Stopwatch.StartNew());Set(session,"devicesChanged",changed);
         Set(session,"captureProblems",new List<string>());Set(session,"notices",new Queue<string>());
-        Set(session,"failedDevices",new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        Set(session,"failedDevices",new CaptureRetryState());
         var dictionaryType=typeof(Dictionary<,>).MakeGenericType(typeof(string),sourceType);
         var active=(IDictionary)Activator.CreateInstance(dictionaryType);Set(session,"active",active);
         object source=Activator.CreateInstance(sourceType,true);Set(source,"Name","ordinary endpoint");active["loopback:offline"]=source;
@@ -211,6 +211,26 @@ internal static class TestCaptureReliability {
             Check(delta==0,"steady-state float sample serialization must not allocate an array for every sample");
         }
     }
+    static void RetiredSourceFailureDoesNotRemoveReplacement() {
+        var type=typeof(RecordingSession);var sourceType=type.GetNestedType("Source",BindingFlags.NonPublic);
+        var session=(RecordingSession)FormatterServices.GetUninitializedObject(type);
+        using(var changed=new AutoResetEvent(false)) {
+            Set(session,"gate",new object());Set(session,"clock",Stopwatch.StartNew());Set(session,"devicesChanged",changed);
+            Set(session,"captureProblems",new List<string>());Set(session,"notices",new Queue<string>());
+            var retry=new CaptureRetryState();Set(session,"failedDevices",retry);
+            var map=(IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(string),sourceType));
+            Set(session,"active",map);
+            object retired=Activator.CreateInstance(sourceType,true),replacement=Activator.CreateInstance(sourceType,true);
+            Set(retired,"Name","retired");Set(retired,"Ended",true);Set(retired,"EndMs",123.0);Set(retired,"EndReason","device_removed_or_route_changed");
+            map["loopback:same-id"]=replacement;
+            type.GetMethod("CaptureFailed",Private).Invoke(session,new object[]{retired,"loopback:same-id",new IOException("late driver callback")});
+            Check(map.Contains("loopback:same-id")&&ReferenceEquals(map["loopback:same-id"],replacement),"retired source callback must not remove the healthy replacement with the same endpoint ID");
+            Check(!(bool)Get(replacement,"Ended"),"retired source failure cannot end replacement lifecycle");
+            Check((double)Get(retired,"EndMs")==123.0,"retired source failure must retain its original close boundary");
+            Check(retry.CanRetry("loopback:same-id",0),"retired source failure cannot blacklist the replacement endpoint");
+            Check((string)Get(retired,"Error")=="late driver callback","retired source error remains available for review");
+        }
+    }
     static void PacketClockBounds(string root) {
         bool estimated;
         double first = CaptureTrack.ResolvePacketStart(5508816, 5000000, 480, 48000, 480000, 479520, 4999980, 480, false, out estimated);
@@ -236,6 +256,21 @@ internal static class TestCaptureReliability {
     }
     public static int Main(string[] args) {
         try {
+            var retry = new CaptureRetryState();
+            Check(retry.CanRetry("output", 0), "new endpoint is eligible");
+            Check(retry.Fail("output", 0), "first failure can notify");
+            Check(!retry.CanRetry("output", 2999), "failed endpoint has cooldown");
+            Check(retry.CanRetry("output", 3000), "transient failure retries without endpoint notification");
+            Check(!retry.Fail("output", 3000), "repeated open failure does not spam notifications");
+            Check(!retry.CanRetry("output", 8999), "repeated failures back off");
+            Check(retry.CanRetry("output", 9000), "repeated failure is not permanently blocked");
+            Check(retry.CanRetry("mic", 0), "failure does not block another endpoint");
+            retry.Succeeded("output");
+            retry.Fail("output", 10000);
+            Check(retry.CanRetry("output", 13000), "successful reopen resets backoff");
+            for (int i=0;i<12;i++) retry.Fail("output", 0);
+            Check(retry.CanRetry("output", 60000), "backoff is bounded");
+            RetiredSourceFailureDoesNotRemoveReplacement();
             string root=Path.GetFullPath(args[0]);Directory.CreateDirectory(root);
             string selected=args.Length>1?args[1]:"all";
             if(selected=="all"||selected=="packet-clock")PacketClockBounds(root);

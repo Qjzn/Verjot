@@ -143,7 +143,7 @@ internal static class TestTimestampedTimeline {
         sourceType.GetField("Name").SetValue(source, "broken endpoint");
         var map = (System.Collections.IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(string), sourceType));
         map.Add("loopback:broken", source); map.Add("loopback:healthy", Activator.CreateInstance(sourceType, true));
-        var failed = new HashSet<string>();
+        var failed = new CaptureRetryState();
         var signal = new System.Threading.AutoResetEvent(false);
         var fields = new Dictionary<string, object> {
             { "gate", new object() }, { "clock", new System.Diagnostics.Stopwatch() }, { "active", map },
@@ -154,7 +154,8 @@ internal static class TestTimestampedTimeline {
         try {
             type.GetMethod("CaptureFailed", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(session,
                 new object[] { source, "loopback:broken", new IOException("persistent driver error") });
-            Check(failed.Contains("loopback:broken"), "a runtime capture failure must wait for a device notification before reopening");
+            Check(!failed.CanRetry("loopback:broken", 0), "a runtime capture failure must have a cooldown");
+            Check(failed.CanRetry("loopback:broken", 3000), "a failed but still online endpoint must retry even without a Windows notification");
             Check(!map.Contains("loopback:broken") && map.Contains("loopback:healthy"), "one failed endpoint must not stop the healthy endpoint");
             Check((bool)sourceType.GetField("Ended").GetValue(source) && (string)sourceType.GetField("Error").GetValue(source) == "persistent driver error",
                 "capture failure must retain the ended source and its error");
