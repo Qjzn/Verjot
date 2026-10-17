@@ -233,6 +233,8 @@ API 模式必须同时满足：服务前缀有效、模型名非空、`api_key_e
 
 CPU 或 CUDA 后端由安装步骤选择并安装，不能通过新增 `backend`、`gpu` 等配置字段切换。模型与 Python 环境使用程序目录中的固定位置：`.venv/Scripts/python.exe` 与 `models/`，不支持用 `python_path`、`model_dir` 等配置键覆盖。
 
+当前 `local` 仍使用 Qwen3-ASR-1.7B，已有说话人路径是 ONNX 分割、ERes2Net 与项目内匹配逻辑，不是完整 Community-1。FireRedASR2-AED 与完整 Community-1 在独立环境评估，未成为配置项或自动下载项。不要通过修改 `api_model`、替换既有模型目录，或增加 `asr_model`、`diarization_model` 等未实现字段来切换；评估不修改正式 `config.json`。安装边界、离线要求和结果见 [本地模型评估](local-model-evaluation.md)。
+
 本地会议转写实际使用 ASR 的 `auto` 选择：CUDA 可用时优先使用 GPU，CUDA 不可用或遇到显存不足时可回退 CPU。CPU 转写通常更慢。安装 CUDA 后端本身不证明机器上的 CUDA 已可用，需以诊断和实际转写结果为准。API 模式的远端转写计算不受这项本地 ASR 选择控制。
 
 `asr_engine.py` 独立命令行另有 `--device`、`--no-cpu-fallback` 和 `--max-new-tokens` 等参数；这些不是 `config.json` 字段。会议录音入口不会从配置传递这些参数，当前使用其默认值：`auto`、允许 CPU 回退、每段最多生成 512 个 token。识别语言为中文。

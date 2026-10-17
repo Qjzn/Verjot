@@ -32,7 +32,7 @@
     "animation_mode": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto", "description": "auto 跟随 Windows 客户区动画及高对比设置；on 仅为 verbit 开启动效；off 关闭非必要动效。均不更改 Windows 设置，不影响真实输入和进度。"},
     "notify_device_changes": {"type": "boolean", "default": true, "description": "提醒设备变化；关闭只影响提示，不关闭自动跟随/所有活动输出捕获。固定设备 ID 不随默认设备变化。不把安静当作故障。"},
     "auto_open_completed_note": {"type": "boolean", "default": true, "description": "仅在 open_in_obsidian 为 true 且当前没有录音时，自动打开刚完成的笔记；录音中完成或启动时找回的成品由托盘手动打开。"},
-    "transcription_mode": {"type": "string", "enum": ["local", "api"], "default": "local", "description": "local默认仅在本机推理；api需手动选择并配置服务，会上传转写音频。在线Omni聊天模型不能仅改模型名代替/audio/transcriptions接口。"},
+    "transcription_mode": {"type": "string", "enum": ["local", "api"], "default": "local", "description": "local默认使用已安装的Qwen3-ASR-1.7B，仅在本机推理；FireRed和完整Community-1仍为独立评估候选，不能通过api_model切换。api需手动选择并配置服务，会上传转写音频。在线Omni聊天模型不能仅改模型名代替/audio/transcriptions接口。"},
     "api_base_url": {"type": "string", "default": "", "description": "API 模式必填完整 HTTP(S) 前缀，如 https://provider.example/v1；末尾追加 /audio/transcriptions。"},
     "api_model": {"type": "string", "default": "", "description": "API 模式必填服务支持的音频转写模型名。"},
     "api_key_env": {"type": "string", "default": "TINGJI_API_KEY", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "读取 API 密钥的环境变量名，不是密钥值。"},
