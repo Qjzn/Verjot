@@ -24,6 +24,12 @@ internal static class TestQuickNoteEditor {
         do { Pump(10); } while (!window.IsDisposed && ((bool)Field(window, "workerBusy") || (string)Field(window, "pendingText") != null || (int)Field(window, "queuedImageCount") != 0) && watch.ElapsedMilliseconds < 5000);
         Check(window.IsDisposed || (!(bool)Field(window, "workerBusy") && Field(window, "pendingText") == null && (int)Field(window, "queuedImageCount") == 0), "Background storage and image work complete without blocking the UI pump");
     }
+    static void Autosaved(QuickNoteWindow window) {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        do { Pump(10); } while (!window.IsDisposed && ((bool)Field(window, "dirty") || (bool)Field(window, "workerBusy") || Field(window, "pendingText") != null || (int)Field(window, "queuedImageCount") != 0) && watch.ElapsedMilliseconds < 5000);
+        Check(!window.IsDisposed && !(bool)Field(window, "dirty") && !(bool)Field(window, "workerBusy") && Field(window, "pendingText") == null && (int)Field(window, "queuedImageCount") == 0,
+            "The production autosave timer and background persistence finish within the existing five-second bound");
+    }
     static NativeNoteDocument Document(QuickNoteWindow window) { return (NativeNoteDocument)Field(window, "nativeDocument"); }
     static void CheckMenuClose(string vault, string root) {
         foreach (string method in new string[] { "ShowSaveMenu", "ShowEditorMenu" }) {
@@ -364,7 +370,8 @@ internal static class TestQuickNoteEditor {
                 Check(document.Markdown() == "前\r\n后", "Native paragraph insertion serializes as one CRLF line break");
             }
 
-            using (var window = new QuickNoteWindow(store, Path.Combine(root, "state"))) {
+            bool delayAutosave = false;
+            using (var window = new QuickNoteWindow(store, Path.Combine(root, "state"), delegate { if (delayAutosave) Thread.Sleep(650); })) {
                 window.Toggle(); Pump(100);
                 Check(window.Visible && window.TopMost, "Quick note opens visibly and pinned by default");
                 Check(window.FormBorderStyle == FormBorderStyle.Sizable, "The native editor uses the verified system title bar and resize border");
@@ -372,7 +379,7 @@ internal static class TestQuickNoteEditor {
                 window.Bounds = resized; Call(window, "OnResizeEnd", EventArgs.Empty);
                 Check(window.Bounds == resized && !window.Capture, "Completing a system resize retains bounds without custom mouse capture");
                 var editor = (RichTextBox)Field(window, "editor");
-                Append(window, "自动保存中文\n- 简单列表"); Pump(800);
+                Append(window, "自动保存中文\n- 简单列表"); Autosaved(window);
                 var note = store.Load(DateTime.Today);
                 Check(note.Text == "自动保存中文\n- 简单列表", "500ms debounce saves edited Markdown");
                 Check(!note.HasRecovery, "A successful save clears transient recovery");
@@ -391,15 +398,19 @@ internal static class TestQuickNoteEditor {
                 editor.Select(editor.TextLength, 0);
                 window.PasteData(paste);
                 Check(window.ReadMarkdown().EndsWith("**保持Markdown**"), "The actual paste handler accepts plain Unicode Markdown from its local snapshot");
-                editor.Undo(); Pump(800); Check(store.Load(DateTime.Today).Text == note.Text, "Undo of pasted text keeps the prior note intact");
+                editor.Undo(); Autosaved(window); Check(store.Load(DateTime.Today).Text == note.Text, "Undo of pasted text keeps the prior note intact");
                 editor.Select(editor.TextLength, 0);
                 window.PasteData(imagePaste); Settled(window);
-                Append(window, "图片后文字"); Pump(800);
+                // Saving may legitimately outlast a fixed 800ms UI pump. Exercise
+                // that case without bypassing the real debounce or storage path.
+                delayAutosave = true;
+                Append(window, "图片后文字"); Autosaved(window);
+                delayAutosave = false;
                 string withImage = store.Load(DateTime.Today).Text;
                 Check(withImage.Contains("![图片](<" + imagePath + ">)"), "Inserted image is a reusable relative Markdown reference");
                 Check(withImage.StartsWith("自动保存中文\n- 简单列表") && withImage.EndsWith("图片后文字"), "Image insertion retains text on both sides");
                 Check(editor.CanUndo, "Image/text editor exposes native undo");
-                editor.Undo(); Pump(20); Check(editor.CanRedo, "Undo permits native redo"); editor.Redo(); Pump(800);
+                editor.Undo(); Pump(20); Check(editor.CanRedo, "Undo permits native redo"); editor.Redo(); Autosaved(window);
                 Check(store.Load(DateTime.Today).Text == withImage, "Undo and redo retain Markdown and image identity");
                 editor.Select(editor.TextLength, 0); window.PasteData(imagePaste); Settled(window);
                 string duplicateImage = window.ReadMarkdown();
@@ -407,7 +418,7 @@ internal static class TestQuickNoteEditor {
                     "Repeated identical pixels retain two independent inline objects and exact reusable references");
                 editor.Undo(); Check(window.ReadMarkdown() == withImage, "Undo removes only the new duplicate image");
                 editor.Redo(); Check(window.ReadMarkdown() == duplicateImage && Document(window).ObjectPositions().Length == 2, "Redo restores the duplicate object's exact identity and reference");
-                editor.Undo(); Pump(800);
+                editor.Undo(); Autosaved(window);
                 typeof(QuickNoteWindow).GetField("composing", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(window, true);
                 Append(window, "输入法组合"); Pump(700);
                 Check(store.Load(DateTime.Today).Text == withImage, "Autosave waits while an IME composition is active");
@@ -470,7 +481,7 @@ internal static class TestQuickNoteEditor {
                 delayReload = false; Check(reloadWindow.FlushAndClose(), "The reloaded editor closes cleanly");
             }
             using (var recovered = new QuickNoteWindow(store, Path.Combine(root, "state"))) {
-                recovered.Toggle(); Pump(800);
+                recovered.Toggle(); Autosaved(recovered);
                 Check(store.Load(DateTime.Today).Text.EndsWith("恢复输入"), "Matching-revision crash recovery is restored and saved");
                 Check(recovered.FlushAndClose(), "Recovered note flushes cleanly");
             }
@@ -484,7 +495,7 @@ internal static class TestQuickNoteEditor {
                 var data = new DataObject(DataFormats.FileDrop, new string[] { input });
                 Point position = editor.PointToScreen(new Point(20, 20));
                 var drag = new DragEventArgs(data, 0, position.X, position.Y, DragDropEffects.Copy, DragDropEffects.None);
-                Call(dropped, "Drop", editor, drag); Pump(800);
+                Call(dropped, "Drop", editor, drag); Autosaved(dropped);
                 string markdown = dropStore.Load(DateTime.Today).Text;
                 var match = System.Text.RegularExpressions.Regex.Match(markdown, @"!\[图片\]\(<([^>]+)>\)");
                 Check(drag.Effect == DragDropEffects.Copy && match.Success, "The actual native file-drop handler writes a local Markdown image reference");
