@@ -43,9 +43,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Test dependency installation failed' }
           python -m pip check
           if ($LASTEXITCODE -ne 0) { throw 'Test dependency check failed' }
-      - name: Configuration, API and first-use contracts
+      - name: Configuration, audio, worker, API and first-use contracts
         run: |
           $env:PYTHONPATH = "$PWD;$PWD\..\tests"
           New-Item -ItemType Directory -Path ../tests/validation -Force | Out-Null
-          python -B -m unittest test_tingji_config test_api_asr test_first_use
+          python -B -m unittest test_tingji_config test_prepare_audio test_meeting_worker test_api_asr test_first_use
           if ($LASTEXITCODE -ne 0) { throw 'Python contract tests failed' }

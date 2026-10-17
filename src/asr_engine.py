@@ -85,12 +85,26 @@ def read_segments(path: Path) -> list[dict]:
     return segments
 
 
+def audio_context(context: str, duration: float) -> str:
+    """Short utterances lack enough evidence for the new explicit vocabulary.
+
+    Preserve legacy free-text context. Never remove words from decoded text.
+    """
+    if duration < 4:
+        if context.startswith("术语：") and "\n" not in context:
+            return ""
+        if "\n术语：" in context:
+            return context.rsplit("\n术语：", 1)[0]
+    return context
+
+
 def job_fingerprint(segments: list[dict], model_dir: Path, context: str, max_tokens: int) -> str:
     files = []
     for row in segments:
         stat = Path(row["text_audio"]).stat()
         files.append((stat.st_size, stat.st_mtime_ns))
-    key = [segments, files, str(model_dir), "Chinese", context, max_tokens, "hf-native-v1"]
+    policy = "hf-terms-short-guard-v1" if audio_context(context, 0) != context else "hf-native-v1"
+    key = [segments, files, str(model_dir), "Chinese", context, max_tokens, policy]
     return hashlib.sha256(json.dumps(key, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -132,8 +146,8 @@ class QwenBackend:
         # Arrays avoid URL handling and external media decoders entirely.
         with self.torch.inference_mode():
             inputs = self.processor.apply_transcription_request(
-                audio=audio, language="Chinese", prompt=self.context or None,
-                sampling_rate=16000,
+                audio=audio, language="Chinese", prompt=audio_context(self.context, min(info.duration, row["end"] - row["start"])) or None,
+                processor_kwargs={"sampling_rate": 16000},
             ).to(self.model.device, self.model.dtype)
             outputs = self.model.generate(**inputs, max_new_tokens=self.max_tokens, do_sample=False)
             sequences = getattr(outputs, "sequences", outputs)

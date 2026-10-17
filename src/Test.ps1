@@ -36,6 +36,7 @@ foreach ($taskTest in @('TestSessionCatalog', 'TestJsonReadSharing', 'TestRecord
     & $taskDesktopRunner $taskBinary $taskFolder
     if ($LASTEXITCODE -ne 0) { throw "$taskTest failed: $LASTEXITCODE; fixture: $taskFolder" }
 }
+& (Join-Path $taskTests 'Test-InstallPrerequisites.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
 if (-not $NativeOnly) {
     $taskPython = if ($PythonExe) { [IO.Path]::GetFullPath($PythonExe) } else { Join-Path $taskRoot '.venv\Scripts\python.exe' }
     if (-not (Test-Path -LiteralPath $taskPython)) { throw 'Install the selected Python dependencies before running worker regressions.' }

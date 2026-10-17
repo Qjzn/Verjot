@@ -10,6 +10,9 @@
 | 速记 → 图片/自动保存、外部改写保护、原生输入与菜单关闭 | `TestQuickNote*.cs`、`TestNativeNoteDocument.cs` | 已有；CI 执行。程序化输入不能证明所有输入法手感。 |
 | API → 危险 URL/重定向拒绝、响应限制与密钥不泄漏 | `test_api_asr.py`；[AI 边界](automation.md) | 已有模拟服务测试，CI 执行；不调用真实服务。 |
 | 安装/升级/卸载 → 归属、占用拒绝与个人数据保留 | `packaging/Test-Installer.ps1`；[发布验收](release-readiness.md) | 已有本机隔离安装器回归，不在当前 CI 中。 |
+| 异常 QPC → 拒绝未来时间、保留可靠帧位置间隔、音频不落到结束边界之外 | `TestCaptureReliability.cs`，实际 `CaptureTrack` 与 `TimelineWriter` | 已有故障注入回归；不能代替驱动实测。 |
+| 新电脑缺 VC++ → 模型下载前停止、明确官方修复入口、不写配置 | `Test-InstallPrerequisites.ps1`，调用真实 `Install.ps1` 和隔离假解释器 | 本机故障注入通过；由 `src/Test.ps1` 执行，不代表干净 OS 已测。 |
+| 无 Python/模型/开发工具 → 实际 EXE 首次设置、速记、全新本地引擎与模型下载 | `Prepare-CleanWindows.ps1`、`Test-CleanWindowsGuest.ps1`、`PrepareOfflineInstall.py`、`VerifyOfflineInstall.py`；[干净 Windows](clean-windows-validation.md) | 验证包已准备；客体实测待执行。 |
 
 源码测试统一放在 `tests/`，由 `src/Test.ps1` 执行；源码运行代码与依赖位于 `src/`。安装包不包含测试或 CI 文件。CI 定义见 [workflow](https://github.com/Qjzn/verbit/blob/main/.github/workflows/ci.yml)，实际通过以对应提交的 Actions 结果为准；尚未启用 required checks，不把“配置了 CI”写成合并门禁。
 
@@ -26,3 +29,9 @@
 ## 缺口
 
 高优先级缺口是长会议完整性、断电/磁盘满恢复及干净机器覆盖；中文准确率和跨轨身份归属还缺足量人工逐字稿与身份真值。不能用合成测试、界面截图或稳定重复输出替代这些证据。
+
+识别候选另有定向回归：从重叠段中取干净锚点、捕获偏移下只送入正确采样区间；转写窗口不依赖局部人物编号，多人文本保持原文且不冒称单人归属；术语去重、长度限制和每场冻结；候选切片及人物时间线仍在成功后清理。真实长会议的前后比较与工程用例分别报告；没有人工逐字稿和身份标注时不计算或宣称 CER/DER 达标。
+
+识别候选补充回归覆盖旧会议缓存保持旧分段、会议冻结设置优先、显式术语短片段保护与断点策略指纹变更。真实长会议另存副本完成整场初始实验，并对 12 个同音频片段实际调用本地模型做术语/无术语/保护后三方对照；这些不使用竞品输出作标准答案。分数 DPI 下复现 Logo 选择较小图标帧并放大的问题，改为选择不小于目标的已嵌入帧，保留原严格原生断言验证。
+
+2026-10-17 最终本机候选回归：238 项 Python（1 项跳过）、19 组原生夹具及实际安装脚本缺少 VC++ 的故障注入返回 0，最新候选安装器 52 项断言通过。早先一次全量执行遇到便签初次载入断言，独立重放和最终全量均通过，未据此声称修复了新的便签根因。另一次全量严格复现了上述 Logo 帧错误，修复后原断言通过。测试仍不读写共享剪贴板、不调用真实录音设备；真实中文输入法与干净 Windows 客体另行验收。

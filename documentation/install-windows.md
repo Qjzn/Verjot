@@ -46,6 +46,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 自检通过后重新打开程序，并按 [首次真实验收](first-use.md) 在得到同意后检查麦克风、电脑声音、回听和转录。API 必须实际支持语音转写端点；普通聊天模型不能直接替代。缺少设备测试或服务调用证据时，不应宣称会议已完全可用。
 
+## 新电脑的额外条件与排障
+
+本地转写还依赖 [Microsoft Visual C++ v14 Redistributable x64](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)。它是运行库，无需安装 Visual Studio、C++ 开发工具或 .NET SDK；官方安装器可能要求管理员权限或重启。先完成安装，再重跑 `Install.ps1`。脚本在下载大模型前检查所需 DLL；自检遇到 DLL 加载错误时会指出官方修复入口，不从第三方 DLL 网站复制文件。[PyTorch 官方 Windows FAQ](https://docs.pytorch.org/docs/main/notes/windows.html)说明了这类加载依赖。
+
+依赖与模型需数 GB 下载和可用磁盘；本地 CPU 模式建议先在 16 GiB 及以上内存机器评估实际推理速度，这不是最低配置或性能保证。速记仍不依赖这些组件。网络需要能访问 Python、PyPI、PyTorch、Hugging Face 和说话人模型的 GitHub 下载源；无法访问时应保留下载日志和断点，不能用“已装桌面程序”代替转写已就绪。
+
+无声卡的隔离客体可显式使用 `Install.ps1 -SkipDeviceCheck`，以及 `tingji.py doctor --full --skip-devices --json`；报告标明未检查设备，仅用于运行环境与离线样本验证。日常机器保留默认设备检查，正式录音仍须真实验收。干净系统的可重复步骤见 [干净 Windows 验证](clean-windows-validation.md)。
+
 ## 日常操作
 
 | 操作 | 默认快捷键或入口 |

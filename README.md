@@ -170,6 +170,8 @@ API 兼容 **`POST /audio/transcriptions`**，使用 WAV、`model`、`language=z
 
 ## 自检、验证与更新
 
+当前源码增加可选的干净声纹锚点、独立于说话人编号的连续语音分段和术语提示，未增加模型或常驻服务；两项识别候选默认关闭，术语默认为空。真实长会议对照尚未通过身份与文字质量验收，不自动重写旧会议。用法见 [配置说明](documentation/configuration.md#识别候选与术语提示)，实测结果与剩余问题见 [质量说明](documentation/quality.md#2026-10-17-识别候选对照)。这些字段不适用于已发布的旧安装包。
+
 ```powershell
 .\.venv\Scripts\python.exe -B tingji.py doctor --full --json
 .\.venv\Scripts\python.exe -B tingji.py status --json

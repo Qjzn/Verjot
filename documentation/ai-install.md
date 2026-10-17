@@ -31,6 +31,8 @@ py -3.12 -c "import sys, struct; print(sys.executable); print(sys.version); prin
 
 本轮测试使用 Python 3.12.10，普通 x64 安装器见 [Python 官方发布页](https://www.python.org/downloads/release/python-31210/)。需要 pip 与 venv，不使用 embeddable package；已有 Python 3.12 x64 可通过明确路径复用，不要求切换机器全局版本。
 
+新电脑启用本地转写前还需官方 [Microsoft Visual C++ v14 Redistributable x64](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)，无需 Visual Studio 或 .NET SDK。安装脚本会在大模型下载前检查其 DLL；若安装器要求重启，先由用户安排，不强制重启。不应把 DLL 加载失败误判为要重装模型。干净 Windows 的无宿主缓存步骤见 [独立验收](clean-windows-validation.md)。无声卡沙箱才显式加 `-SkipDeviceCheck`，报告会保留 `devices_checked: false`；此开关不写入配置，也不代表设备可用。
+
 已有 `config.json` 时先只读核对它。安装脚本保留原文件；模式参数省略时继承已有 `transcription_mode`，旧配置缺省为 `local`。显式模式与已有配置冲突、已有 Torch 版本或后端与本地安装参数不匹配，都会停止并说明原因。不要用重建虚拟环境或覆盖配置来绕过提示。
 
 verbit 正在运行时不能安装或重建。等用户结束录音和转写，再让用户从托盘正常退出；不要结束录音进程来腾出安装位置。
@@ -198,3 +200,5 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
 只有这条用户可操作路径实际完成后，才能报告相应录音与转写链路通过。自检通过、依赖安装成功和模拟接口测试不能代替新机器或真实供应方的这一层证据。
 
 完整字段约束与设备选择方式见 [配置说明](configuration.md)。录音稳定性、中文转录与说话人质量应采用人工真值和多场景指标，见 [质量标准与证据](quality.md)；当前证据不足以宣称高质量已达标，AI 不得据此删除限制说明。
+
+识别优化候选通过 `speaker_anchor_mode: "clean"` 与 `asr_segmentation: "speech"` 单独启用，当前默认保持旧路径。`asr_terms` 为明确的已知术语清单，可与 `asr_context` 合用；新会议会冻结提示和模式。AI 不得替用户猜测人名、将人数直接固定为6、为了编号好看放宽阈值，或以新模式覆盖旧会议。多人转写段没有字级归属，需保留时间范围和准确限制。启用和回退示例见 [识别候选配置](configuration.md#识别候选与术语提示)。

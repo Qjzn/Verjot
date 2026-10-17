@@ -24,7 +24,7 @@ from asr_engine import atomic_json, job_fingerprint as local_job_fingerprint, re
 from audio_sources import capture_paths, capture_sources, source_kind, SOURCE_NAME
 from merge_audio import merge_session
 from mp3_audio import encode_mp3, validate_mp3
-from tingji_config import load_config
+from tingji_config import load_config, transcription_context
 
 HOME = Path(__file__).resolve().parent
 BEGIN = "<!-- local-meeting-transcript:start -->"
@@ -33,10 +33,11 @@ COMPACT_FILES = frozenset({
     "meeting.wav", "meeting.wav.tmp",
     "merged_audio.json", "merged_audio.json.tmp", "segments.json", "segments.json.tmp",
     "prepared_input.json", "prepared_input.json.tmp", "prepare_summary.json", "prepare_summary.json.tmp",
+    "speaker_turns.json",
     "result.json", "result.json.tmp", "asr_status.json", "asr_status.json.tmp",
     "prepare.log", "asr.log", "merge.log", "worker.log",
 })
-CLIP_NAME = re.compile(r"(?:mic|system)(?:_\d{2,})?_\d{5,}\.wav\Z")
+CLIP_NAME = re.compile(r"(?:mic|system)(?:_\d{2,})?(?:_speech)?_\d{5,}\.wav\Z")
 
 
 def read_json(path: Path, default=None):
@@ -183,7 +184,11 @@ def capture_failure(metadata: dict):
     """Only recorder-confirmed errors affect retention; diagnostics are advisory."""
     error = metadata.get("capture_error")
     if isinstance(error, str) and error.strip():
-        return error.strip()
+        # Older drivers exposed repeated localized E_NOTIMPL text, sometimes
+        # containing blank lines which split the generated Markdown paragraph.
+        detail = " ".join(error.split())
+        detail = re.sub(r"(?:尚未实现\s*)+", "设备报告不支持的音频操作；请检查设备连接与录音完整性", detail)
+        return detail
     if metadata.get("state") == "recorded_with_error":
         return "录音设备报告采集异常，部分声音可能缺失"
     return ""
@@ -229,8 +234,16 @@ def transcript_with_evidence(session: Path, result):
                         current["source_kind"] = source_kind(original["source"])
                     if type(original.get("speaker_global")) is bool:
                         current["speaker_global"] = original["speaker_global"]
-                    if original.get("speaker_status") in ("matched", "unknown"):
+                    if original.get("speaker_status") in ("matched", "unknown", "mixed"):
                         current["speaker_status"] = original["speaker_status"]
+                    if isinstance(original.get("speaker_spans"), list):
+                        current["speaker_spans"] = [span for span in original["speaker_spans"]
+                            if isinstance(span, dict) and type(span.get("start")) in (int, float)
+                            and type(span.get("end")) in (int, float)
+                            and math.isfinite(span["start"]) and math.isfinite(span["end"])
+                            and row["start"] <= span["start"] < span["end"] <= row["end"] + .001
+                            and (span.get("global_speaker") is None or
+                                 re.fullmatch(r"speaker_\d+", str(span["global_speaker"])))]
                     identity = original.get("global_speaker")
                     if isinstance(identity, str) and re.fullmatch(r"speaker_\d+", identity):
                         current["global_speaker"] = identity
@@ -335,6 +348,8 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
                 if (row.get("speaker_global") is True and isinstance(identity, str)
                         and re.fullmatch(r"speaker_\d+", identity)):
                     label = "说话人 " + identity.rsplit("_", 1)[-1]
+                elif row.get("speaker_status") == "mixed":
+                    label = "本段多人 · " + source
                 elif row.get("speaker_status") == "unknown" or row.get("speaker_global") is False:
                     label = "说话人待确认 · " + source
                 else:
@@ -346,6 +361,14 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
                                               enabled=playback_enabled)
                     lines.extend([f"**{time} {label}**",
                                   text, ""])
+                    if row.get("speaker_status") == "mixed":
+                        spans = row.get("speaker_spans", [])
+                        details = [f"{timestamp(span['start'])}–{timestamp(span['end'])} " +
+                                   ("说话人 " + span["global_speaker"].rsplit("_", 1)[-1]
+                                    if span.get("speaker_global") and span.get("global_speaker") else "待确认")
+                                   for span in spans]
+                        if details:
+                            lines.extend(["说话时间（未逐字对齐）：" + "；".join(details), ""])
             caveat = ("说话人按跨音轨声纹匿名分组，待确认段不作身份归并；重叠讲话与串音仍需核对原音频。"
                       if any("speaker_global" in row for row in rows) else
                       "说话人编号为每条音轨内的匿名分组。同一人在两条音轨上可能有不同编号；重叠讲话与扬声器串音仍需核对原音频。")
@@ -706,7 +729,7 @@ def input_fingerprint(session: Path):
 def validate_asr_checkpoint(session: Path, config: dict):
     """Validate the same ASR identity before touching either public artifact."""
     segments = read_segments(session / "segments.json")
-    context = config.get("asr_context", "")
+    context = transcription_context(config, read_json(session / "session.json", {}))
     if config.get("transcription_mode", "local") == "api":
         from api_asr import job_fingerprint as api_job_fingerprint
 
@@ -747,11 +770,23 @@ def preparation_state(session: Path, metadata: dict, config: dict):
     needs_preparation = (cache.get("fingerprint") != fingerprint or not has_prepared
                          or cache.get("asr_denoise", "off") != denoise
                          or cache.get("asr_echo_filter", False) != echo_filter)
+    options = preparation_options(metadata, config, cache if has_prepared else {})
+    needs_preparation |= any(cache.get(key, default) != options[key] for key, default in
+                             (("speaker_anchor_mode", "legacy"), ("asr_segmentation", "speaker")))
     if (session / "result.json").exists():
         if needs_preparation:
             raise RuntimeError("原始录音或分段已改变，已保留旧结果，请使用新的录音目录重新处理")
         validate_asr_checkpoint(session, config)
     return fingerprint, denoise, echo_filter, needs_preparation
+
+
+def preparation_options(metadata: dict, config: dict, cache=None):
+    cache = cache or {}
+    options = {key: metadata.get(key, cache.get(key, default if cache.get("fingerprint") else config.get(key, default)))
+               for key, default in (("speaker_anchor_mode", "legacy"), ("asr_segmentation", "speaker"))}
+    if options["speaker_anchor_mode"] not in ("legacy", "clean") or options["asr_segmentation"] not in ("speaker", "speech"):
+        raise ValueError("会议的声纹锚点或转写分段设置无效")
+    return options
 
 
 def run_stage(session: Path, command: list[str], stage: str):
@@ -845,13 +880,17 @@ def process_session(session: Path):
                                    merge_error=merge_error))
         with processing_slot(session):
             fingerprint, denoise, echo_filter, needs_preparation = preparation_state(session, metadata, config)
+            options = preparation_options(metadata, config, read_json(session / "prepared_input.json", {}))
+            context = transcription_context(config, metadata)
             if needs_preparation:
                 status(session, "正在分析麦克风和电脑声音，区分说话人", stage="speakers")
                 run_stage(session, [sys.executable, str(HOME / "prepare_audio.py"),
                           "--session", str(session), "--models", str(HOME / "models"),
-                          "--asr-denoise", denoise, "--echo-filter", "on" if echo_filter else "off"], "prepare")
+                          "--asr-denoise", denoise, "--echo-filter", "on" if echo_filter else "off",
+                          "--anchor-mode", options["speaker_anchor_mode"],
+                          "--asr-segmentation", options["asr_segmentation"]], "prepare")
                 atomic_json(session / "prepared_input.json", {"fingerprint": fingerprint,
-                            "asr_denoise": denoise, "asr_echo_filter": echo_filter})
+                            "asr_denoise": denoise, "asr_echo_filter": echo_filter, **options})
             if transcription_mode == "api":
                 status(session, "正在通过API进行中文会议转写", stage="asr")
                 command = [sys.executable, str(HOME / "api_asr.py"),
@@ -860,14 +899,14 @@ def process_session(session: Path):
                            "--api-key-env", config.get("api_key_env", "TINGJI_API_KEY"),
                            "--api-timeout-seconds", str(config.get("api_timeout_seconds", 120)),
                            "--status", str(session / "asr_status.json"),
-                           "--context", config.get("asr_context", "")]
+                           "--context", context]
             elif transcription_mode == "local":
                 status(session, "正在加载中文会议识别模型", stage="asr")
                 command = [sys.executable, str(HOME / "asr_engine.py"),
                            "--segments", str(session / "segments.json"),
                            "--model-dir", str(HOME / "models" / "Qwen3-ASR-1.7B-hf"),
                            "--status", str(session / "asr_status.json"),
-                           "--context", config.get("asr_context", "")]
+                           "--context", context]
             else:
                 raise ValueError("transcription_mode must be local or api")
             run_stage(session, command, "asr")

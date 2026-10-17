@@ -8,6 +8,7 @@ param(
     [switch]$UseObsidian,
     [switch]$StartWithWindows,
     [switch]$EnablePlaybackLinks,
+    [switch]$SkipDeviceCheck,
     [switch]$Plan
 )
 
@@ -117,6 +118,7 @@ try {
             open_in_obsidian_on_first_install = [bool]$UseObsidian
             start_with_windows = [bool]$StartWithWindows
             enable_playback_links = [bool]$EnablePlaybackLinks
+            skip_device_check = [bool]$SkipDeviceCheck
             running_recorder_pids = @($taskRunning | ForEach-Object { $_.Id })
             steps = @(
                 '检查 Windows x64、Python 3.12 x64；不自动安装系统 Python',
@@ -237,6 +239,17 @@ print(json.dumps(value))
     }
 
     if ($Mode -eq 'local') {
+        $taskPhase = 'native-runtime'
+        Set-InstallStatus 'installing' '检查本地识别需要的 Microsoft VC++ x64 运行库'
+        $taskRuntimePreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $taskRuntimeProbe = & $taskPython -B -c "import ctypes; [ctypes.WinDLL(n) for n in ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')]" 2>&1
+            $taskRuntimeExit = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $taskRuntimePreference }
+        if ($taskRuntimeExit -ne 0) {
+            throw 'Microsoft Visual C++ v14 Redistributable x64 缺失或无法加载。请从 https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist 安装官方 x64 包；若提示重启请先重启，然后重跑本命令。无需 Visual Studio，不从 DLL 下载站复制文件。'
+        }
         $taskPhase = 'torch'
         Set-InstallStatus 'installing' "检查或安装官方 torch==$taskTorchVersion"
         if (-not $taskTorchInstalled) {
@@ -286,7 +299,9 @@ print(json.dumps(value))
 
     $taskPhase = 'doctor'
     Set-InstallStatus 'installing' '执行完整环境检查（不录音、不启动主界面）'
-    $taskDoctorOutput = & $taskPython -B (Join-Path $taskRoot 'tingji.py') doctor --full --json
+    $taskDoctorArguments = @('-B', (Join-Path $taskRoot 'tingji.py'), 'doctor', '--full', '--json')
+    if ($SkipDeviceCheck) { $taskDoctorArguments += '--skip-devices' }
+    $taskDoctorOutput = & $taskPython @taskDoctorArguments
     $taskDoctorExit = $LASTEXITCODE
     $taskDoctorText = $taskDoctorOutput -join [Environment]::NewLine
     [IO.File]::WriteAllText((Join-Path $taskInstallation 'doctor.json'), $taskDoctorText, $taskUtf8)

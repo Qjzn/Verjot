@@ -413,9 +413,77 @@ def cluster_voice_identities(groups: dict) -> tuple[dict[str, str], set[str]]:
     return mapped, uncertain
 
 
+def clean_anchor(row: dict, segments: list[dict]) -> tuple[float, float] | None:
+    """Longest same-source interval not shared with another local speaker.
+
+    Different capture sources must not veto each other: cross-source playback
+    echo is assessed separately. Never move or remove the original turn.
+    """
+    intervals = [(row["start"], row["end"])]
+    for other in segments:
+        if other is row or other["source"] != row["source"] or other["speaker"] == row["speaker"]:
+            continue
+        left, right = other["start"], other["end"]
+        intervals = [(a, b) for start, end in intervals
+                     for a, b in ((start, min(end, left)), (max(start, right), end)) if b > a]
+    if not intervals:
+        return None
+    start, end = max(intervals, key=lambda interval: interval[1] - interval[0])
+    if end - start < IDENTITY_MIN_SECONDS:
+        return None
+    center, half = (start + end) / 2, min(end - start, IDENTITY_MAX_ANCHOR_SECONDS) / 2
+    return center - half, center + half
+
+
+def speech_windows(samples: np.ndarray, turns: list[dict]) -> list[tuple[int, int]]:
+    """Union speech intervals, then cut at quiet boundaries independently of IDs."""
+    intervals = []
+    for row in sorted(turns, key=lambda item: (item["start"], item["end"])):
+        start, end = row["start"], row["end"]
+        if intervals and start - intervals[-1][1] <= MERGE_GAP_SECONDS:
+            intervals[-1] = (intervals[-1][0], max(intervals[-1][1], end))
+        else:
+            intervals.append((start, end))
+    return [piece for start, end in intervals for piece in split_turn(samples, start, end)]
+
+
+def decouple_asr_segments(segments: list[dict], sources: dict[str, np.ndarray], offsets: dict,
+                          clip_dir: Path, asr_denoise: str) -> list[dict]:
+    import soundfile as sf
+    output = []
+    for source, samples in sources.items():
+        turns = [row for row in segments if row["source"] == source]
+        offset = offsets.get(source, 0)
+        local = [{**row, "start": row["start"] - offset, "end": row["end"] - offset} for row in turns]
+        windows = speech_windows(samples, local)
+        for index, (first, last) in enumerate(windows, 1):
+            start, end = round(first / SAMPLE_RATE + offset, 4), round(last / SAMPLE_RATE + offset, 4)
+            spans = [{key: row[key] for key in ("speaker", "global_speaker", "speaker_global", "speaker_status")}
+                     | {"start": max(start, row["start"]), "end": min(end, row["end"])}
+                     for row in turns if min(end, row["end"]) > max(start, row["start"])]
+            identities = {span["global_speaker"] for span in spans if span["speaker_global"]}
+            matched = bool(spans) and len(identities) == 1 and all(span["speaker_global"] for span in spans)
+            multiple = len({span["speaker"] for span in spans}) > 1
+            segment_id = f"{source}_speech_{index:05d}"
+            # Separate names prevent speech windows overwriting turn clips.
+            path = clip_dir / (segment_id + ".wav")
+            pad = round(CONTEXT_SECONDS * SAMPLE_RATE)
+            audio_first = max(0, first - pad) if index == 1 else first
+            audio_last = min(len(samples), last + pad) if index == len(windows) else last
+            sf.write(path, normalize_clip(denoise_asr_clip(samples[audio_first:audio_last], asr_denoise)),
+                     SAMPLE_RATE, subtype="PCM_16")
+            output.append({"start": round(start, 4), "end": round(end, 4), "speaker": source + "_speech",
+                           "source": source, "source_kind": source_kind(source), "segment_id": segment_id,
+                           "text_audio": str(path), "speaker_spans": spans,
+                           "global_speaker": next(iter(identities)) if matched else None,
+                           "speaker_global": matched,
+                           "speaker_status": "matched" if matched else "mixed" if multiple else "unknown"})
+    return sorted(output, key=lambda row: (row["start"], row["end"], row["source"]))
+
+
 def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
                            offsets: dict[str, float], embedding_model: Path,
-                           threads: int = 4, embedding_extractor=None) -> dict:
+                           threads: int = 4, embedding_extractor=None, anchor_mode: str = "legacy") -> dict:
     """Attach meeting-wide anonymous IDs using clean anchors from both sources.
 
     Only the ASR manifest changes; no audio is filtered, normalized or overwritten.
@@ -429,11 +497,15 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
                       and other["speaker"] != row["speaker"]
                       and min(row["end"], other["end"]) - max(row["start"], other["start"]) > 0.08
                       for other in segments)
-        if duration < IDENTITY_MIN_SECONDS or overlap or row["source"] not in sources:
+        anchor = clean_anchor(row, segments) if anchor_mode == "clean" else None
+        if (row["source"] not in sources or
+                (anchor_mode == "clean" and anchor is None) or
+                (anchor_mode == "legacy" and (duration < IDENTITY_MIN_SECONDS or overlap))):
             continue
         key = str(row_index)
         eligible.append((key, row))
-        groups[key] = {"source": row["source"], "first_time": row["start"], "row": row, "vector": None}
+        groups[key] = {"source": row["source"], "first_time": row["start"], "row": row,
+                       "anchor": anchor, "vector": None}
     identity_error = None
     multiple_sources = len({group["source"] for group in groups.values()}) > 1
     if groups:
@@ -447,8 +519,9 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
                 embedding_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
             for group in groups.values():
                 row = group["row"]
-                center = (row["start"] + row["end"]) / 2 - offsets.get(row["source"], 0)
-                half = min(IDENTITY_MAX_ANCHOR_SECONDS, row["end"] - row["start"]) / 2
+                begin, finish = group["anchor"] or (row["start"], row["end"])
+                center = (begin + finish) / 2 - offsets.get(row["source"], 0)
+                half = min(IDENTITY_MAX_ANCHOR_SECONDS, finish - begin) / 2
                 first, last = round((center - half) * SAMPLE_RATE), round((center + half) * SAMPLE_RATE)
                 samples = sources[row["source"]][max(0, first):last]
                 if len(samples) < IDENTITY_MIN_SECONDS * SAMPLE_RATE:
@@ -466,13 +539,19 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
         except Exception as error:
             identity_error = str(error)
     valid = {name: group for name, group in groups.items() if group["vector"] is not None}
-    mapped, uncertain = cluster_voice_identities(valid)
+    try:
+        mapped, uncertain = cluster_voice_identities(valid)
+    except Exception as error:
+        mapped, uncertain = {}, set()
+        identity_error = str(error)
     for name, row in eligible:
         if name in mapped and name not in uncertain:
             row.update(global_speaker=mapped[name], speaker_global=True, speaker_status="matched")
     resolved = sum(row["speaker_global"] for row in segments)
     return {
         "method": "joint_turn_voice_embeddings_complete_link_v1",
+        "anchor_mode": anchor_mode, "eligible_segments": len(groups), "valid_embeddings": len(valid),
+        "ambiguous_segments": len(uncertain),
         "minimum_anchor_seconds": IDENTITY_MIN_SECONDS,
         "maximum_cluster_cosine_distance": IDENTITY_CLUSTER_DISTANCE, "minimum_margin": IDENTITY_MARGIN,
         "resolved_segments": resolved, "unknown_segments": len(segments) - resolved,
@@ -486,13 +565,16 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
                     embedding_model: str | Path, progress: Callable[[dict], None] | None = None,
                     threads: int = 4, threshold: float = DEFAULT_CLUSTER_THRESHOLD, diarizer=None,
                     embedding_extractor=None, asr_denoise: str = "light",
-                    asr_echo_filter: bool = True) -> list[dict]:
+                    asr_echo_filter: bool = True, anchor_mode: str = "legacy",
+                    asr_segmentation: str = "speaker") -> list[dict]:
     import soundfile as sf
 
     if asr_denoise not in ("light", "off"):
         raise ValueError("asr_denoise must be light or off")
     if type(asr_echo_filter) is not bool:
         raise ValueError("asr_echo_filter must be a boolean")
+    if anchor_mode not in ("legacy", "clean") or asr_segmentation not in ("speaker", "speech"):
+        raise ValueError("Invalid anchor mode or ASR segmentation")
     session_dir = Path(session_dir).resolve()
     metadata_path = session_dir / "session.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig")) if metadata_path.is_file() else {}
@@ -554,7 +636,12 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
     if progress:
         progress({"stage": "speaker_identity", "message": "正在比较声纹，统一跨音轨说话人"})
     identities = assign_global_speakers(segments, sources, offsets, Path(embedding_model),
-                                       threads, embedding_extractor)
+                                       threads, embedding_extractor, anchor_mode=anchor_mode)
+    turn_count = len(segments)
+    if asr_segmentation == "speech":
+        # Preserve the independent diarization timeline for review/word alignment.
+        (session_dir / "speaker_turns.json").write_text(json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8")
+        segments = decouple_asr_segments(segments, sources, offsets, clip_dir, asr_denoise)
     if any(source_kind(source) == "microphone" for source in sources) and any(
             source_kind(source) == "loopback" for source in sources):
         mark_digital_duplicates(segments, sources, offsets)
@@ -566,6 +653,7 @@ def prepare_session(session_dir: str | Path, segmentation_model: str | Path,
         "capture_offsets_ms": {key: value * 1000 for key, value in offsets.items()},
         "sources": summaries,
         "segments": len(segments),
+        "speaker_turns": turn_count, "asr_segmentation": asr_segmentation,
         "global_speaker_identity": identities,
         "asr_denoise": asr_denoise,
         "asr_echo_filter": asr_echo_filter,
@@ -602,6 +690,8 @@ def main() -> None:
     parser.add_argument("--models", required=True, type=Path)
     parser.add_argument("--threads", default=4, type=int)
     parser.add_argument("--threshold", default=DEFAULT_CLUSTER_THRESHOLD, type=float)
+    parser.add_argument("--anchor-mode", choices=("legacy", "clean"), default="legacy")
+    parser.add_argument("--asr-segmentation", choices=("speaker", "speech"), default="speaker")
     parser.add_argument("--asr-denoise", choices=("light", "off"), default="light",
                         help="Optional 70 Hz low-frequency reduction on ASR copies; originals/mix unchanged")
     parser.add_argument("--echo-filter", choices=("on", "off"), default="on",
@@ -611,6 +701,7 @@ def main() -> None:
     prepare_session(args.session, segmentation, embedding, threads=args.threads,
                     threshold=args.threshold, asr_denoise=args.asr_denoise,
                     asr_echo_filter=args.echo_filter == "on",
+                    anchor_mode=args.anchor_mode, asr_segmentation=args.asr_segmentation,
                     progress=lambda event: print(json.dumps(event), flush=True))
 
 

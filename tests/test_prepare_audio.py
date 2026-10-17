@@ -12,6 +12,84 @@ import prepare_audio as preparation
 
 
 class PreparationTests(unittest.TestCase):
+    def test_clean_anchor_recovers_unmixed_part_of_overlapping_turn(self):
+        row = {"source": "mic", "speaker": "mic_01", "start": 10., "end": 20.}
+        other = {"source": "mic", "speaker": "mic_02", "start": 10., "end": 14.}
+        self.assertEqual(preparation.clean_anchor(row, [row, other]), (14., 20.))
+        other["end"] = 19.
+        self.assertIsNone(preparation.clean_anchor(row, [row, other]))
+
+    def test_speech_windows_ignore_local_speaker_change_without_losing_turns(self):
+        rows = [{"start": 0., "end": 3., "source": "mic", "speaker": "mic_01"},
+                {"start": 2., "end": 5., "source": "mic", "speaker": "mic_02"}]
+        windows = preparation.speech_windows(np.ones(80000, dtype=np.float32) * .02, rows)
+        self.assertEqual(windows, [(0, 80000)])
+        rows[1]["speaker"] = "mic_99"
+        self.assertEqual(preparation.speech_windows(np.ones(80000, dtype=np.float32) * .02, rows), windows)
+
+    def test_decoupled_mixed_speech_keeps_both_timelines_without_attributing_all_text(self):
+        import soundfile as sf
+        rows = [{"start": 10., "end": 13., "source": "mic", "speaker": "mic_01",
+                 "global_speaker": "speaker_01", "speaker_global": True, "speaker_status": "matched"},
+                {"start": 12., "end": 15., "source": "mic", "speaker": "mic_02",
+                 "global_speaker": "speaker_02", "speaker_global": True, "speaker_status": "matched"}]
+        samples = np.ones(80000, dtype=np.float32) * .02
+        with tempfile.TemporaryDirectory() as temporary:
+            output = preparation.decouple_asr_segments(rows, {"mic": samples}, {"mic": 10}, Path(temporary), "off")
+            self.assertEqual(len(output), 1)
+            self.assertEqual((output[0]["start"], output[0]["end"]), (10., 15.))
+            self.assertEqual(output[0]["speaker_status"], "mixed")
+            self.assertIsNone(output[0]["global_speaker"])
+            self.assertEqual([span["global_speaker"] for span in output[0]["speaker_spans"]], ["speaker_01", "speaker_02"])
+            self.assertEqual(sf.info(output[0]["text_audio"]).frames, 80000)
+        np.testing.assert_array_equal(samples, np.full(80000, .02, dtype=np.float32))
+
+    def test_clean_anchor_uses_only_unmixed_audio_with_capture_offset(self):
+        streams = []
+        class Stream:
+            def accept_waveform(self, rate, samples): streams.append(samples.copy())
+            def input_finished(self): pass
+        class Extractor:
+            def create_stream(self): return Stream()
+            def is_ready(self, stream): return True
+            def compute(self, stream): return [1., 0., 0.]
+        rows = [{"source": "mic", "speaker": "mic_01", "start": 10., "end": 20.},
+                {"source": "mic", "speaker": "mic_02", "start": 10., "end": 14.}]
+        samples = np.arange(160000, dtype=np.float32) / 160000
+        result = preparation.assign_global_speakers(rows, {"mic": samples}, {"mic": 10.}, Path("unused"),
+                                                     embedding_extractor=Extractor(), anchor_mode="clean")
+        self.assertEqual(result["eligible_segments"], 1)
+        np.testing.assert_array_equal(streams[0], samples[64000:160000])
+        self.assertEqual(rows[0]["speaker_status"], "matched")
+        self.assertEqual(rows[1]["speaker_status"], "unknown")
+
+    def test_speech_windows_cover_all_turn_samples_once_even_with_fragmented_labels(self):
+        samples = np.ones(60 * preparation.SAMPLE_RATE, dtype=np.float32) * .02
+        turns = [{"start": 1., "end": 35., "source": "mic", "speaker": "mic_01"},
+                 {"start": 10., "end": 12., "source": "mic", "speaker": "mic_02"},
+                 {"start": 35.2, "end": 55., "source": "mic", "speaker": "mic_03"}]
+        windows = preparation.speech_windows(samples, turns)
+        self.assertEqual(windows[0][0], 16000)
+        self.assertEqual(windows[-1][1], 55 * 16000)
+        self.assertTrue(all(left[1] == right[0] for left, right in zip(windows, windows[1:])))
+        self.assertTrue(all(0 < end - start <= 24 * 16000 for start, end in windows))
+
+    def test_cluster_failure_preserves_transcription_turns_as_unknown(self):
+        class Stream:
+            def accept_waveform(self, rate, samples): pass
+            def input_finished(self): pass
+        class Extractor:
+            def create_stream(self): return Stream()
+            def is_ready(self, stream): return True
+            def compute(self, stream): return [1., 0., 0.]
+        from unittest.mock import patch
+        rows = [{"start": 0., "end": 3., "source": "mic", "speaker": "mic_01"}]
+        with patch.object(preparation, "cluster_voice_identities", side_effect=RuntimeError("cluster unavailable")):
+            result = preparation.assign_global_speakers(rows, {"mic": np.ones(48000, dtype=np.float32)}, {}, Path("unused"), embedding_extractor=Extractor())
+        self.assertIn("cluster unavailable", result["error"])
+        self.assertEqual(rows[0]["speaker_status"], "unknown")
+        self.assertEqual(rows[0]["end"], 3.)
+
     def test_segmented_asr_source_preserves_resampling_and_speech_crossing_boundaries(self):
         import soundfile as sf
         for rate in (44100, 48000):

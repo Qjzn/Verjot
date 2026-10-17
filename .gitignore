@@ -161,5 +161,11 @@
 !/tests/test_tingji_config.py
 
 !/tests/TestInstalledJourney.cs
+!/tests/Test-InstallPrerequisites.ps1
 !/packaging/Test-NewUser.ps1
+!/packaging/Prepare-CleanWindows.ps1
+!/packaging/Test-CleanWindowsGuest.ps1
+!/tests/PrepareOfflineInstall.py
+!/tests/VerifyOfflineInstall.py
 !/documentation/new-user-validation.md
+!/documentation/clean-windows-validation.md

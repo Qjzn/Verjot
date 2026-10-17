@@ -13,6 +13,52 @@ import meeting_worker as worker
 
 
 class NoteTests(unittest.TestCase):
+    def test_short_audio_omits_only_explicit_terminology_prompt(self):
+        from asr_engine import audio_context
+        self.assertEqual(audio_context("会议背景\n术语：挚达。", 3.99), "会议背景")
+        self.assertEqual(audio_context("术语：挚达。", 1.), "")
+        self.assertEqual(audio_context("术语：挚达。", 4.), "术语：挚达。")
+        self.assertEqual(audio_context("原有上下文 ", .5), "原有上下文 ")
+        from asr_engine import job_fingerprint
+        import hashlib
+        old_key = [[], [], "model", "Chinese", "旧提示 ", 512, "hf-native-v1"]
+        self.assertEqual(job_fingerprint([], Path("model"), "旧提示 ", 512),
+                         hashlib.sha256(json.dumps(old_key, ensure_ascii=False, sort_keys=True).encode()).hexdigest())
+        old_terms_key = [[], [], "model", "Chinese", "术语：挚达。", 512, "hf-native-v1"]
+        self.assertNotEqual(job_fingerprint([], Path("model"), "术语：挚达。", 512),
+                            hashlib.sha256(json.dumps(old_terms_key, ensure_ascii=False, sort_keys=True).encode()).hexdigest())
+
+    def test_preparation_options_freeze_legacy_cache_and_respect_recording_settings(self):
+        config = {"speaker_anchor_mode": "clean", "asr_segmentation": "speech"}
+        self.assertEqual(worker.preparation_options({}, config), config)
+        self.assertEqual(worker.preparation_options({}, config, {"fingerprint": "old"}),
+                         {"speaker_anchor_mode": "legacy", "asr_segmentation": "speaker"})
+        metadata = {"speaker_anchor_mode": "legacy", "asr_segmentation": "speaker"}
+        self.assertEqual(worker.preparation_options(metadata, config), metadata)
+        self.assertEqual(worker.preparation_options({}, {}, dict(config, fingerprint="new")), config)
+        with self.assertRaises(ValueError):
+            worker.preparation_options({"asr_segmentation": "invalid"}, config)
+
+    def test_mixed_asr_paragraph_displays_timeline_without_false_single_identity(self):
+        row = {"start": 0., "end": 5., "speaker": "mic_speech", "source": "mic",
+               "source_kind": "microphone", "speaker_status": "mixed", "speaker_global": False,
+               "text": "第一句。第二句。", "status": "done", "speaker_spans": [
+                   {"start": 0., "end": 2., "global_speaker": "speaker_01", "speaker_global": True},
+                   {"start": 2., "end": 5., "global_speaker": "speaker_02", "speaker_global": True}]}
+        content = worker.render_note(Path("20261017-120000"), Path("."), {}, result={"segments": [row]})
+        self.assertIn("本段多人", content)
+        self.assertIn("未逐字对齐", content)
+        self.assertIn("说话人 01", content)
+        self.assertIn("说话人 02", content)
+        self.assertEqual(content.count("第一句。第二句。"), 1)
+
+    def test_legacy_driver_error_is_one_actionable_paragraph(self):
+        detail = worker.capture_failure({"capture_error": "耳机：尚未实现\r\n\r\n尚未实现\r\n"})
+        self.assertNotIn("\n", detail)
+        self.assertNotIn("尚未实现", detail)
+        self.assertEqual(detail.count("设备报告不支持"), 1)
+        self.assertIn("录音完整性", detail)
+
     def process_fixture(self, merge_fails=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -317,6 +363,25 @@ class NoteTests(unittest.TestCase):
 
 
 class MinimalStorageTests(unittest.TestCase):
+    def test_decoupled_clips_and_speaker_manifest_are_compacted(self):
+        self.metadata.update(speaker_anchor_mode="clean", asr_segmentation="speech", asr_context="旧提示", asr_terms="挚达")
+        (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        commands = []
+        def stage(session, command, name):
+            commands.append((name, command))
+            self.stage(session, command, name)
+            if name == "prepare":
+                (session / "clips/mic_00000.wav").rename(session / "clips/mic_speech_00000.wav")
+                (session / "speaker_turns.json").write_text("[]")
+        self.assertEqual(self.process(stage), 0)
+        self.assertFalse((self.session / "speaker_turns.json").exists())
+        self.assertFalse((self.session / "clips").exists())
+        prepare = next(command for name, command in commands if name == "prepare")
+        self.assertEqual(prepare[prepare.index("--anchor-mode") + 1], "clean")
+        self.assertEqual(prepare[prepare.index("--asr-segmentation") + 1], "speech")
+        asr = next(command for name, command in commands if name == "asr")
+        self.assertEqual(asr[asr.index("--context") + 1], "旧提示\n术语：挚达。")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

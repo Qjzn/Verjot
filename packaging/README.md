@@ -29,6 +29,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Test-Installer.p
 
 This test uses a unique `validation\installer-smoke-*\app` directory, disables application launch and shortcut tasks, and checks clean install, cross-directory installation rejection, old-uninstaller ownership rejection, occupied EXE and worker-byte-lock protection, active/unknown session rejection, upgrade preservation, native configuration validation, and uninstall preservation using synthetic fixtures. It writes an actual temporary HKCU uninstall entry and removes it on successful uninstall; it never replaces an existing registered install. It does not access the clipboard, record/play audio, or download models. A failed run leaves its evidence and isolated install for inspection.
 
+For an actual Windows guest with no Python, models or developer tools, follow [clean Windows validation](../documentation/clean-windows-validation.md). `Prepare-CleanWindows.ps1` stages an explicit installer and two synthetic Mandarin WAVs, compiles the existing external GUI helpers, and emits a `.wsb` with clipboard/microphone redirection disabled. It does not enable Windows features or launch the guest. `Test-CleanWindowsGuest.ps1` refuses a normal user account; guest reports, not preparation success, determine acceptance.
+
 Silent operations for automation:
 
 ```powershell

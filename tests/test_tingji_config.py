@@ -8,6 +8,16 @@ from meeting_worker import audio_link
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_terms_are_explicit_deduplicated_and_frozen_per_meeting(self):
+        config = self.validate(asr_context="产品会议", asr_terms="挚达，BOM\n挚达;OA")
+        self.assertEqual(tingji_config.transcription_context(config), "产品会议\n术语：挚达、BOM、OA。")
+        metadata = {"asr_context": "原提示", "asr_terms": "原术语"}
+        self.assertEqual(tingji_config.transcription_context(config, metadata), "原提示\n术语：原术语。")
+        self.assertEqual(tingji_config.transcription_context({"asr_context": "  old  "}), "  old  ")
+        for changes in ({"asr_terms": "x" * 65}, {"asr_context": "x" * 2000, "asr_terms": "BOM"},
+                        {"asr_segmentation": "auto"}, {"speaker_anchor_mode": "six"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError): self.validate(**changes)
+
     def test_quick_note_defaults_and_customization(self):
         config = self.validate()
         self.assertEqual(config["quick_note_hotkey"], "Ctrl+Alt+J")

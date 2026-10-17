@@ -211,10 +211,34 @@ internal static class TestCaptureReliability {
             Check(delta==0,"steady-state float sample serialization must not allocate an array for every sample");
         }
     }
+    static void PacketClockBounds(string root) {
+        bool estimated;
+        double first = CaptureTrack.ResolvePacketStart(5508816, 5000000, 480, 48000, 480000, 479520, 4999980, 480, false, out estimated);
+        Check(estimated && Math.Abs(first - 4999990) < .001, "a future driver timestamp must not shift already captured audio minutes ahead");
+        double gap = CaptureTrack.ResolvePacketStart(0, 120, 160, 16000, 1600, 0, 0, 160, true, out estimated);
+        Check(estimated && Math.Abs(gap - 100) < .001, "invalid QPC must preserve a reliable device-position gap, not compress it into one packet");
+        double startup = CaptureTrack.ResolvePacketStart(0, 100, 160, 16000, 0, 0, double.NaN, 0, true, out estimated);
+        Check(estimated && startup == 90, "first invalid timestamp must not call optional driver StreamLatency");
+        double valid = CaptureTrack.ResolvePacketStart(10, 500, 160, 16000, 160, 0, 0, 160, false, out estimated);
+        Check(!estimated && valid == 10, "valid delayed packets must retain hardware time, not callback time");
+        double reset = CaptureTrack.ResolvePacketStart(1, 120, 160, 16000, 0, 1600, 100, 160, false, out estimated);
+        Check(estimated && reset >= 110 && reset <= 120, "counter/timestamp reset must use bounded monotonic fallback");
+        string path = Path.Combine(root,"bounded-driver-clock.wav");
+        using(var writer = new TimelineWriter(path,new WaveFormat(16000,16,1))) {
+            byte[] packet = new byte[320]; for(int i=0;i<160;i++) Buffer.BlockCopy(BitConverter.GetBytes((short)1234),0,packet,i*2,2);
+            double at = CaptureTrack.ResolvePacketStart(5508816, 120, 160, 16000, 1600, 0, 0, 160, false, out estimated);
+            writer.AddTimestamped(packet,packet.Length,at,1600,true); writer.Finish(120);
+        }
+        using(var reader = new WaveFileReader(path)) {
+            reader.Position = 1600*2; byte[] value = new byte[2]; reader.Read(value,0,2);
+            Check(BitConverter.ToInt16(value,0)==1234,"future-QPC packet must survive the actual stop boundary in the WAV");
+        }
+    }
     public static int Main(string[] args) {
         try {
             string root=Path.GetFullPath(args[0]);Directory.CreateDirectory(root);
             string selected=args.Length>1?args[1]:"all";
+            if(selected=="all"||selected=="packet-clock")PacketClockBounds(root);
             if(selected=="all"||selected=="finish")FailedFinishClosesWriter(root,false);
             if(selected=="all"||selected=="header-fault")FailedFinishClosesWriter(root,true);
             if(selected=="all"||selected=="dispose")TimedOutDisposeCanRetry(root);

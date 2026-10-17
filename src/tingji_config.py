@@ -11,6 +11,23 @@ from urllib.parse import urlsplit
 SCHEMA = Path(__file__).with_name("config.schema.json")
 
 
+def transcription_context(config: dict, metadata: dict | None = None) -> str:
+    """Explicit vocabulary, frozen for new sessions; no inferred meeting facts."""
+    values = metadata if metadata is not None and "asr_context" in metadata else config
+    context, terms = values.get("asr_context", ""), values.get("asr_terms", "")
+    if not isinstance(context, str) or not isinstance(terms, str):
+        raise ValueError("asr_context 和 asr_terms 必须为字符串")
+    vocabulary = list(dict.fromkeys(term.strip() for term in re.split(r"[,，;；\r\n]+", terms) if term.strip()))
+    if len(vocabulary) > 64 or any(len(term) > 64 for term in vocabulary):
+        raise ValueError("asr_terms 最多64个术语，每项最多64字符")
+    prompt = context
+    if vocabulary:
+        prompt += ("\n" if prompt else "") + "术语：" + "、".join(vocabulary) + "。"
+    if len(prompt) > 2000:
+        raise ValueError("术语和上下文合计最多2000字符")
+    return prompt
+
+
 def parse_hotkey(value: str) -> tuple[int, int]:
     if not isinstance(value, str) or not re.fullmatch(
         r"(?:(?:Ctrl|Alt|Shift|Win)\+)+(?:[A-Z]|F(?:[1-9]|1[0-9]|2[0-4])|Space)", value
@@ -68,6 +85,7 @@ def validate_config(config: dict, *, check_directory: bool = True) -> dict:
             raise ValueError(f"{key} 必须为：" + ", ".join(map(str, rule["enum"])))
         if type(value) is int and not rule.get("minimum", value) <= value <= rule.get("maximum", value):
             raise ValueError(f"{key} 超出允许范围")
+    transcription_context(result)
     drive, _ = ntpath.splitdrive(result["vault_root"])
     if not drive or not ntpath.isabs(result["vault_root"]):
         raise ValueError("vault_root 必须是完整 Windows 绝对目录，如 D:\\Notes\\MyNotes")

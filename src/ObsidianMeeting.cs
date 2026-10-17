@@ -23,7 +23,13 @@ internal static class MeetingBrand {
     public static readonly Icon IdleIcon = LoadIcon("Tingji.Idle.ico", SystemInformation.SmallIconSize.Width);
     public static readonly Icon RecordingIcon = LoadIcon("Tingji.Recording.ico", SystemInformation.SmallIconSize.Width);
     public static Bitmap LogoBitmap(int pixels) {
-        using (var icon = LoadIcon("Tingji.Idle.ico", pixels)) return icon.ToBitmap();
+        // Icon(stream, size) may choose a smaller nearest frame (36 -> 32).
+        // Request the next embedded frame so fractional DPI only downsamples.
+        int frame = 256;
+        foreach (int size in new int[] { 16, 20, 24, 32, 48, 64, 128, 256 }) {
+            if (size >= pixels) { frame = size; break; }
+        }
+        using (var icon = LoadIcon("Tingji.Idle.ico", frame)) return icon.ToBitmap();
     }
     static Icon LoadIcon(string resource, int pixels) {
         using (var stream = typeof(MeetingBrand).Assembly.GetManifestResourceStream(resource)) {
@@ -94,6 +100,12 @@ internal static class MeetingFiles {
 }
 
 internal static class MeetingConfig {
+    static int TextLength(string text) {
+        int length = 0;
+        for (int i = 0; i < text.Length; i++, length++)
+            if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1])) i++;
+        return length;
+    }
     public static Dictionary<string, object> Load() {
         CheckOrdinaryPath(MeetingFiles.Home);
         string path = Path.Combine(MeetingFiles.Home, "config.json");
@@ -119,9 +131,7 @@ internal static class MeetingConfig {
             if (!correct) throw new InvalidOperationException(entry.Key + " 必须是 " + kind + "，不能为 null 或其他类型。");
             if (value is string) {
                 string text = (string)value;
-                int length = 0;
-                for (int i = 0; i < text.Length; i++, length++)
-                    if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1])) i++;
+                int length = TextLength(text);
                 if ((rule.ContainsKey("minLength") && length < Convert.ToInt32(rule["minLength"])) ||
                     (rule.ContainsKey("maxLength") && length > Convert.ToInt32(rule["maxLength"])))
                     throw new InvalidOperationException(entry.Key + " 长度不符合配置说明。");
@@ -138,6 +148,17 @@ internal static class MeetingConfig {
             if (kind == "integer" && (Convert.ToInt64(value) < Convert.ToInt64(rule["minimum"]) || Convert.ToInt64(value) > Convert.ToInt64(rule["maximum"])))
                 throw new InvalidOperationException(entry.Key + " 超出允许范围。");
         }
+        var terms = new List<string>();
+        foreach (string item in Regex.Split(MeetingFiles.Text(config, "asr_terms", ""), "[,，;；\\r\\n]+")) {
+            string term = item.Trim();
+            if (term.Length == 0 || terms.Contains(term)) continue;
+            if (TextLength(term) > 64) throw new InvalidOperationException("asr_terms 每项最多64字符。");
+            terms.Add(term);
+        }
+        if (terms.Count > 64) throw new InvalidOperationException("asr_terms 最多64项。");
+        string context = MeetingFiles.Text(config, "asr_context", "");
+        if (terms.Count > 0) context += (context.Length > 0 ? "\n" : "") + "术语：" + string.Join("、", terms.ToArray()) + "。";
+        if (TextLength(context) > 2000) throw new InvalidOperationException("术语和上下文合计最多2000字符。");
         string root = MeetingFiles.VaultRoot(config);
         if (!Regex.IsMatch(root, @"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))") ||
             !Regex.IsMatch((string)config["vault_root"], @"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))"))
@@ -747,6 +768,22 @@ internal sealed class CaptureTrack : IDisposable {
             return true;
         }
     }
+    internal static double ResolvePacketStart(double startMs, double arrivalMs, int frames, int rate,
+        long position, long previousPosition, double previousStartMs, int previousFrames, bool invalid, out bool estimated) {
+        // Driver QPC is the packet's capture time, never minutes after arrival.
+        // Keep valid delayed packets; callback scheduling is not capture timing.
+        estimated = invalid || double.IsNaN(startMs) || double.IsInfinity(startMs) || startMs > arrivalMs + 20 ||
+            (!double.IsNaN(previousStartMs) && startMs < previousStartMs);
+        if (!estimated) return startMs;
+        double fallback = arrivalMs - frames * 1000.0 / rate;
+        if (!double.IsNaN(previousStartMs)) {
+            double fromPosition = previousStartMs + (position - previousPosition) * 1000.0 / rate;
+            if (position >= previousPosition + previousFrames && fromPosition <= arrivalMs + 20)
+                fallback = fromPosition;
+            fallback = Math.Max(previousStartMs + previousFrames * 1000.0 / rate, fallback);
+        }
+        return Math.Max(0, Math.Min(arrivalMs, fallback));
+    }
     void CaptureTimestamped() {
         try {
             using (var enumerator = new MMDeviceEnumerator())
@@ -771,13 +808,15 @@ internal sealed class CaptureTrack : IDisposable {
                             byte[] buffer = new byte[checked(frames * format.BlockAlign)];
                             try { if ((flags & AudioClientBufferFlags.Silent) == 0) Marshal.Copy(address, buffer, 0, buffer.Length); }
                             finally { packets.ReleaseBuffer(frames); }
-                            double startMs = (qpc - qpcOrigin100ns) / 10000.0;
-                            bool timestampError = (flags & AudioClientBufferFlags.TimestampError) != 0 || qpc <= 0;
+                            double arrivalMs = clock.Elapsed.TotalMilliseconds;
+                            bool timestampError;
+                            double startMs = ResolvePacketStart((qpc - qpcOrigin100ns) / 10000.0, arrivalMs,
+                                frames, format.SampleRate, position, lastPosition, lastStartMs, lastFrames,
+                                (flags & AudioClientBufferFlags.TimestampError) != 0 || qpc <= 0, out timestampError);
                             bool discontinuity = (flags & AudioClientBufferFlags.DataDiscontinuity) != 0;
                             if (timestampError) {
-                                Diagnostic("设备包时间戳无效，使用已知连续帧位置估计；本段时间精度需核对。", clock.Elapsed.TotalMilliseconds, true);
-                                if (!double.IsNaN(lastStartMs)) { position = lastPosition + lastFrames; startMs = lastStartMs + lastFrames * 1000.0 / format.SampleRate; }
-                                else startMs = Math.Max(0, clock.Elapsed.TotalMilliseconds - frames * 1000.0 / format.SampleRate - client.StreamLatency / 10000.0);
+                                Diagnostic("设备包时间戳无效或超前，已按采样位置及到达边界估计；本段时间精度需核对。", arrivalMs, true);
+                                if (position < lastPosition + lastFrames && !double.IsNaN(lastStartMs)) position = lastPosition + lastFrames;
                             }
                             if (discontinuity && !double.IsNaN(lastStartMs)) Diagnostic("设备报告数据间断（静音或采集缺口），已保留硬件时间线。", startMs, true);
                             bool segmented = writer.AddTimestamped(buffer, buffer.Length, startMs, position, discontinuity || timestampError);
@@ -789,12 +828,18 @@ internal sealed class CaptureTrack : IDisposable {
                         }
                         Thread.Sleep(10);
                     }
-                    client.Stop();
+                    try { client.Stop(); }
+                    catch (COMException error) {
+                        // Route removal may make Stop unsupported after all packets
+                        // have drained. It does not invalidate the preceding audio.
+                        Diagnostic("设备停止时报告异常，停止前音频已保留（错误码 0x" + error.ErrorCode.ToString("X8") + "）。", clock.Elapsed.TotalMilliseconds, false);
+                        MeetingFiles.Log(error);
+                    }
                 }
             }
         } catch (Exception error) {
             startupError = error;
-            Diagnostic(error.Message, clock.Elapsed.TotalMilliseconds, true);
+            Diagnostic("音频设备采集异常（错误码 0x" + error.HResult.ToString("X8") + "），此前音频已保留，请检查设备连接。", clock.Elapsed.TotalMilliseconds, true);
             if (!requestedStop) failed(error);
         } finally { ended = true; ready.Set(); stopped.Set(); }
     }
@@ -938,6 +983,10 @@ internal sealed class RecordingSession : IDisposable {
             { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
             { "transcription_mode", config["transcription_mode"] }, { "asr_denoise", config["asr_denoise"] },
+            { "asr_context", MeetingFiles.Text(config, "asr_context", "") },
+            { "asr_terms", MeetingFiles.Text(config, "asr_terms", "") },
+            { "speaker_anchor_mode", MeetingFiles.Text(config, "speaker_anchor_mode", "legacy") },
+            { "asr_segmentation", MeetingFiles.Text(config, "asr_segmentation", "speaker") },
             { "asr_echo_filter", config.ContainsKey("asr_echo_filter") ? config["asr_echo_filter"] : true },
             { "transcription_model", (string)config["transcription_mode"] == "api" ? config["api_model"] : "Qwen3-ASR-1.7B" },
             { "transcription_api_base_url", (string)config["transcription_mode"] == "api" ? ((string)config["api_base_url"]).TrimEnd('/') : "" },
@@ -1000,7 +1049,8 @@ internal sealed class RecordingSession : IDisposable {
             source.EndReason = "capture_error"; active.Remove(endpointKey); failedDevices.Add(endpointKey);
             notices.Enqueue(IsStorageFailure(error) ? "录音文件无法继续保存，正在停止并保留已录内容。" : "音频设备采集中断：" + source.Name + "；其他设备继续录制。");
         }
-        Problem(source.Name + "：" + error.Message);
+        MeetingFiles.Log(error);
+        Problem(source.Name + "：音频设备采集异常（错误码 0x" + error.HResult.ToString("X8") + "），此前音频已保留，请检查设备连接。");
         NotifyStorageFailure(error);
         try { devicesChanged.Set(); } catch (ObjectDisposedException) { }
     }

@@ -34,6 +34,7 @@ $taskFiles = @(
     'documentation\quality.md', 'documentation\release-readiness.md',
     'documentation\risk-review.md', 'documentation\open-source-readiness.md',
     'documentation\new-user-validation.md',
+    'documentation\clean-windows-validation.md',
     'documentation\architecture.md', 'documentation\flows.md', 'documentation\permissions.md',
     'documentation\variables.md', 'documentation\tests.md', 'documentation\cron.md', 'documentation\automation.md',
     'assets\screenshots\recording.png', 'assets\screenshots\quick-note.png', 'assets\screenshots\settings.png',

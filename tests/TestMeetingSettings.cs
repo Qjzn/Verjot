@@ -33,6 +33,18 @@ internal static class TestMeetingSettings {
     static bool Reject(Action action) {
         try { action(); return false; } catch (InvalidOperationException) { return true; } catch (IOException) { return true; }
     }
+    static void RecognitionConfig(string root) {
+        var config = Config(root);
+        config["asr_terms"] = "挚达，BOM\n挚达;OA";
+        config["speaker_anchor_mode"] = "clean"; config["asr_segmentation"] = "speech";
+        Check((string)MeetingConfig.Validate(config)["asr_terms"] == (string)config["asr_terms"], "Explicit terms and candidate modes are accepted without rewriting vocabulary");
+        config["asr_terms"] = new string('字', 65);
+        Check(Reject(delegate { MeetingConfig.Validate(config); }), "Overlong term is rejected natively");
+        config["asr_terms"] = "BOM"; config["asr_context"] = new string('字', 2000);
+        Check(Reject(delegate { MeetingConfig.Validate(config); }), "Combined context bound is checked before recording");
+        config["asr_context"] = string.Concat(Enumerable.Repeat("\U0001F600", 1000));
+        Check(MeetingConfig.Validate(config) != null, "Native context limits count Unicode characters like Python");
+    }
     [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr window, int id);
     [DllImport("user32.dll", SetLastError = true)] static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
@@ -387,7 +399,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
-            Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
+            RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

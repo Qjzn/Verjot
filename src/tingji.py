@@ -24,7 +24,17 @@ COMMON_PACKAGES = {"numpy": "numpy", "scipy": "scipy", "soundfile": "soundfile",
 LOCAL_PACKAGES = {"torch": "torch", "transformers": "transformers", "accelerate": "accelerate", "jinja2": "jinja2"}
 
 
-def doctor(full=False):
+def runtime_import_advice(error):
+    detail = str(error).lower()
+    if getattr(error, "winerror", None) in (126, 127, 193, 1114, 14001) or any(
+            token in detail for token in (".dll", "dll load", "winerror 126", "winerror 1114")):
+        return ("本地运行库加载失败；先从 Microsoft 官方安装 Visual C++ v14 Redistributable x64，"
+                "若提示重启请先重启，再重跑 doctor；仍失败时核对 Python 3.12 x64 与固定依赖版本。"
+                "不要从 DLL 下载站复制文件；详见 documentation/install-windows.md")
+    return "未安装或导入失败；请按当前模式运行 Install.ps1，不要改全局 Python"
+
+
+def doctor(full=False, check_devices=True):
     checks = []
 
     def add(name, ok, message, *, warning=False):
@@ -53,8 +63,8 @@ def doctor(full=False):
             if full:
                 importlib.import_module(module)
             add("package:" + package, True, version + ("，导入成功" if full else "，已安装"))
-        except Exception:
-            add("package:" + package, False, "未安装或导入失败；请按当前模式运行 Install.ps1，不要改全局 Python")
+        except Exception as error:
+            add("package:" + package, False, runtime_import_advice(error))
     if full:
         try:
             from mp3_audio import encoder_path
@@ -76,8 +86,8 @@ def doctor(full=False):
             if cuda and not torch.cuda.is_bf16_supported():
                 detail += "；GPU 不支持 BF16，本地识别可能回退 CPU"
             add("asr_runtime", True, detail)
-        except Exception:
-            add("asr_runtime", False, "本地模型接口导入失败，请恢复 requirements.txt 中的运行库版本")
+        except Exception as error:
+            add("asr_runtime", False, runtime_import_advice(error))
     for name in ("ObsidianMeeting.exe", "NAudio.dll", "meeting_worker.py", "prepare_audio.py", "merge_audio.py", "audio_sources.py", "mp3_audio.py",
                  "api_asr.py" if mode == "api" else "asr_engine.py"):
         add("file:" + name, (HOME / name).is_file(), "已就绪" if (HOME / name).is_file() else "文件缺失，请运行安装/构建脚本")
@@ -106,7 +116,7 @@ def doctor(full=False):
                 probe.unlink()
         free = shutil.disk_usage(directory).free
         add("disk:" + label, free >= 1024 ** 3, f"剩余 {free / 1024**3:.1f} GiB；录音和转写需要可用磁盘空间", warning=True)
-    if full:
+    if full and check_devices:
         try:
             with tempfile.TemporaryDirectory(prefix="tingji-diagnose-", dir=HOME) as directory:
                 report_path = Path(directory) / "devices.json"
@@ -120,7 +130,10 @@ def doctor(full=False):
         except Exception:
             add("native_audio", False, "无法完成原生设备诊断；请构建完整新版工具后再检查")
     ok = all(row["ok"] for row in checks if row["level"] != "warning")
+    if full and not check_devices:
+        add("native_audio_skipped", True, "已显式跳过声卡检查；只验运行环境，不代表真实录音可用", warning=True)
     return {"ok": ok, "mode": mode, "checks": checks, "audio_recorded": False, "api_called": False,
+            "devices_checked": bool(full and check_devices),
             "note": "文件存在不代表模型已成功推理；新机器仍需经用户同意完成一次真实录音和转写验证"}
 
 
@@ -421,6 +434,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     health = commands.add_parser("doctor", help="离线自检；不录音、不调用 API")
     health.add_argument("--full", action="store_true", help="实际导入依赖并检查原生音频端点；不加载模型")
+    health.add_argument("--skip-devices", action="store_true", help="无声卡沙箱中显式跳过端点检查；不代表采集可用")
     health.add_argument("--json", action="store_true")
     recent = commands.add_parser("status", help="只读查看最近会议状态")
     recent.add_argument("--json", action="store_true")
@@ -436,7 +450,7 @@ def main():
     first.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
-        report = doctor(args.full) if args.command == "doctor" else verify(args) if args.command == "verify" else status()
+        report = doctor(args.full, not args.skip_devices) if args.command == "doctor" else verify(args) if args.command == "verify" else status()
     except ValueError as error:
         report = {"ok": False, "error": str(error)}
     except Exception:

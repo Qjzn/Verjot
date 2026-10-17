@@ -3,6 +3,8 @@ from argparse import Namespace
 import json
 from pathlib import Path
 import subprocess
+import sys
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -22,6 +24,27 @@ def options():
 
 
 class FirstUseTests(unittest.TestCase):
+    def test_native_dependency_failure_has_specific_safe_remedy(self):
+        advice = tingji.runtime_import_advice(OSError("[WinError 126] DLL not found"))
+        self.assertIn("Microsoft", advice)
+        self.assertIn("x64", advice)
+        self.assertIn("不要从 DLL 下载站", advice)
+        self.assertNotIn("Redistributable", tingji.runtime_import_advice(ModuleNotFoundError("torch")))
+        self.assertNotIn("Redistributable", tingji.runtime_import_advice(PermissionError("Access denied")))
+
+    def test_explicit_device_skip_keeps_the_boundary_in_report(self):
+        fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        fake_transformers = SimpleNamespace(AutoModelForMultimodalLM=object, AutoProcessor=object)
+        with patch.object(tingji, "load_config", return_value=self.config), \
+                patch.object(tingji.importlib.metadata, "version", return_value="fixture"), \
+                patch.object(tingji.importlib, "import_module"), \
+                patch.dict(sys.modules, torch=fake_torch, transformers=fake_transformers), \
+                patch.object(tingji.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "libmp3lame")) as run:
+            report = tingji.doctor(full=True, check_devices=False)
+        self.assertFalse(report["devices_checked"])
+        self.assertTrue(any(row["id"] == "native_audio_skipped" and row["level"] == "warning" for row in report["checks"]))
+        self.assertTrue(all("--diagnose" not in call.args[0] for call in run.call_args_list))
+
     def setUp(self):
         scratch = Path(__file__).resolve().parent / "validation"
         scratch.mkdir(exist_ok=True)
