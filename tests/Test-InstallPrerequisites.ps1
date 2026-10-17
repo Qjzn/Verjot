@@ -46,3 +46,6 @@ if ($taskExit -eq 0 -or $taskState.phase -ne 'native-runtime' -or $taskState.sta
     $taskText -notmatch 'latest-supported-vc-redist' -or (Test-Path -LiteralPath (Join-Path $taskHome 'models')) -or
     (Test-Path -LiteralPath (Join-Path $taskHome 'config.json'))) { throw "Missing VC prerequisite did not fail safely: $taskExit / $($taskState.phase) / $($taskState.state)" }
 Write-Output 'PASS: actual Install.ps1 missing-VC fault injection; clear official remedy, no model download/config write/network.'
+# The rejected child is the expected outcome, not this fixture's exit status.
+# GitHub's PowerShell wrapper propagates LASTEXITCODE after script completion.
+exit 0
