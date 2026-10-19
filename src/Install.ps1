@@ -210,6 +210,17 @@ print(json.dumps(value))
     $taskPhase = 'venv'
     Set-InstallStatus 'installing' '检查并准备本目录 Python 虚拟环境'
     if (-not (Test-Path -LiteralPath $taskPython -PathType Leaf)) { Invoke-Checked $taskBasePython @('-B', '-m', 'venv', $taskVenv) }
+    # venv may have been interrupted after creating python.exe but before pip.
+    # Bootstrap only an absent module from Python's bundled wheels; do not
+    # overwrite an installed pip that fails to import or execute.
+    & $taskPython -B -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('pip') else 3)"
+    $taskPipProbeExit = $LASTEXITCODE
+    if ($taskPipProbeExit -eq 3) {
+        Set-InstallStatus 'installing' '补齐中断安装缺失的 pip（使用 Python 自带离线包）'
+        Invoke-Checked $taskPython @('-B', '-m', 'ensurepip', '--upgrade')
+    } elseif ($taskPipProbeExit -ne 0) {
+        throw '无法检查虚拟环境中的 pip；请检查 installation/install.log，不会覆盖已有环境。'
+    }
     Invoke-Checked $taskPython @('-B', '-m', 'pip', '--version')
 
     $taskPhase = 'naudio'

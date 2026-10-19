@@ -34,4 +34,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-Clea
 
 ## 当前状态
 
+### 没有沙箱时使用干净虚拟机
+
+准备脚本仍用于生成显式输入包。在全新 Windows 虚拟机中，将生成的 `input` 文件夹复制为 `C:\verbit-input`，新建空目录 `C:\verbit-reports`，在客体终端执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\verbit-input\Test-CleanWindowsGuest.ps1 -Environment VM
+```
+
+只在可丢弃的客体执行。脚本检查虚拟机型号及输入校验清单，再检查 Python/开发命令的空白基线；不支持或无法读取型号时拒绝，不用物理主机开启了 Hyper-V 作为客体证明。支持 Hyper-V、VMware、VirtualBox、KVM/QEMU、Parallels 常见型号。客体不共享宿主模型、缓存、个人目录或剪贴板。按原检查清单读取报告，失败退出码为2；失败后保留报告，再新建干净客体重测，不在已装过依赖的客体重写“首次安装通过”。
+
+2026-10-19 复查：本机未找到 Windows Sandbox、VirtualBox、VMware 启动入口；DISM 只读查询返回740，当前进程没有管理员令牌。因此未启动干净客体，不能由此前“已启用、待重启”的记录推断现在可运行。本轮新增显式 VM 入口与宿主拒绝回归，但这不是 VM 安装实测通过。当前候选状态见 [私有测试版验收](private-beta-acceptance.md)。
+
 2026-10-16：经机器所有者授权，管理员操作已将 `Containers-DisposableClientVM` 从 Disabled 启用为 Enabled，返回 `RestartNeeded: true`。全程使用 `-NoRestart`，宿主尚未重启；重启由机器所有者安排。启用结束时 `WindowsSandbox.exe` 仍未出现，因此没有尝试启动客体。重启后重新核实功能和可执行文件，再打开准备好的 `.wsb`，不要以功能启用成功代替客体验收。**干净 Windows 客体尚未执行，不能标为通过**。当前机器已有环境的实际安装与本地模型证据见 [新用户验证](new-user-validation.md)。

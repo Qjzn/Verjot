@@ -28,6 +28,7 @@
 !/documentation/product-scope.md
 !/documentation/quality.md
 !/documentation/local-model-evaluation.md
+!/documentation/private-beta-acceptance.md
 !/documentation/risk-review.md
 !/documentation/first-use.md
 !/documentation/release-readiness.md
@@ -168,5 +169,8 @@
 !/packaging/Test-CleanWindowsGuest.ps1
 !/tests/PrepareOfflineInstall.py
 !/tests/VerifyOfflineInstall.py
+!/tests/ValidateLongTimeline.py
+!/tests/EvaluateSpeakers.py
+!/tests/test_speaker_evaluation.py
 !/documentation/new-user-validation.md
 !/documentation/clean-windows-validation.md

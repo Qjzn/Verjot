@@ -51,7 +51,7 @@ if (-not $NativeOnly) {
         $env:TEMP = $env:TMP = $taskPythonTemp
         $env:PYTHONPATH = $taskRoot + ';' + $taskTests
         [IO.Directory]::CreateDirectory((Join-Path $taskTests 'validation')) | Out-Null
-        & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker test_legacy_migration test_download_models test_mp3_audio test_first_use
+        & $taskPython -B -m unittest test_tingji_config test_api_asr test_meeting_worker test_merge_audio test_prepare_audio test_audio_sources test_multi_capture_worker test_legacy_migration test_download_models test_mp3_audio test_first_use test_speaker_evaluation
         if ($LASTEXITCODE -ne 0) { throw "Python regressions failed: $LASTEXITCODE" }
     } finally {
         $env:PYTHONPATH = $taskPreviousPythonPath

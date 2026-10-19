@@ -52,6 +52,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 依赖与模型需数 GB 下载和可用磁盘；本地 CPU 模式建议先在 16 GiB 及以上内存机器评估实际推理速度，这不是最低配置或性能保证。速记仍不依赖这些组件。网络需要能访问 Python、PyPI、PyTorch、Hugging Face 和说话人模型的 GitHub 下载源；无法访问时应保留下载日志和断点，不能用“已装桌面程序”代替转写已就绪。
 
+安装中断后，保留安装目录和日志，修复网络、权限或磁盘问题，再运行相同的 `Install.ps1` 命令。若虚拟环境已创建但 pip 缺失，脚本使用 Python 自带的 `ensurepip` 离线补齐；已有 pip 损坏、Python 或 Torch 后端不匹配时仍停止，不删除环境或静默重装。模型下载复用已校验文件及有效断点。只看到 EXE 或 `.venv` 目录，不能判定安装成功，应以完整 doctor 结果为准。
+
 无声卡的隔离客体可显式使用 `Install.ps1 -SkipDeviceCheck`，以及 `tingji.py doctor --full --skip-devices --json`；报告标明未检查设备，仅用于运行环境与离线样本验证。日常机器保留默认设备检查，正式录音仍须真实验收。干净系统的可重复步骤见 [干净 Windows 验证](clean-windows-validation.md)。
 
 ## 日常操作

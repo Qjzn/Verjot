@@ -1,17 +1,25 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param()
+param([ValidateSet('Sandbox','VM')][string]$Environment = 'Sandbox')
 $ErrorActionPreference = 'Stop'
-# Deliberately unusable on the maintainer's normal Windows account.
-if ($env:USERNAME -ne 'WDAGUtilityAccount' -or -not (Test-Path -LiteralPath 'C:\verbit-input\SHA256.json')) {
-    throw 'Run only in the disposable Windows Sandbox created by Prepare-CleanWindows.ps1.'
+function Assert-DisposableGuest([string]$Kind,[string]$UserName,[string]$Model,[bool]$HasManifest) {
+    if (-not $HasManifest) { throw 'Missing C:\verbit-input\SHA256.json; prepare explicit validation inputs first.' }
+    if ($Kind -eq 'Sandbox') {
+        if ($UserName -ne 'WDAGUtilityAccount') { throw 'Run in Windows Sandbox, or explicitly select -Environment VM in a disposable virtual machine.' }
+    } elseif ($Model -notmatch '^(Virtual Machine|VMware Virtual Platform|VirtualBox|KVM|HVM domU|QEMU.*|Parallels.*)$') {
+        throw 'VM validation refused: machine model is not a supported virtual machine. Never run this installer on the host.'
+    }
 }
+# VM fallback is explicit and checks the machine model, never merely whether
+# Hyper-V is enabled (a physical host can also have a hypervisor).
+$taskGuestModel = if ($Environment -eq 'VM') { [string](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).Model } else { '' }
+Assert-DisposableGuest $Environment $env:USERNAME $taskGuestModel (Test-Path -LiteralPath 'C:\verbit-input\SHA256.json')
 $taskInput = 'C:\verbit-input'
 $taskReports = 'C:\verbit-reports'
 $taskHome = 'C:\verbit-validation'
 if (Test-Path -LiteralPath $taskHome) { throw 'Guest directory already exists; start a new Sandbox for a clean baseline.' }
 [IO.Directory]::CreateDirectory($taskHome) | Out-Null
-$taskResult = [ordered]@{ passed=$false; stage='baseline'; clean_windows_guest=$true; audio_recorded=$false; cloud_api_called=$false; clipboard_access=$false }
+$taskResult = [ordered]@{ passed=$false; stage='baseline'; environment=$Environment; machine_model=$taskGuestModel; clean_windows_guest=$true; clean_baseline_verified=$false; audio_recorded=$false; cloud_api_called=$false; clipboard_access=$false }
 function Invoke-GuestChecked([string]$File, [string[]]$Arguments) {
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Guest stage $($taskResult.stage) failed: $LASTEXITCODE" }
@@ -35,6 +43,7 @@ try {
     $taskDevTools = @(Get-Command git.exe,cl.exe,node.exe,dotnet.exe -ErrorAction SilentlyContinue)
     $taskResult.baseline = @{ os=[Environment]::OSVersion.VersionString; python_commands=@($taskPython | ForEach-Object Source); development_commands=@($taskDevTools | ForEach-Object Source); models_present=$false }
     if ($taskPython.Count -or $taskDevTools.Count) { throw 'Guest is not clean: existing Python or development commands detected.' }
+    $taskResult.clean_baseline_verified = $true
     $taskApp = Join-Path $taskHome 'app'
     $taskNotes = Join-Path $taskHome 'notes'
     $taskResult.stage = 'desktop-without-python'
@@ -79,3 +88,5 @@ try {
     Stop-Transcript | Out-Null
 }
 Write-Host 'Reports are saved to C:\verbit-reports. Do not close Sandbox until the report has been inspected.'
+if (-not $taskResult.passed) { exit 2 }
+exit 0

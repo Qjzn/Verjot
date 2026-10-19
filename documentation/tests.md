@@ -1,5 +1,7 @@
 # 验证映射
 
+2026-10-19 私有候选补充：新增 `ValidateLongTimeline.py` 的显式长音频离线压力检查，以及 `EvaluateSpeakers.py` / `test_speaker_evaluation.py` 的人工核验与开发集/留出集评分。前者不证明真实设备长录，后者不接受竞品输出替代人工标注。安装前置条件回归补齐缺失 pip 的离线恢复、已有损坏 pip 不覆盖，以及干净客体入口拒绝物理宿主。执行状态和未测门槛见 [私有测试版验收](private-beta-acceptance.md)。
+
 ## 已有覆盖
 
 | 用例 → 规则 → 预期 | 测试与文档来源 | 状态 |
