@@ -5,7 +5,7 @@
   #error OutputDir is required. Run Build-Installer.ps1.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-beta.2"
+  #define ReleaseVersion "0.1.0-beta.4"
 #endif
 #ifndef NumericVersion
   #define NumericVersion "0.1.0.0"
@@ -26,7 +26,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 MinVersion=10.0.17763
 WizardStyle=modern
-DisableProgramGroupPage=yes
+DisableProgramGroupPage=no
 DisableWelcomePage=no
 LicenseFile={#PayloadDir}\LICENSE
 InfoBeforeFile=INSTALL.txt
@@ -38,7 +38,7 @@ Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
 RestartApplications=no
-AllowNoIcons=yes
+AllowNoIcons=no
 ChangesAssociations=no
 Uninstallable=yes
 UsePreviousTasks=yes
@@ -111,9 +111,9 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Source: "{#PayloadDir}\packaging\Check-InstallSafety.ps1"; Flags: dontcopy
 
 [Icons]
-Name: "{group}\verbit"; Filename: "{app}\ObsidianMeeting.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ObsidianMeeting.exe"
+Name: "{group}\verbit"; Filename: "{app}\ObsidianMeeting.exe"; Parameters: "--show"; WorkingDir: "{app}"; IconFilename: "{app}\ObsidianMeeting.exe"
 Name: "{group}\安装与使用说明"; Filename: "{app}\packaging\quick-start.html"; WorkingDir: "{app}"
-Name: "{autodesktop}\verbit"; Filename: "{app}\ObsidianMeeting.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\verbit"; Filename: "{app}\ObsidianMeeting.exe"; Parameters: "--show"; WorkingDir: "{app}"; Tasks: desktopicon
 ; A distinct startup filename never overwrites an earlier source installation.
 Name: "{userstartup}\verbit installed"; Filename: "{app}\ObsidianMeeting.exe"; WorkingDir: "{app}"; Tasks: startup
 
@@ -138,6 +138,31 @@ begin
       Result := (Copy(RegisteredPath, 1, 2) = '\\') or ((Length(RegisteredPath) >= 3) and (Copy(RegisteredPath, 2, 2) = ':\'));
     if Result then
       Result := CompareText(RemoveBackslashUnlessRoot(ExpandFileName(RegisteredPath)), RemoveBackslashUnlessRoot(ExpandFileName(ExpandConstant('{app}')))) = 0;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Shell, Link: Variant;
+  Entry, Target: string;
+  Index: Integer;
+begin
+  if CurUninstallStep <> usUninstall then exit;
+  { Settings-created startup links may not be in Inno's install log. }
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    for Index := 0 to 1 do begin
+      if Index = 0 then Entry := ExpandConstant('{userstartup}\verbit installed.lnk')
+      else Entry := ExpandConstant('{userstartup}\verbit.lnk');
+      if FileExists(Entry) then begin
+        Link := Shell.CreateShortcut(Entry);
+        Target := Link.TargetPath;
+        if CompareText(Target, ExpandConstant('{app}\ObsidianMeeting.exe')) = 0 then
+          DeleteFile(Entry);
+      end;
+    end;
+  except
+    Log('Could not inspect settings-created startup links; unrelated entries were left untouched.');
   end;
 end;
 

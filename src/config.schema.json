@@ -5,6 +5,11 @@
   "additionalProperties": false,
   "required": ["vault_root"],
   "properties": {
+    "check_updates": {
+      "type": "boolean",
+      "default": false,
+      "description": "启动时及每24小时查询GitHub发布版本，默认关闭。不上传录音、笔记、配置或凭据，不自动下载或安装；私有仓库请用浏览器访问发布页。"
+    },
     "vault_root": {"type": "string", "minLength": 3, "description": "现存的 Windows 绝对目录；普通笔记文件夹或 Obsidian 库。"},
     "vault_id": {"type": "string", "default": "", "description": "Obsidian 库 ID 或库名；空值按库名打开。"},
     "vault_name": {"type": "string", "default": "", "description": "兼容旧配置的库名；优先级低于 vault_id。"},

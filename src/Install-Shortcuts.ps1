@@ -1,15 +1,17 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param([switch]$StartWithWindows)
+$ErrorActionPreference = 'Stop'
 $taskExe = Join-Path $PSScriptRoot 'ObsidianMeeting.exe'
 if (-not (Test-Path -LiteralPath $taskExe -PathType Leaf)) { throw 'Meeting recorder executable missing' }
 $taskShell = New-Object -ComObject WScript.Shell
 foreach ($taskPair in @(
-    @{ folder=[Environment]::GetFolderPath('Startup'); name='verbit.lnk'; legacy='Obsidian 会议录音快捷键.lnk' },
+    $(if ($StartWithWindows) { @{ folder=[Environment]::GetFolderPath('Startup'); name='verbit.lnk'; legacy='Obsidian 会议录音快捷键.lnk' } }),
     @{ folder=[Environment]::GetFolderPath('Programs'); name='verbit.lnk'; legacy='Obsidian 会议录音.lnk' }
-)) {
+) | Where-Object { $_ }) {
     $taskPath = Join-Path $taskPair.folder $taskPair.name
     $taskShortcut = $taskShell.CreateShortcut($taskPath)
     $taskShortcut.TargetPath = $taskExe
     $taskShortcut.WorkingDirectory = $PSScriptRoot
+    if ($taskPair.folder -eq [Environment]::GetFolderPath('Programs')) { $taskShortcut.Arguments = '--show' }
     $taskShortcut.Description = 'Ctrl+Alt+L 开始或结束本地中文会议录音'
     $taskShortcut.IconLocation = "$taskExe,0"
     $taskShortcut.WindowStyle = 7

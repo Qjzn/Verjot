@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.2',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.4',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -25,9 +25,10 @@ $taskFiles = @(
     'prepare_audio.py', 'merge_audio.py', 'audio_sources.py', 'mp3_audio.py',
     'download_models.py', 'download_torch.py', 'requirements.txt', 'requirements-api.txt',
     'Install.ps1', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
-    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'MeetingSettings.cs',
+    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'MeetingSettings.cs', 'DesktopServices.cs',
     'QuickNoteStore.cs', 'QuickNoteWindow.cs', 'NativeNoteDocument.cs', 'app.manifest',
-    'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png',
+    'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png',
+    'documentation\changelog.md',
     'documentation\install-windows.md', 'documentation\first-use.md',
     'documentation\configuration.md', 'documentation\ai-install.md',
     'documentation\brand.md', 'documentation\product-scope.md',
@@ -66,7 +67,7 @@ $taskReadmeText = [IO.File]::ReadAllText($taskReadme).Replace('](src/', '](')
 # copy also lets a user rebuild the controller without an additional download.
 [IO.Directory]::CreateDirectory((Join-Path $taskPayload 'lib')) | Out-Null
 Copy-Item -LiteralPath $taskLibrary -Destination (Join-Path $taskPayload 'lib\NAudio.dll')
-& (Join-Path $taskPayload 'Build.ps1') -OutputPath (Join-Path $taskPayload 'ObsidianMeeting.exe')
+& (Join-Path $taskPayload 'Build.ps1') -OutputPath (Join-Path $taskPayload 'ObsidianMeeting.exe') -Version $Version
 if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
 $taskActual = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | ForEach-Object { $_.FullName.Substring($taskPayload.Length + 1) } | Sort-Object)
 $taskExpected = @($taskFiles + @('ObsidianMeeting.exe', 'NAudio.dll', 'lib\NAudio.dll') | Sort-Object)

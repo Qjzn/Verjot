@@ -1,6 +1,7 @@
 {
   "vault_root": "D:\\Notes\\MyVault",
   "vault_id": "",
+  "check_updates": false,
   "meeting_folder": "会议记录",
   "quick_note_folder": "速记",
   "mic_device_id": "",

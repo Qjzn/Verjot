@@ -159,6 +159,11 @@ internal static class TestMeetingHotkeys {
                 Check(rejected, "A conflicting main start/stop key must remain a fatal, accurately reported startup error");
             }
             using (var hotkey = new MeetingHotkey(StartKey, PauseKey, BookmarkKey)) {
+                int shown = 0;
+                hotkey.ShowRequested += delegate { shown++; };
+                DesktopServices.ShowExisting();
+                Receive(delegate { return shown == 1; });
+                Check(shown == 1, "Start menu activation reaches the existing instance on the isolated desktop");
                 hotkey.EnablePause(true);
                 hotkey.EnablePause(true);
                 Check(Registered(hotkey, "PauseRegistered") && Registered(hotkey, "BookmarkRegistered"), "Both available auxiliaries register and repeated enable stays idempotent");

@@ -1,5 +1,6 @@
 ﻿param(
-    [string]$OutputPath = 'ObsidianMeeting.exe'
+    [string]$OutputPath = 'ObsidianMeeting.exe',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.4'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -13,6 +14,7 @@ $taskSource = Join-Path $taskRoot 'ObsidianMeeting.cs'
 $taskCatalog = Join-Path $taskRoot 'SessionCatalog.cs'
 $taskActions = Join-Path $taskRoot 'MeetingActions.cs'
 $taskSettings = Join-Path $taskRoot 'MeetingSettings.cs'
+$taskDesktopServices = Join-Path $taskRoot 'DesktopServices.cs'
 $taskNoteStore = Join-Path $taskRoot 'QuickNoteStore.cs'
 $taskNoteWindow = Join-Path $taskRoot 'QuickNoteWindow.cs'
 $taskNoteDocument = Join-Path $taskRoot 'NativeNoteDocument.cs'
@@ -29,7 +31,7 @@ if (-not $taskCompiler) { throw '.NET Framework 4.x C# compiler was not found.' 
 if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf)) {
     throw 'NAudio 1.10.0 is missing. Download the official NAudio 1.10.0 NuGet package and extract lib/net35/NAudio.dll to this project''s lib/NAudio.dll; see README.md.'
 }
-foreach ($taskInput in @($taskSource, $taskCatalog, $taskActions, $taskSettings, $taskNoteStore, $taskNoteWindow, $taskNoteDocument, $taskManifest, $taskApplicationConfig, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
+foreach ($taskInput in @($taskSource, $taskCatalog, $taskActions, $taskSettings, $taskDesktopServices, $taskNoteStore, $taskNoteWindow, $taskNoteDocument, $taskManifest, $taskApplicationConfig, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
     if (-not (Test-Path -LiteralPath $taskInput -PathType Leaf)) { throw "Required build input is missing: $taskInput" }
 }
 if (-not [IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $taskRoot $OutputPath }
@@ -46,9 +48,14 @@ $taskArguments = @(
     "/win32manifest:$taskManifest",
     "/resource:$taskIdleIcon,Tingji.Idle.ico",
     "/resource:$taskRecordingIcon,Tingji.Recording.ico",
-    $taskSource, $taskCatalog, $taskActions, $taskSettings, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
+    ('/resource:' + (Join-Path $taskAssets 'github-mark.png') + ',Verbit.GitHub.png'),
+    $taskSource, $taskCatalog, $taskActions, $taskSettings, $taskDesktopServices, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
 )
-& $taskCompiler @taskArguments
+$taskVersionSource = Join-Path ([IO.Path]::GetTempPath()) ('verbit-version-' + [Guid]::NewGuid().ToString('N') + '.cs')
+try {
+    [IO.File]::WriteAllText($taskVersionSource, ('[assembly: System.Reflection.AssemblyInformationalVersion("' + $Version + '")]'), (New-Object Text.UTF8Encoding($false)))
+    & $taskCompiler @taskArguments $taskVersionSource
+} finally { if (Test-Path -LiteralPath $taskVersionSource) { Remove-Item -LiteralPath $taskVersionSource } }
 if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE." }
 if (($taskOutput + '.config') -ine $taskApplicationConfig) {
     Copy-Item -LiteralPath $taskApplicationConfig -Destination ($taskOutput + '.config') -Force
@@ -67,7 +74,7 @@ if ($taskCheckout -and $taskOutputFolder -ieq $taskRoot) {
         Copy-Item -LiteralPath (Join-Path $taskRepo $taskPolicy) -Destination $taskRoot -Force
     }
     [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'assets')) | Out-Null
-    foreach ($taskName in @('verbit-logo.png', 'tingji.ico', 'tingji-recording.ico')) {
+    foreach ($taskName in @('verbit-logo.png', 'tingji.ico', 'tingji-recording.ico', 'github-mark.png')) {
         Copy-Item -LiteralPath (Join-Path $taskAssets $taskName) -Destination (Join-Path $taskRoot 'assets') -Force
     }
     [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'packaging')) | Out-Null

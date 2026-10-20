@@ -2,6 +2,8 @@
 
 ## 下载与首次启动
 
+`0.1.0-beta.4` 为本轮本机候选；下方 `beta.2` 是既有发布版，不代表候选已发布。候选增加原生模型设置、自启和版本入口，参见[版本说明](changelog.md)。安装后可在开始菜单的 **verbit → verbit** 打开；已在托盘运行时会唤出浮窗。右键「设置…」修改选项，「关于 verbit」查看版本、GitHub 和更新。开机自启与自动检查均可关闭；程序不自动安装更新。
+
 从 [GitHub Releases](https://github.com/Qjzn/verbit/releases) 下载 `verbit-0.1.0-beta.2-setup-x64.exe` 和 `SHA256SUMS.txt`。仓库目前私有，需有仓库访问权限才能下载。安装包没有数字签名，Windows 可能提示未知发布者；先核对来源及 SHA256，不关闭系统安全防护。
 
 ```powershell

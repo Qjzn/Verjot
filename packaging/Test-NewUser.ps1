@@ -10,8 +10,9 @@ if (-not $InstallOnly -and (Get-Process -Name ObsidianMeeting -ErrorAction Silen
 $taskFolder = Join-Path $taskRoot ('validation\new-user-' + [guid]::NewGuid().ToString('N'))
 $taskApp = Join-Path $taskFolder 'app'
 $taskNotes = Join-Path $taskFolder 'notes'
+$taskMenuGroup = 'verbit new user ' + [guid]::NewGuid().ToString('N')
 [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
-$taskProcess = Start-Process -FilePath ([IO.Path]::GetFullPath($InstallerPath)) -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/TASKS=""',('/DIR="' + $taskApp + '"'),('/LOG="' + (Join-Path $taskFolder 'install.log') + '"')) -WindowStyle Hidden -Wait -PassThru
+$taskProcess = Start-Process -FilePath ([IO.Path]::GetFullPath($InstallerPath)) -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/TASKS=""',('/GROUP="' + $taskMenuGroup + '"'),('/DIR="' + $taskApp + '"'),('/LOG="' + (Join-Path $taskFolder 'install.log') + '"')) -WindowStyle Hidden -Wait -PassThru
 if ($taskProcess.ExitCode -ne 0) { throw "Clean installation failed: $($taskProcess.ExitCode)" }
 [ordered]@{ app=$taskApp; notes=$taskNotes; installer_sha256=(Get-FileHash -LiteralPath $InstallerPath).Hash.ToLowerInvariant(); gui_report=(Join-Path $taskApp 'new-user-journey.json'); uninstall=(Join-Path $taskApp 'unins000.exe'); retained_for_runtime_validation=$true; gui_pending=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskFolder 'receipt.json') -Encoding UTF8
 if ($InstallOnly) { Write-Output "Installed only; GUI pending: $taskFolder\receipt.json"; return }

@@ -19,6 +19,7 @@
 !/assets/tingji-recording.png
 !/assets/Create-Icons.ps1
 !/assets/verbit-logo.png
+!/assets/github-mark.png
 
 # Reviewed installation and configuration documentation.
 !/documentation/
@@ -176,3 +177,6 @@
 !/tests/test_speaker_refinement.py
 !/documentation/new-user-validation.md
 !/documentation/clean-windows-validation.md
+!/src/DesktopServices.cs
+!/tests/TestDesktopServices.cs
+!/documentation/changelog.md

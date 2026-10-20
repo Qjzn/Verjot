@@ -392,14 +392,49 @@ internal static class TestMeetingSettings {
             }
         }
     }
+    static void ExtendedInterface(string directory, string root) {
+        string path = Path.Combine(directory, "extended-settings.json"); Write(path, Config(root));
+        var snapshot = MeetingSettingsSnapshot.Open(path);
+        int calls = 0;
+        using (var form = new MeetingSettingsDialog(snapshot, delegate { calls++; return "synthetic apply failure"; })) {
+            form.Show(); Application.DoEvents();
+            var startup = (CheckBox)form.Controls.Find("start_with_windows", true)[0]; startup.Checked = true;
+            ((Button)form.AcceptButton).PerformClick();
+            Check(calls == 1 && !DesktopServices.StartsWithWindows, "Failed settings apply rolls autostart back");
+            ((Button)form.CancelButton).PerformClick();
+        }
+        using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { snapshot.Commit(next); return null; })) {
+            form.Show(); Application.DoEvents();
+            var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
+            Check(tabs.TabPages.Count == 3, "General, transcription and about pages exist");
+            tabs.SelectedIndex = 1; Application.DoEvents();
+            Check(Input(form, "asr_terms").Visible && !Input(form, "api_model").Enabled, "Local terms editable; API disabled for local mode");
+            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 1;
+            Check(Input(form, "api_model").Enabled, "Choosing API exposes API model fields");
+            Input(form, "api_key_env").Text = "VERBIT_SYNTHETIC_UNSET_KEY";
+            ((Button)form.AcceptButton).PerformClick();
+            Check(form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "local", "Missing API key prevents mode switch without damaging config");
+            mode.SelectedIndex = 0; Input(form, "api_key_env").Text = "VERBIT_SETTINGS_SYNTHETIC_KEY";
+            Input(form, "asr_terms").Text = "产品名,术语";
+            using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-models.png")); }
+            form.ShowAbout(); Application.DoEvents();
+            Check(tabs.SelectedIndex == 2 && form.Controls.Find("check_update_now", true)[0].Visible, "About entry opens version and update controls");
+            using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-about.png")); }
+            ((CheckBox)form.Controls.Find("check_updates", true)[0]).Checked = true;
+            ((Button)form.AcceptButton).PerformClick();
+            var saved = MeetingSettingsSnapshot.Open(path).Values;
+            Check(!form.Visible && (string)saved["asr_terms"] == "产品名,术语" && (bool)saved["check_updates"], "Transcription terms and opt-in update preference persist");
+        }
+    }
     [STAThread]
     static int Main() {
         try {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+            DesktopServices.StartupFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "isolated-startup");
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
-            RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
+            RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); ExtendedInterface(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

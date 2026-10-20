@@ -324,7 +324,7 @@ print(json.dumps(value))
     $null = $taskDoctorText | ConvertFrom-Json
     if ($StartWithWindows) {
         $taskPhase = 'shortcuts'
-        & (Join-Path $taskRoot 'Install-Shortcuts.ps1')
+        & (Join-Path $taskRoot 'Install-Shortcuts.ps1') -StartWithWindows
     }
     if ($EnablePlaybackLinks) {
         $taskPhase = 'playback-links'

@@ -2007,6 +2007,7 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
     public event Action BookmarkPressed;
     public event Action QuickNotePressed;
     public event Action ExitRequested;
+    public event Action ShowRequested;
     [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr window, int id);
     public MeetingHotkey(string text, string pause) : this(text, pause, "Ctrl+Alt+K") { }
@@ -2117,6 +2118,7 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == BookmarkId && BookmarkPressed != null) BookmarkPressed();
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == QuickNoteId && QuickNotePressed != null) QuickNotePressed();
         if (message.Msg == 0x0010 && ExitRequested != null) ExitRequested();
+        if (message.Msg == DesktopServices.ShowMessage && ShowRequested != null) ShowRequested();
         base.WndProc(ref message);
     }
     public void Dispose() {
@@ -2151,6 +2153,8 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly SilenceMonitor silence = new SilenceMonitor();
     SessionCatalog catalog;
     MeetingSettingsDialog settingsDialog;
+    DateTime lastUpdateCheck = DateTime.MinValue;
+    bool checkingUpdate;
     readonly Func<string, Process> workerLauncher;
     readonly Action<string, bool> noteOpener;
     Action<string> artifactLocator = null;
@@ -2184,6 +2188,7 @@ internal sealed class MeetingContext : ApplicationContext {
         hotkey.BookmarkPressed += MarkBookmark;
         hotkey.QuickNotePressed += ToggleQuickNote;
         hotkey.ExitRequested += RequestExit;
+        hotkey.ShowRequested += ShowPanel;
         var menu = new ContextMenuStrip { Font = new Font("Microsoft YaHei UI", 9), RenderMode = ToolStripRenderMode.System };
         panel.ContextMenuStrip = menu;
         menu.Items.Add(summary);
@@ -2223,6 +2228,7 @@ internal sealed class MeetingContext : ApplicationContext {
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("设置…", null, delegate { OpenSettings(); });
         menu.Items.Add("首次使用检查…", null, delegate { OpenFirstUseGuide(); });
+        menu.Items.Add("关于 verbit · " + DesktopServices.Version, null, delegate { OpenSettings(true); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, delegate { RequestExit(); });
         tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "verbit · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
@@ -2235,11 +2241,21 @@ internal sealed class MeetingContext : ApplicationContext {
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
         panel.ShowStatus("verbit已就绪", StartHotkey + " 开始录制");
         timer = new System.Windows.Forms.Timer { Interval = 500 };
-        timer.Tick += delegate { Tick(); };
+        timer.Tick += delegate { Tick(); MaybeCheckUpdates(); };
         RestoreSessions();
         timer.Start();
         if (hotkey.QuickNoteWarning.Length != 0)
             dispatch.BeginInvoke(new Action(delegate { Notice("速记快捷键不可用", hotkey.QuickNoteWarning + " 可从托盘打开速记便签。", ToolTipIcon.Warning); }));
+    }
+    public void ShowPanel() { RefreshFeedback(); panel.Show(); panel.Activate(); }
+    async void MaybeCheckUpdates() {
+        if (exiting || checkingUpdate || !Convert.ToBoolean(config["check_updates"]) || DateTime.UtcNow - lastUpdateCheck < TimeSpan.FromHours(24)) return;
+        lastUpdateCheck = DateTime.UtcNow; checkingUpdate = true;
+        try {
+            string message = await System.Threading.Tasks.Task.Run(delegate { return DesktopServices.CheckUpdates(); });
+            if (!exiting && message.StartsWith("发现新版本", StringComparison.Ordinal)) Notice("verbit 有更新", message, ToolTipIcon.Info);
+        } catch { /* Optional background checks never interrupt a meeting. Manual checks show errors. */ }
+        finally { checkingUpdate = false; }
     }
     void OpenFirstUseGuide() {
         try {
@@ -2248,13 +2264,14 @@ internal sealed class MeetingContext : ApplicationContext {
             Process.Start(new ProcessStartInfo(guide) { UseShellExecute = true });
         } catch (Exception error) { Notice("无法打开检查说明", error.Message, ToolTipIcon.Warning); }
     }
-    void OpenSettings() {
-        if (settingsDialog != null && !settingsDialog.IsDisposed) { settingsDialog.Activate(); return; }
+    void OpenSettings(bool about = false) {
+        if (settingsDialog != null && !settingsDialog.IsDisposed) { if (about) settingsDialog.ShowAbout(); settingsDialog.Activate(); return; }
         if (recording != null || jobs.Count > 0) { Notice("请稍后修改设置", "请先结束录音并等待后台转写完成。", ToolTipIcon.Info); return; }
         try {
             var snapshot = MeetingSettingsSnapshot.Open(Path.Combine(MeetingFiles.Home, "config.json"));
             settingsDialog = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { return ApplySettings(snapshot, next); });
             settingsDialog.FormClosed += delegate { settingsDialog = null; };
+            if (about) settingsDialog.ShowAbout();
             settingsDialog.Show();
         } catch (Exception error) { Notice("无法打开设置", error.Message, ToolTipIcon.Warning); }
     }
@@ -3044,16 +3061,17 @@ internal static class Program {
             if (args.Length == 2 && args[0] == "--diagnose") return Diagnose(Path.GetFullPath(args[1]));
             if (args.Length > 0 && args[0] == "--list-devices") return ListDevices();
             if (args.Length > 0 && args[0] == "--self-test-timeline") return SelfTestTimeline();
-            if (args.Length > 0) return 2;
+            bool show = args.Length == 1 && args[0] == "--show";
+            if (args.Length > 0 && !show) return 2;
             bool first;
             using (var mutex = new Mutex(true, "Local\\ObsidianMeetingHotkey", out first)) {
-                if (!first) return 0;
+                if (!first) { if (show) DesktopServices.ShowExisting(); return 0; }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 string suggestedRoot = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
                 if (!Directory.Exists(suggestedRoot)) suggestedRoot = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 if (!MeetingFirstRunSetup.Run(Path.Combine(MeetingFiles.Home, "config.json"), suggestedRoot)) return 0;
-                using (var context = new MeetingContext()) Application.Run(context);
+                using (var context = new MeetingContext()) { if (show) context.ShowPanel(); Application.Run(context); }
             }
             return 0;
         } catch (Exception error) {

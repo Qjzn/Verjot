@@ -13,6 +13,11 @@ $taskValidationRoot = [IO.Path]::GetFullPath((Join-Path $taskRoot 'validation'))
 if (-not $taskTestRoot.StartsWith($taskValidationRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Test root must stay under this repository validation folder.' }
 $taskApp = Join-Path $taskTestRoot 'app'
 $taskNotes = Join-Path $taskTestRoot 'notes'
+$taskGroup = 'verbit validation ' + [Guid]::NewGuid().ToString('N')
+$taskMenu = Join-Path ([Environment]::GetFolderPath('Programs')) ($taskGroup + '\verbit.lnk')
+if (Test-Path -LiteralPath (Split-Path -Parent $taskMenu)) { throw 'Existing verbit Start Menu group found. Run in a disposable profile; existing entries will not be overwritten by a test.' }
+$taskStartup = Join-Path ([Environment]::GetFolderPath('Startup')) 'verbit installed.lnk'
+$taskStartupHash = if (Test-Path -LiteralPath $taskStartup) { (Get-FileHash -LiteralPath $taskStartup).Hash } else { '' }
 $taskUtf8 = New-Object Text.UTF8Encoding($false)
 $taskAssertions = 0
 $taskEvents = New-Object 'Collections.Generic.List[object]'
@@ -22,6 +27,7 @@ function Assert-Installer([bool]$Condition, [string]$Message) {
 }
 function Invoke-Installer([string]$Executable, [string[]]$ExtraArguments, [string]$Phase) {
     $taskArguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/LOG="' + (Join-Path $taskTestRoot ($Phase + '.log')) + '"')) + $ExtraArguments
+    if ($Executable -ieq $taskInstaller) { $taskArguments += ('/GROUP="' + $taskGroup + '"') }
     $taskProcess = Start-Process -FilePath $Executable -ArgumentList $taskArguments -WindowStyle Hidden -PassThru -Wait
     $taskEvents.Add([ordered]@{ phase = $Phase; exit_code = $taskProcess.ExitCode })
     return $taskProcess.ExitCode
@@ -48,11 +54,17 @@ function Get-ExistingEntriesSnapshot {
 $taskBeforeEntries = Get-ExistingEntriesSnapshot
 $taskSucceeded = $false
 try {
-    Assert-Installer ((Invoke-Installer $taskInstaller @(('/DIR="' + $taskApp + '"'), '/NOICONS', '/TASKS=""') 'clean-install') -eq 0) 'Clean silent install failed.'
+    Assert-Installer ((Invoke-Installer $taskInstaller @(('/DIR="' + $taskApp + '"'), '/TASKS=""') 'clean-install') -eq 0) 'Clean silent install failed.'
     $taskExe = Join-Path $taskApp 'ObsidianMeeting.exe'
     $taskUninstall = Join-Path $taskApp 'unins000.exe'
     Assert-Installer (Test-Path -LiteralPath $taskExe -PathType Leaf) 'Installed controller missing.'
     Assert-Installer (Test-Path -LiteralPath $taskUninstall -PathType Leaf) 'Uninstaller missing.'
+    Assert-Installer (Test-Path -LiteralPath $taskMenu -PathType Leaf) 'Installed Start Menu entry missing.'
+    $taskShell = New-Object -ComObject WScript.Shell
+    $taskLink = $taskShell.CreateShortcut($taskMenu)
+    Assert-Installer ($taskLink.TargetPath -ieq $taskExe) 'Start Menu points to another executable.'
+    Assert-Installer ($taskLink.Arguments -eq '--show') 'Start Menu does not activate the existing instance.'
+    Assert-Installer ($taskLink.WorkingDirectory -ieq $taskApp) 'Start Menu working directory incorrect.'
     Assert-Installer (-not (Test-Path -LiteralPath (Join-Path $taskApp 'config.json'))) 'Clean installer bundled or created a personal config.'
     foreach ($taskAbsent in @('.venv', 'models', 'work', 'installation', 'recorder.log', 'last-session.json')) {
         Assert-Installer (-not (Test-Path -LiteralPath (Join-Path $taskApp $taskAbsent))) "Clean installer included user state: $taskAbsent"
@@ -126,7 +138,15 @@ try {
     [IO.File]::WriteAllText($taskStatusFile, '{"state":"error"}', $taskUtf8)
     Assert-Installer ((Invoke-Installer $taskInstaller @(('/DIR="' + $taskApp + '"'), '/NOICONS', '/TASKS=""') 'upgrade-after-error') -eq 0) 'An unheld stale lock and failed terminal state blocked upgrade.'
     foreach ($taskPreservedFile in $taskPreserved) { Assert-Installer ((Get-FileHash -LiteralPath $taskPreservedFile).Hash -eq $taskHashes[$taskPreservedFile]) 'Upgrade changed a preserved fixture.' }
+    if (-not $taskStartupHash) {
+        $taskStartupLink = $taskShell.CreateShortcut($taskStartup)
+        $taskStartupLink.TargetPath = $taskExe; $taskStartupLink.WorkingDirectory = $taskApp; $taskStartupLink.Save()
+        Assert-Installer (Test-Path -LiteralPath $taskStartup -PathType Leaf) 'Settings-created startup fixture missing.'
+    }
     Assert-Installer ((Invoke-Installer $taskUninstall @() 'uninstall') -eq 0) 'Uninstall failed.'
+    Assert-Installer (-not (Test-Path -LiteralPath $taskMenu)) 'Uninstall left the owned Start Menu shortcut.'
+    if (-not $taskStartupHash) { Assert-Installer (-not (Test-Path -LiteralPath $taskStartup)) 'Uninstall left settings-created autostart.' }
+    else { Assert-Installer ((Get-FileHash -LiteralPath $taskStartup).Hash -eq $taskStartupHash) 'Uninstall changed another installation autostart.' }
     Assert-Installer (-not (Test-Path -LiteralPath $taskExe)) 'Uninstall left installed controller.'
     Assert-Installer ($null -eq (Read-Registration)) 'Uninstall left this app registration.'
     foreach ($taskPreservedFile in $taskPreserved) { Assert-Installer ((Get-FileHash -LiteralPath $taskPreservedFile).Hash -eq $taskHashes[$taskPreservedFile]) 'Uninstall changed a preserved fixture.' }
