@@ -38,6 +38,25 @@ COMPACT_FILES = frozenset({
     "prepare.log", "asr.log", "merge.log", "worker.log",
 })
 CLIP_NAME = re.compile(r"(?:mic|system)(?:_\d{2,})?(?:_speech)?_\d{5,}\.wav\Z")
+SPEAKER_REASONS = {
+    "short_utterance": "发言过短，声纹证据不足",
+    "overlapping_speech": "多人声音重叠，无法可靠区分",
+    "missing_source": "原始音轨不可用",
+    "insufficient_audio": "有效音频不足",
+    "embedding_unavailable": "未能提取有效声纹",
+    "identity_processing_error": "声纹处理失败，可重试",
+    "ambiguous_voice": "与多个说话人相似，无法可靠区分",
+    "multiple_speakers": "本段包含多个说话人",
+    "source_conflict": "麦克风与电脑声音的身份判断冲突",
+    "insufficient_evidence": "尚无足够的身份判定证据",
+}
+
+
+def speaker_reason_text(row):
+    reason = row.get("speaker_reason")
+    if not isinstance(reason, str):
+        return SPEAKER_REASONS["insufficient_evidence"]
+    return SPEAKER_REASONS.get(reason, SPEAKER_REASONS["insufficient_evidence"])
 
 
 def read_json(path: Path, default=None):
@@ -236,6 +255,8 @@ def transcript_with_evidence(session: Path, result):
                         current["speaker_global"] = original["speaker_global"]
                     if original.get("speaker_status") in ("matched", "unknown", "mixed"):
                         current["speaker_status"] = original["speaker_status"]
+                    if isinstance(original.get("speaker_reason"), str) and original["speaker_reason"] in SPEAKER_REASONS:
+                        current["speaker_reason"] = original["speaker_reason"]
                     if isinstance(original.get("speaker_spans"), list):
                         current["speaker_spans"] = [span for span in original["speaker_spans"]
                             if isinstance(span, dict) and type(span.get("start")) in (int, float)
@@ -351,7 +372,7 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
                 elif row.get("speaker_status") == "mixed":
                     label = "本段多人 · " + source
                 elif row.get("speaker_status") == "unknown" or row.get("speaker_global") is False:
-                    label = "说话人待确认 · " + source
+                    label = "说话人待确认 · " + source + "（" + speaker_reason_text(row) + "）"
                 else:
                     label = f"{source} · 说话人 {speaker.rsplit('_', 1)[-1]}"
                 text = clean_transcript_text(row.get("text", ""))
@@ -365,7 +386,8 @@ def render_note(session: Path, vault: Path, metadata: dict, result=None, error=N
                         spans = row.get("speaker_spans", [])
                         details = [f"{timestamp(span['start'])}–{timestamp(span['end'])} " +
                                    ("说话人 " + span["global_speaker"].rsplit("_", 1)[-1]
-                                    if span.get("speaker_global") and span.get("global_speaker") else "待确认")
+                                    if span.get("speaker_global") and span.get("global_speaker") else
+                                    "待确认（" + speaker_reason_text(span) + "）")
                                    for span in spans]
                         if details:
                             lines.extend(["说话时间（未逐字对齐）：" + "；".join(details), ""])

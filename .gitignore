@@ -172,5 +172,7 @@
 !/tests/ValidateLongTimeline.py
 !/tests/EvaluateSpeakers.py
 !/tests/test_speaker_evaluation.py
+!/tests/SpeakerRefinement.py
+!/tests/test_speaker_refinement.py
 !/documentation/new-user-validation.md
 !/documentation/clean-windows-validation.md

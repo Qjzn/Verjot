@@ -232,6 +232,15 @@ class NoteTests(unittest.TestCase):
         self.assertIn("说话人待确认 · 电脑声音", content)
         self.assertNotIn("每条音轨内", content)
 
+    def test_unknown_reason_is_visible_and_untrusted_text_cannot_enter_note(self):
+        row = {"start": 0., "end": .5, "speaker": "mic_01", "source": "mic",
+               "speaker_global": False, "speaker_status": "unknown", "status": "done", "text": "收到。",
+               "speaker_reason": "short_utterance"}
+        render = lambda r: worker.render_note(Path("audio"), Path("vault"), {}, result={"segments": [r]})
+        self.assertIn("说话人待确认 · 麦克风（发言过短，声纹证据不足）", render(row))
+        self.assertNotIn("<script>", render({**row, "speaker_reason": "<script>"}))
+        self.assertIn("尚无足够的身份判定证据", render({**row, "speaker_reason": {"unsafe": True}}))
+
     def test_session_note_ownership_survives_progress_status_updates(self):
         with tempfile.TemporaryDirectory() as folder:
             session = Path(folder) / "work"
@@ -254,13 +263,14 @@ class NoteTests(unittest.TestCase):
             row = {"start": 0, "end": 0.1, "speaker": "mic_01", "text_audio": "clip.wav",
                    "segment_id": "mic_00000", "possible_duplicate_of": "system_00000",
                    "waveform_similarity": 0.999, "speaker_global": True,
-                   "global_speaker": "speaker_01", "speaker_status": "matched", "source": "mic"}
+                   "global_speaker": "speaker_01", "speaker_status": "matched", "source": "mic",
+                   "speaker_reason": "ambiguous_voice"}
             source.write_text(json.dumps([row]), encoding="utf-8")
             actual = {**read_segments(source)[0], "status": "done", "text": "确认预算。"}
             result = {"segments": [actual]}
             merged = worker.transcript_with_evidence(Path(folder), result)["segments"][0]
             for key in ("segment_id", "possible_duplicate_of", "waveform_similarity", "speaker_global",
-                        "global_speaker", "speaker_status", "source"):
+                        "global_speaker", "speaker_status", "source", "speaker_reason"):
                 self.assertEqual(merged[key], row[key])
                 self.assertNotIn(key, actual)
             for invalid in (-0.1, 1.01, "0.999", True, float("nan")):

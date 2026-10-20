@@ -459,6 +459,7 @@ def decouple_asr_segments(segments: list[dict], sources: dict[str, np.ndarray], 
         for index, (first, last) in enumerate(windows, 1):
             start, end = round(first / SAMPLE_RATE + offset, 4), round(last / SAMPLE_RATE + offset, 4)
             spans = [{key: row[key] for key in ("speaker", "global_speaker", "speaker_global", "speaker_status")}
+                     | {"speaker_reason": row.get("speaker_reason", "insufficient_evidence")}
                      | {"start": max(start, row["start"]), "end": min(end, row["end"])}
                      for row in turns if min(end, row["end"]) > max(start, row["start"])]
             identities = {span["global_speaker"] for span in spans if span["speaker_global"]}
@@ -477,6 +478,9 @@ def decouple_asr_segments(segments: list[dict], sources: dict[str, np.ndarray], 
                            "text_audio": str(path), "speaker_spans": spans,
                            "global_speaker": next(iter(identities)) if matched else None,
                            "speaker_global": matched,
+                           "speaker_reason": None if matched else "multiple_speakers" if multiple else
+                               next((span["speaker_reason"] for span in spans if not span["speaker_global"]),
+                                    "insufficient_evidence"),
                            "speaker_status": "matched" if matched else "mixed" if multiple else "unknown"})
     return sorted(output, key=lambda row: (row["start"], row["end"], row["source"]))
 
@@ -491,16 +495,22 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
     """
     eligible, groups = [], {}
     for row_index, row in enumerate(segments):
-        row.update(global_speaker=None, speaker_global=False, speaker_status="unknown")
+        row.update(global_speaker=None, speaker_global=False, speaker_status="unknown",
+                   speaker_reason="insufficient_evidence")
         duration = row["end"] - row["start"]
         overlap = any(other is not row and other["source"] == row["source"]
                       and other["speaker"] != row["speaker"]
                       and min(row["end"], other["end"]) - max(row["start"], other["start"]) > 0.08
                       for other in segments)
         anchor = clean_anchor(row, segments) if anchor_mode == "clean" else None
-        if (row["source"] not in sources or
-                (anchor_mode == "clean" and anchor is None) or
-                (anchor_mode == "legacy" and (duration < IDENTITY_MIN_SECONDS or overlap))):
+        if row["source"] not in sources:
+            row["speaker_reason"] = "missing_source"
+            continue
+        if anchor_mode == "clean" and anchor is None:
+            row["speaker_reason"] = "short_utterance" if duration < IDENTITY_MIN_SECONDS else "overlapping_speech"
+            continue
+        if anchor_mode == "legacy" and (duration < IDENTITY_MIN_SECONDS or overlap):
+            row["speaker_reason"] = "short_utterance" if duration < IDENTITY_MIN_SECONDS else "overlapping_speech"
             continue
         key = str(row_index)
         eligible.append((key, row))
@@ -525,15 +535,18 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
                 first, last = round((center - half) * SAMPLE_RATE), round((center + half) * SAMPLE_RATE)
                 samples = sources[row["source"]][max(0, first):last]
                 if len(samples) < IDENTITY_MIN_SECONDS * SAMPLE_RATE:
+                    row["speaker_reason"] = "insufficient_audio"
                     continue
                 stream = embedding_extractor.create_stream()
                 stream.accept_waveform(SAMPLE_RATE, np.ascontiguousarray(samples, dtype=np.float32))
                 stream.input_finished()
                 if not embedding_extractor.is_ready(stream):
+                    row["speaker_reason"] = "embedding_unavailable"
                     continue
                 vector = np.asarray(embedding_extractor.compute(stream), dtype=np.float32)
                 norm = float(np.linalg.norm(vector))
                 if vector.ndim != 1 or not np.isfinite(vector).all() or norm < 1e-8:
+                    row["speaker_reason"] = "embedding_unavailable"
                     continue
                 group["vector"] = vector / norm
         except Exception as error:
@@ -546,7 +559,11 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
         identity_error = str(error)
     for name, row in eligible:
         if name in mapped and name not in uncertain:
-            row.update(global_speaker=mapped[name], speaker_global=True, speaker_status="matched")
+            row.update(global_speaker=mapped[name], speaker_global=True, speaker_status="matched", speaker_reason=None)
+        elif identity_error:
+            row["speaker_reason"] = "identity_processing_error"
+        elif name in uncertain:
+            row["speaker_reason"] = "ambiguous_voice"
     resolved = sum(row["speaker_global"] for row in segments)
     return {
         "method": "joint_turn_voice_embeddings_complete_link_v1",
@@ -555,6 +572,8 @@ def assign_global_speakers(segments: list[dict], sources: dict[str, np.ndarray],
         "minimum_anchor_seconds": IDENTITY_MIN_SECONDS,
         "maximum_cluster_cosine_distance": IDENTITY_CLUSTER_DISTANCE, "minimum_margin": IDENTITY_MARGIN,
         "resolved_segments": resolved, "unknown_segments": len(segments) - resolved,
+        "unknown_reasons": {reason: sum(row.get("speaker_reason") == reason for row in segments)
+                            for reason in sorted({row["speaker_reason"] for row in segments if not row["speaker_global"]})},
         "global_speakers": len({row["global_speaker"] for row in segments if row["speaker_global"]}),
         "cross_source_embedding_comparison": multiple_sources,
         "error": identity_error,

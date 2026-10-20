@@ -12,6 +12,18 @@ import prepare_audio as preparation
 
 
 class PreparationTests(unittest.TestCase):
+    def test_identity_unknown_reasons_distinguish_missing_short_and_overlap(self):
+        rows = [{"start": 0., "end": .5, "source": "mic", "speaker": "mic_01"},
+                {"start": 2., "end": 5., "source": "system", "speaker": "system_01"},
+                {"start": 3., "end": 6., "source": "system", "speaker": "system_02"},
+                {"start": 8., "end": 10., "source": "missing", "speaker": "missing_01"}]
+        result = preparation.assign_global_speakers(rows, {"mic": np.zeros(160000), "system": np.zeros(160000)},
+                                                    {}, Path("unused"))
+        self.assertEqual([r["speaker_reason"] for r in rows],
+                         ["short_utterance", "overlapping_speech", "overlapping_speech", "missing_source"])
+        self.assertEqual(result["unknown_reasons"],
+                         {"short_utterance": 1, "overlapping_speech": 2, "missing_source": 1})
+
     def test_clean_anchor_recovers_unmixed_part_of_overlapping_turn(self):
         row = {"source": "mic", "speaker": "mic_01", "start": 10., "end": 20.}
         other = {"source": "mic", "speaker": "mic_02", "start": 10., "end": 14.}
@@ -88,6 +100,7 @@ class PreparationTests(unittest.TestCase):
             result = preparation.assign_global_speakers(rows, {"mic": np.ones(48000, dtype=np.float32)}, {}, Path("unused"), embedding_extractor=Extractor())
         self.assertIn("cluster unavailable", result["error"])
         self.assertEqual(rows[0]["speaker_status"], "unknown")
+        self.assertEqual(rows[0]["speaker_reason"], "identity_processing_error")
         self.assertEqual(rows[0]["end"], 3.)
 
     def test_segmented_asr_source_preserves_resampling_and_speech_crossing_boundaries(self):
