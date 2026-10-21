@@ -23,7 +23,7 @@ internal sealed class MeetingSettingsSnapshot {
         if (text.Length > 0 && text[0] == '\ufeff') text = text.Substring(1);
         var parsed = MeetingFiles.Json.Deserialize<Dictionary<string, object>>(text);
         // Unknown keys and malformed existing values fail without touching disk.
-        return new MeetingSettingsSnapshot(path, bytes, MeetingConfig.Validate(parsed));
+        return new MeetingSettingsSnapshot(path, bytes, MeetingConfig.Validate(parsed, false));
     }
     public static MeetingSettingsSnapshot CreateNew(string path, string suggestedRoot) {
         path = Path.GetFullPath(path);
@@ -40,7 +40,7 @@ internal sealed class MeetingSettingsSnapshot {
     }
     public Dictionary<string, object> Values { get { return Clone(values); } }
     public Dictionary<string, object> CreateCandidate(string root, string meetingFolder, string quickFolder,
-            string start, string pause, string bookmark, string quickNote, string protectionSeconds = null) {
+            string start, string pause, string bookmark, string quickNote, string protectionSeconds = null, Dictionary<string, object> transcription = null) {
         var candidate = Values;
         candidate["vault_root"] = root.Trim();
         candidate["meeting_folder"] = meetingFolder.Trim();
@@ -53,6 +53,7 @@ internal sealed class MeetingSettingsSnapshot {
                 throw new InvalidOperationException("录音保护时间请填写 0 到 300 之间的整数秒；0 表示关闭。");
             candidate["recording_protection_seconds"] = seconds;
         }
+        if (transcription != null) foreach (var item in transcription) candidate[item.Key] = item.Value;
         return MeetingConfig.Validate(candidate);
     }
     static bool Same(byte[] first, byte[] second) {
@@ -300,14 +301,15 @@ internal sealed class MeetingSettingsDialog : Form {
     void SaveSettings() {
         error.Text = ""; save.Enabled = false;
         try {
-            var candidate = snapshot.CreateCandidate(inputs["vault_root"].Text, inputs["meeting_folder"].Text, inputs["quick_note_folder"].Text,
-                inputs["hotkey"].Text, inputs["pause_hotkey"].Text, inputs["bookmark_hotkey"].Text, inputs["quick_note_hotkey"].Text, inputs["recording_protection_seconds"].Text);
-            foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "asr_terms", "asr_context" }) candidate[key] = inputs[key].Text.Trim();
-            candidate["transcription_mode"] = Choice("transcription_mode"); candidate["asr_denoise"] = Choice("asr_denoise");
-            candidate["asr_echo_filter"] = echoFilter.Checked; candidate["check_updates"] = automaticUpdates.Checked;
+            var edits = new Dictionary<string, object>();
+            foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "asr_terms", "asr_context" }) edits[key] = inputs[key].Text.Trim();
+            edits["transcription_mode"] = Choice("transcription_mode"); edits["asr_denoise"] = Choice("asr_denoise");
+            edits["asr_echo_filter"] = echoFilter.Checked; edits["check_updates"] = automaticUpdates.Checked;
             int timeout;
             if (!int.TryParse(inputs["api_timeout_seconds"].Text, out timeout)) throw new InvalidOperationException("API 超时请填写 10 到 600 之间的整数秒。");
-            candidate["api_timeout_seconds"] = timeout; candidate = MeetingConfig.Validate(candidate);
+            edits["api_timeout_seconds"] = timeout;
+            var candidate = snapshot.CreateCandidate(inputs["vault_root"].Text, inputs["meeting_folder"].Text, inputs["quick_note_folder"].Text,
+                inputs["hotkey"].Text, inputs["pause_hotkey"].Text, inputs["bookmark_hotkey"].Text, inputs["quick_note_hotkey"].Text, inputs["recording_protection_seconds"].Text, edits);
             bool changed = startup.Checked != originalStartup, accepted = false;
             try {
                 if (changed) DesktopServices.SetStartup(startup.Checked);

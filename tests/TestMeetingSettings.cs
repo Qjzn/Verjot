@@ -102,6 +102,13 @@ internal static class TestMeetingSettings {
         Write(path, config);
         using (var context = new MeetingContext(config, delegate { throw new Exception("Settings must not launch a worker"); }, delegate { throw new Exception("Settings must not open a user application"); })) {
             ((System.Windows.Forms.Timer)Field(context, "timer")).Stop();
+            string guideFolder = Path.Combine(MeetingFiles.Home, "documentation"); Directory.CreateDirectory(guideFolder);
+            File.WriteAllText(Path.Combine(guideFolder, "first-use.md"), "# 首次使用\n隔离说明夹具", new UTF8Encoding(false));
+            Call(context, "OpenFirstUseGuide");
+            using (var reader = Application.OpenForms.OfType<Form>().Single(delegate(Form form) { return form.Text == "verbit · 离线说明"; })) {
+                Check(((TextBox)reader.Controls["document_text"]).ReadOnly, "Tray first-use guide uses the internal reader without a Markdown association");
+                reader.Close();
+            }
             var hotkey = (MeetingHotkey)Field(context, "hotkey");
             var previous = new Dictionary<string, object>((Dictionary<string, object>)Field(context, "config"));
             var snapshot = MeetingSettingsSnapshot.Open(path);
@@ -218,7 +225,8 @@ internal static class TestMeetingSettings {
         string previousKey = Environment.GetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY");
         Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", null);
         try {
-            Check(Reject(delegate { MeetingSettingsSnapshot.Open(path); }), "Existing API configuration still requires its environment key");
+            Check(MeetingSettingsSnapshot.Open(path) != null, "Missing API credentials must not prevent opening repair settings");
+            Check(Reject(delegate { MeetingConfig.Validate(ConfigWithApi(root)); }), "Recording validation still requires an API key");
             Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", "synthetic-test-only");
             snapshot = MeetingSettingsSnapshot.Open(path); snapshot.Commit(Candidate(snapshot, nextRoot));
             Check((string)MeetingSettingsSnapshot.Open(path).Values["api_key_env"] == "VERBIT_SETTINGS_SYNTHETIC_KEY", "API secret variable reference survives settings");
@@ -326,20 +334,21 @@ internal static class TestMeetingSettings {
         File.WriteAllText(Path.Combine(runtime, ".venv", "Scripts", "python.exe"), "synthetic; never executed");
         MeetingConfig.CheckRecordingRuntime(runtime); Check(true, "Runtime preflight checks file presence without executing Python or loading models");
     }
-    static void CheckLayout(Form form, string screenshot) {
-        form.Refresh(); Application.DoEvents();
-        foreach (Control input in form.Controls[0].Controls) {
-            Check(form.Controls[0].ClientRectangle.Contains(input.Bounds), "Every settings row fits the client area at " + form.DeviceDpi + " DPI: " + input.GetType().Name + " " + input.Text + "; " + input.Bounds + " inside " + form.Controls[0].ClientRectangle);
+    static void CheckChildren(Control parent, int dpi) {
+        foreach (Control input in parent.Controls) {
+            if (!input.Visible) continue;
+            var scroll = parent as ScrollableControl;
+            if (!(parent is TabControl) && (scroll == null || !scroll.AutoScroll))
+                Check(parent.ClientRectangle.Contains(input.Bounds), "Visible control fits its container at " + dpi + " DPI: " + input.GetType().Name + " " + input.Text + "; " + input.Bounds + " inside " + parent.ClientRectangle);
             if (input is Label && !string.IsNullOrEmpty(input.Text)) {
-                Size needed = TextRenderer.MeasureText(input.Text, input.Font, new Size(input.Width, int.MaxValue), TextFormatFlags.WordBreak);
-                Check(needed.Height <= input.Height, "Settings label is not vertically clipped at " + form.DeviceDpi + " DPI: " + input.Text);
+                Size needed = TextRenderer.MeasureText(input.Text, input.Font, new Size(input.Width - input.Padding.Horizontal, int.MaxValue), TextFormatFlags.WordBreak);
+                Check(needed.Height + input.Padding.Vertical <= input.Height, "Settings label is not vertically clipped at " + dpi + " DPI: " + input.Text);
             }
+            CheckChildren(input, dpi);
         }
-        foreach (Control control in form.Controls) if (control is Label && !string.IsNullOrEmpty(control.Text)) {
-            Check(form.ClientRectangle.Contains(control.Bounds), "First-run introduction fits the client area");
-            Size needed = TextRenderer.MeasureText(control.Text, control.Font, new Size(control.Width, int.MaxValue), TextFormatFlags.WordBreak);
-            Check(needed.Height <= control.Height, "First-run introduction is not clipped at " + form.DeviceDpi + " DPI");
-        }
+    }
+    static void CheckLayout(Form form, string screenshot) {
+        form.Refresh(); Application.DoEvents(); CheckChildren(form, form.DeviceDpi);
         using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height)); bitmap.Save(screenshot); }
     }
     static void Interface(string directory, string root) {
@@ -392,6 +401,27 @@ internal static class TestMeetingSettings {
             }
         }
     }
+    static Dictionary<string, object> ConfigWithApi(string root) { var config = Config(root); config["transcription_mode"] = "api"; return config; }
+    static void ApiCredentialRecovery(string directory, string root) {
+        string path = Path.Combine(directory, "missing-key-recovery.json"); Write(path, ConfigWithApi(root));
+        string previous = Environment.GetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY");
+        Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", null);
+        try {
+            var snapshot = MeetingSettingsSnapshot.Open(path);
+            using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { snapshot.Commit(next); return null; })) {
+                form.Show(); Application.DoEvents();
+                ((ComboBox)form.Controls.Find("transcription_mode", true)[0]).SelectedIndex = 0;
+                ((Button)form.AcceptButton).PerformClick();
+                Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "local", "Missing old API key can be repaired by switching to local through the actual dialog");
+            }
+            var api = ConfigWithApi(root);
+            using (var context = new MeetingContext(api, delegate { throw new Exception("No worker may launch"); }, delegate { throw new Exception("No external app may open"); })) {
+                ((System.Windows.Forms.Timer)Field(context, "timer")).Stop();
+                Check(context != null, "Missing API key no longer prevents desktop context from starting");
+                Check(Reject(delegate { MeetingConfig.Validate(new Dictionary<string, object>(api)); }), "Capture preflight remains strict without the API key");
+            }
+        } finally { Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", previous); }
+    }
     static void ExtendedInterface(string directory, string root) {
         string path = Path.Combine(directory, "extended-settings.json"); Write(path, Config(root));
         var snapshot = MeetingSettingsSnapshot.Open(path);
@@ -416,6 +446,7 @@ internal static class TestMeetingSettings {
             Check(form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "local", "Missing API key prevents mode switch without damaging config");
             mode.SelectedIndex = 0; Input(form, "api_key_env").Text = "VERBIT_SETTINGS_SYNTHETIC_KEY";
             Input(form, "asr_terms").Text = "产品名,术语";
+            CheckChildren(tabs.SelectedTab, form.DeviceDpi);
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-models.png")); }
             form.ShowAbout(); Application.DoEvents();
             Check(tabs.SelectedIndex == 2 && form.Controls.Find("check_update_now", true)[0].Visible, "About entry opens version and update controls");
@@ -434,7 +465,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
-            RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); ExtendedInterface(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
+            RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); ExtendedInterface(directory, root); ApiCredentialRecovery(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

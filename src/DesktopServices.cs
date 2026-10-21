@@ -22,7 +22,7 @@ internal static class DesktopServices {
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.4-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.5-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {
@@ -63,7 +63,27 @@ internal static class DesktopServices {
             if (!Owns(path)) throw new IOException("无法验证开机启动快捷方式。");
         } else foreach (string path in StartupPaths) if (Owns(path)) File.Delete(path);
     }
-    public static void Open(string url) { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+    public static void Open(string url) {
+        if (Path.IsPathRooted(url) && string.Equals(Path.GetExtension(url), ".md", StringComparison.OrdinalIgnoreCase)) {
+            var window = DocumentWindow(url);
+            window.Show(System.Windows.Forms.Form.ActiveForm);
+            var reader = (System.Windows.Forms.TextBox)window.Controls["document_text"];
+            reader.Select(0, 0); reader.ScrollToCaret();
+        } else Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+    public static System.Windows.Forms.Form DocumentWindow(string path) {
+        MeetingConfig.CheckOrdinaryPath(path);
+        if (new FileInfo(path).Length > 2 * 1024 * 1024) throw new IOException("说明文件过大，请检查程序目录。");
+        string text = File.ReadAllText(path, new System.Text.UTF8Encoding(false, true));
+        var window = new System.Windows.Forms.Form { Text = "verbit · 离线说明", Icon = MeetingBrand.IdleIcon,
+            AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi, AutoScaleDimensions = new System.Drawing.SizeF(96, 96),
+            ClientSize = new System.Drawing.Size(560, 420), StartPosition = System.Windows.Forms.FormStartPosition.CenterParent,
+            Font = System.Drawing.SystemFonts.MessageBoxFont, MinimizeBox = false, TopMost = true };
+        var reader = new System.Windows.Forms.TextBox { Name = "document_text", Text = text, ReadOnly = true, Multiline = true,
+            Dock = System.Windows.Forms.DockStyle.Fill, ScrollBars = System.Windows.Forms.ScrollBars.Vertical, WordWrap = true };
+        window.Controls.Add(reader);
+        return window;
+    }
     public static bool Newer(string candidate, string current) {
         var pattern = new Regex(@"^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$");
         var a = pattern.Match(candidate ?? ""); var b = pattern.Match((current ?? "").Replace("-dev", ""));
@@ -88,6 +108,8 @@ internal static class DesktopServices {
                 throw new InvalidDataException("更新响应缺少版本字段。");
             if ((bool)release["draft"]) continue;
             string tag = release["tag_name"] as string;
+            if (!current.Contains("-") && ((tag != null && tag.Contains("-")) ||
+                (release.ContainsKey("prerelease") && Equals(release["prerelease"], true)))) continue;
             if (Newer(tag, latest)) latest = tag;
         }
         return Newer(latest, current) ? "发现新版本 " + latest + "，请打开 GitHub 发布页下载安装。升级前请结束录音、等待转写完成并退出 verbit。" : "当前没有更高版本。";

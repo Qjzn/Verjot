@@ -38,7 +38,11 @@ internal static class TestInstalledJourney {
     }
     static void Until(Func<bool> check, string message) { var clock = Stopwatch.StartNew(); while (!check() && clock.ElapsedMilliseconds < 12000) {if (child != null && child.HasExited) break; Thread.Sleep(30);} Check(check(), message); }
     static void Click(IntPtr window, string caption) { var button = Children(window).Single(delegate(IntPtr item) {return Text(item) == caption;}); Check(PostMessage(button, 0xF5, IntPtr.Zero, IntPtr.Zero), "Native button posted: " + caption); }
-    static void Launch(string app) { child = Process.Start(new ProcessStartInfo(Path.Combine(app, "ObsidianMeeting.exe")) {UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=app}); }
+    static void Launch(string app) {
+        var start = new ProcessStartInfo(Path.Combine(app, "ObsidianMeeting.exe")) {UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=app};
+        start.EnvironmentVariables.Remove("VERBIT_REVIEW_SYNTHETIC_MISSING_KEY");
+        child = Process.Start(start);
+    }
     static void Quit() { Check(PostMessage(ControlWindow(), 0x10, IntPtr.Zero, IntPtr.Zero), "Normal exit posted to owned controller"); Check(child.WaitForExit(12000) && child.ExitCode == 0, "Actual EXE exited normally"); child.Dispose(); child = null; }
     [STAThread] static int Main(string[] args) {
         string app = Path.GetFullPath(args[0]), notes = Path.GetFullPath(args[1]);
@@ -84,6 +88,20 @@ internal static class TestInstalledJourney {
             Quit(); string before = File.ReadAllText(config);
             Launch(app); Until(delegate {return ControlWindow() != IntPtr.Zero;}, "Existing-config launch reaches controller directly");
             Check(Window("verbit · 首次设置") == IntPtr.Zero && File.ReadAllText(config) == before, "Restart skips setup and preserves exact config"); Quit(); steps.Add("restart-preserves-config");
+            var apiConfig = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(before);
+            apiConfig["transcription_mode"] = "api"; apiConfig["api_base_url"] = "https://example.invalid/v1";
+            apiConfig["api_model"] = "synthetic-never-called"; apiConfig["api_key_env"] = "VERBIT_REVIEW_SYNTHETIC_MISSING_KEY";
+            File.WriteAllText(config, new JavaScriptSerializer().Serialize(apiConfig), new UTF8Encoding(false));
+            Launch(app); Until(delegate { return ControlWindow() != IntPtr.Zero; }, "Missing API key still allows actual desktop startup");
+            PostMessage(ControlWindow(), 0x312, new IntPtr(7414), IntPtr.Zero);
+            Until(delegate { return Window("verbit · 速记") != IntPtr.Zero; }, "Missing API key still allows actual quick notes");
+            PostMessage(Window("verbit · 速记"), 0x10, IntPtr.Zero, IntPtr.Zero);
+            PostMessage(ControlWindow(), 0x312, new IntPtr(7411), IntPtr.Zero); warning = IntPtr.Zero;
+            Until(delegate { EnumWindows(delegate(IntPtr window, IntPtr unused) { if (Owned(window) && Class(window) == "#32770") warning = window; return true; }, IntPtr.Zero); return warning != IntPtr.Zero; }, "API recording without key is refused");
+            Until(delegate { return string.Join(" ", Children(warning).Select(Text).ToArray()).Contains("VERBIT_REVIEW_SYNTHETIC_MISSING_KEY"); }, "Actual capture preflight reports missing credentials before missing runtime");
+            PostMessage(warning, 0x10, IntPtr.Zero, IntPtr.Zero); Thread.Sleep(250);
+            Check(!Directory.GetFiles(app, "session.json", SearchOption.AllDirectories).Any(), "Missing API credentials created no recording session");
+            Quit(); File.WriteAllText(config, before, new UTF8Encoding(false)); steps.Add("missing-key-keeps-notes-and-blocks-capture");
             File.WriteAllText(Path.Combine(app, "new-user-journey.json"), new JavaScriptSerializer().Serialize(new {passed=true, assertions=assertions, steps=steps, actual_exe_gui=true, bypassed_mutex=false, clipboard_access=false, global_input=false, audio_recorded=false}), new UTF8Encoding(false));
             Console.WriteLine("PASS real installed EXE journey: " + assertions + " assertions; no clipboard/audio/global input."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

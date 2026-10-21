@@ -22,7 +22,7 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 原生速记支持图片、置顶和自动保存；设置可修改保存目录与快捷键：
 
-本轮 `0.1.0-beta.4` 候选增加「常规 / 转写 / 关于与更新」设置：可修改模型 API 与术语提示、开机自启、自动检查更新；提供版本号、GitHub 和离线[版本说明](documentation/changelog.md)。安装后从开始菜单 **verbit → verbit** 打开，已运行时会唤出浮窗。更新检查默认关闭，私有仓库下载仍需浏览器授权，不会静默安装。此处不表示候选已替代下方既有发布版。
+本轮 `0.1.0-beta.5` 候选增加「常规 / 转写 / 关于与更新」设置：可修改模型 API 与术语提示、开机自启、自动检查更新；提供版本号、GitHub 和离线[版本说明](documentation/changelog.md)。安装后从开始菜单 **verbit → verbit** 打开，已运行时会唤出浮窗。更新检查默认关闭，私有仓库下载仍需浏览器授权，不会静默安装。此处不表示候选已替代下方既有发布版。
 
 <img src="assets/screenshots/quick-note.png" alt="verbit 速记：文字和图片的演示内容" width="340"> <img src="assets/screenshots/settings.png" alt="verbit 首次启动设置：保存目录、快捷键和录音保护" width="400">
 

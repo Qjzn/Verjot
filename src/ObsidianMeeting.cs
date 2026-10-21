@@ -106,13 +106,13 @@ internal static class MeetingConfig {
             if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1])) i++;
         return length;
     }
-    public static Dictionary<string, object> Load() {
+    public static Dictionary<string, object> Load(bool requireApiKey = true) {
         CheckOrdinaryPath(MeetingFiles.Home);
         string path = Path.Combine(MeetingFiles.Home, "config.json");
         if (!File.Exists(path)) throw new IOException("缺少 config.json，请运行 Install.ps1 或复制 config.example.json 后填写保存路径。");
-        return Validate(MeetingFiles.ReadJson(path));
+        return Validate(MeetingFiles.ReadJson(path), requireApiKey);
     }
-    public static Dictionary<string, object> Validate(Dictionary<string, object> config) {
+    public static Dictionary<string, object> Validate(Dictionary<string, object> config, bool requireApiKey = true) {
         var schema = MeetingFiles.ReadJson(Path.Combine(MeetingFiles.Home, "config.schema.json"));
         if (!schema.ContainsKey("properties")) throw new IOException("缺少 config.schema.json，请保留完整verbit源码目录。");
         var properties = (Dictionary<string, object>)schema["properties"];
@@ -190,7 +190,7 @@ internal static class MeetingConfig {
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
                 throw new InvalidOperationException("api_base_url 必须是无密钥、无查询参数的 HTTP(S) API 前缀。");
             if (string.IsNullOrWhiteSpace((string)config["api_model"])) throw new InvalidOperationException("API 模式必须填写 api_model 音频转写模型名。");
-            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable((string)config["api_key_env"])))
+            if (requireApiKey && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable((string)config["api_key_env"])))
                 throw new InvalidOperationException("未设置 API 密钥环境变量：" + (string)config["api_key_env"] + "；设置后重新启动verbit。");
         }
         return config;
@@ -2172,11 +2172,11 @@ internal sealed class MeetingContext : ApplicationContext {
     string BookmarkHotkey { get { return (string)config["bookmark_hotkey"]; } }
     string QuickNoteHotkey { get { return (string)config["quick_note_hotkey"]; } }
 
-    public MeetingContext() : this(MeetingConfig.Load(), null, null) { }
+    public MeetingContext() : this(MeetingConfig.Load(false), null, null) { }
     // The two optional operations also allow isolated native regressions without
     // capturing audio, loading a model, or opening the user's applications.
     internal MeetingContext(Dictionary<string, object> settings, Func<string, Process> launcher, Action<string, bool> opener) {
-        config = MeetingConfig.Validate(settings);
+        config = MeetingConfig.Validate(settings, false);
         RecorderMotionPreferences.Mode = (string)config["animation_mode"];
         workerLauncher = launcher;
         noteOpener = opener;
@@ -2261,7 +2261,7 @@ internal sealed class MeetingContext : ApplicationContext {
         try {
             string guide = Path.Combine(MeetingFiles.Home, "documentation", "first-use.md");
             if (!File.Exists(guide)) throw new IOException("缺少首次使用说明，请保留完整程序目录。");
-            Process.Start(new ProcessStartInfo(guide) { UseShellExecute = true });
+            DesktopServices.Open(guide);
         } catch (Exception error) { Notice("无法打开检查说明", error.Message, ToolTipIcon.Warning); }
     }
     void OpenSettings(bool about = false) {
@@ -2324,6 +2324,9 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void Start() {
         try {
+            // Missing API credentials must never disable quick notes/settings,
+            // but must be rejected before any capture or meeting files exist.
+            MeetingConfig.Validate(new Dictionary<string, object>(config));
             if (workerLauncher == null) MeetingConfig.CheckRecordingRuntime(MeetingFiles.Home);
             preserveShortRecording = false;
             hotkey.EnablePause(true);

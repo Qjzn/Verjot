@@ -45,6 +45,10 @@ function Get-ExistingEntriesSnapshot {
         $taskPath = Join-Path $taskFolder 'verbit.lnk'
         $taskItems += [ordered]@{ path = $taskPath; hash = $(if (Test-Path -LiteralPath $taskPath -PathType Leaf) { (Get-FileHash -LiteralPath $taskPath).Hash } else { '' }) }
     }
+    foreach ($taskName in @('verbit.lnk', '安装与使用说明.lnk')) {
+        $taskPath = Join-Path ([Environment]::GetFolderPath('Programs')) ('verbit\' + $taskName)
+        $taskItems += [ordered]@{ path = $taskPath; hash = $(if (Test-Path -LiteralPath $taskPath -PathType Leaf) { (Get-FileHash -LiteralPath $taskPath).Hash } else { '' }) }
+    }
     $taskProtocolKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes\pianyan')
     try { $taskItems += [ordered]@{ protocol_owner = $(if ($taskProtocolKey) { [string]$taskProtocolKey.GetValue('OwnerExecutable', '') } else { '' }) } }
     finally { if ($taskProtocolKey) { $taskProtocolKey.Dispose() } }

@@ -15,11 +15,26 @@ internal static class TestDesktopServices {
             Check(!DesktopServices.Newer("v0.1.0-rc.5", "0.1.0"), "Stable never downgrades to RC");
             Check(DesktopServices.Newer("v0.2.0-alpha.1", "0.1.0"), "Higher minor version");
             Check(!DesktopServices.Newer("v0.1.0-beta.4", "0.1.0-beta.4"), "Same version");
+            Check(DesktopServices.ReleaseSummary("[{\"tag_name\":\"v0.2.0-beta.1\",\"draft\":false}]", "0.1.0").Contains("没有更高"), "Stable installs must not be offered prereleases");
+            Check(DesktopServices.ReleaseSummary("[{\"tag_name\":\"v0.2.0\",\"draft\":false,\"prerelease\":true}]", "0.1.0").Contains("没有更高"), "GitHub prerelease flag is honored even with a stable-looking tag");
             Reject(delegate { DesktopServices.Newer("https://untrusted.invalid", "0.1.0"); }, "Unrecognized version is not trusted");
             string release = "[{\"tag_name\":\"v0.1.0-beta.10\",\"draft\":false},{\"tag_name\":\"v99.0.0\",\"draft\":true}]";
             Check(DesktopServices.ReleaseSummary(release, "0.1.0-beta.4").Contains("beta.10"), "Draft excluded; beta checked without latest endpoint");
             Check(DesktopServices.ReleaseSummary("[]", "0.1.0-beta.4-dev").Contains("没有更高"), "No releases and dev builds supported");
             Reject(delegate { DesktopServices.ReleaseSummary("{}", "0.1.0"); }, "Malformed metadata rejected");
+            System.Windows.Forms.Application.EnableVisualStyles();
+            string document = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "synthetic-changelog.md");
+            File.WriteAllText(document, "# 版本说明\r\n中文离线说明，无需文件关联。", new System.Text.UTF8Encoding(false));
+            DesktopServices.Open(document);
+            var viewer = System.Windows.Forms.Application.OpenForms[0];
+            var documentText = (System.Windows.Forms.TextBox)viewer.Controls["document_text"];
+            Check(documentText.ReadOnly && documentText.Text == File.ReadAllText(document), "Actual offline-document entry opens a read-only native reader without external association");
+            Check(documentText.SelectionLength == 0, "Offline reader initially shows unselected readable text");
+            using (var bitmap = new System.Drawing.Bitmap(viewer.Width, viewer.Height)) {
+                viewer.DrawToBitmap(bitmap, new System.Drawing.Rectangle(0, 0, viewer.Width, viewer.Height));
+                bitmap.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "offline-reader.png"));
+            }
+            viewer.Close(); viewer.Dispose();
             string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "synthetic-startup");
             Directory.CreateDirectory(folder); DesktopServices.StartupFolder = folder;
             Check(!DesktopServices.StartsWithWindows, "Fresh isolated startup disabled");
