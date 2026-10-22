@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -17,6 +17,9 @@ internal sealed class QuickNoteInputBox : NativeNoteInputBox {
     internal Action<bool> UserCopyOrCut, CompositionChanged;
     internal Func<Keys, bool> HandleKey;
     internal Action InsertNewline;
+    internal Action PointerMoved, BeforeInput;
+    internal Func<int, Point, bool> ImagePointer;
+    internal Action<Graphics> ImagePaint;
     bool compositionActive;
     internal bool CompositionActive {
         get {
@@ -29,6 +32,7 @@ internal sealed class QuickNoteInputBox : NativeNoteInputBox {
         }
     }
     protected override bool ProcessCmdKey(ref Message message, Keys keyData) {
+        if (BeforeInput != null) BeforeInput();
         Keys key = keyData & Keys.KeyCode;
         Keys modifiers = keyData & Keys.Modifiers;
         if ((modifiers == Keys.Control && key == Keys.V) || (modifiers == Keys.Shift && key == Keys.Insert)) { if (UserPaste != null) UserPaste(); return true; }
@@ -40,6 +44,12 @@ internal sealed class QuickNoteInputBox : NativeNoteInputBox {
     }
     protected override void WndProc(ref Message message) {
         int code = message.Msg;
+        if (code == 0x200 && PointerMoved != null) PointerMoved();
+        if ((code == 0x100 || code == 0x102 || code == 0x10d || code == 0x300 || code == 0x301 || code == 0x302) && BeforeInput != null) BeforeInput();
+        if ((code == 0x201 || code == 0x200 || code == 0x202 || code == 0x203 || code == 0x204 || code == 0x215 || code == 0x100 && message.WParam.ToInt32() == 27) && ImagePointer != null) {
+            long packed = message.LParam.ToInt64();
+            if (ImagePointer(code, new Point((short)packed, (short)(packed >> 16)))) { message.Result = IntPtr.Zero; return; }
+        }
         if (code == 0x302 || code == 0x440) { if (UserPaste != null) UserPaste(); message.Result = IntPtr.Zero; return; }
         if (code == 0x301 || code == 0x300) { if (UserCopyOrCut != null) UserCopyOrCut(code == 0x300); message.Result = IntPtr.Zero; return; }
         if (code == 0x432) { message.Result = IntPtr.Zero; return; } // EM_CANPASTE: disable default paste availability
@@ -59,12 +69,254 @@ internal sealed class QuickNoteInputBox : NativeNoteInputBox {
         }
         if (code == 0x10d) { compositionActive = true; if (CompositionChanged != null) CompositionChanged(true); }
         base.WndProc(ref message);
+        if (code == 0xf && ImagePaint != null) using (Graphics graphics = Graphics.FromHwnd(Handle)) ImagePaint(graphics);
         if (code == 0x10e) { compositionActive = false; if (CompositionChanged != null) CompositionChanged(false); }
+    }
+}
+
+// A ten-pixel hit area with a three-pixel thumb. The editor retains Windows'
+// real scroll range and wheel behavior; no polling timer runs while typing.
+internal sealed class QuickNoteScrollBar : Control {
+    [StructLayout(LayoutKind.Sequential)] struct ScrollInfo { internal uint Size, Mask; internal int Min, Max; internal uint Page; internal int Pos, Track; }
+    [DllImport("user32.dll")] static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref ScrollInfo info);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")] static extern IntPtr PointMessage(IntPtr hwnd, int message, IntPtr wparam, ref Point point);
+    internal RichTextBox Target;
+    bool hover, dragging;
+    int dragOffset;
+    internal QuickNoteScrollBar() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+        AccessibleName = "正文滚动条"; AccessibleRole = AccessibleRole.ScrollBar;
+    }
+    internal static Point Position(RichTextBox target) { Point p = Point.Empty; if (target.IsHandleCreated) PointMessage(target.Handle, 0x4dd, IntPtr.Zero, ref p); return p; }
+    internal static void SetPosition(RichTextBox target, Point position) { if (target.IsHandleCreated) PointMessage(target.Handle, 0x4de, IntPtr.Zero, ref position); }
+    ScrollInfo Info() {
+        var info = new ScrollInfo { Size = (uint)Marshal.SizeOf(typeof(ScrollInfo)), Mask = 0x17 };
+        if (Target != null && Target.IsHandleCreated) GetScrollInfo(Target.Handle, 1, ref info);
+        return info;
+    }
+    Rectangle Thumb(ScrollInfo info) {
+        if (info.Max <= 0 || info.Page == 0 || info.Max - info.Min < info.Page) return Rectangle.Empty;
+        int height = Math.Min(Height, Math.Max(22 * DeviceDpi / 96, (int)((long)Height * info.Page / (info.Max - info.Min + 1L))));
+        int max = Math.Max(1, info.Max - info.Min - (int)info.Page + 1);
+        int top = (int)((long)Math.Max(0, info.Pos - info.Min) * (Height - height) / max);
+        int width = Math.Max(3, (hover || dragging ? 6 : 3) * DeviceDpi / 96);
+        return new Rectangle((Width - width) / 2, top, width, height);
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        e.Graphics.Clear(BackColor); Rectangle r = Thumb(Info());
+        if (r.IsEmpty) return;
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var pen = new Pen(Color.FromArgb(hover || dragging ? 135 : 188, 194, 200), r.Width)) {
+            pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            e.Graphics.DrawLine(pen, r.Left + r.Width / 2f, r.Top + r.Width / 2f, r.Left + r.Width / 2f, r.Bottom - r.Width / 2f);
+        }
+    }
+    protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+    protected override void OnMouseDown(MouseEventArgs e) {
+        base.OnMouseDown(e); if (e.Button != MouseButtons.Left) return;
+        Rectangle thumb = Thumb(Info()); if (thumb.IsEmpty) return;
+        dragOffset = e.Y >= thumb.Top && e.Y < thumb.Bottom ? e.Y - thumb.Top : thumb.Height / 2;
+        dragging = Capture = true; ScrollTo(e.Y); Invalidate();
+    }
+    protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (dragging) ScrollTo(e.Y); }
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); dragging = Capture = false; Invalidate(); }
+    protected override void OnMouseCaptureChanged(EventArgs e) { base.OnMouseCaptureChanged(e); if (!Capture) { dragging = false; Invalidate(); } }
+    void ScrollTo(int y) {
+        ScrollInfo info = Info(); Rectangle thumb = Thumb(info); if (thumb.IsEmpty || Target == null) return;
+        int span = Math.Max(1, Height - thumb.Height), maximum = Math.Max(0, info.Max - info.Min - (int)info.Page + 1);
+        Point position = Position(Target); position.Y = (int)((long)Math.Max(0, Math.Min(span, y - dragOffset)) * maximum / span);
+        SetPosition(Target, position); Invalidate();
+    }
+}
+
+// Owned, non-activating rail. Animation runs only for 150ms transitions; the
+// native editor is neither resized nor repainted on each animation frame.
+internal sealed class QuickNoteTabs : Form {
+    [StructLayout(LayoutKind.Sequential)] struct NativeRect { internal int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rectangle);
+    internal Action<string> HoverFile, SelectFile;
+    internal Action<string, Point> FileMenu;
+    internal Action More, LeaveRail;
+    internal bool OnRight;
+    internal bool IsRevealed { get { return targetReveal == 1; } }
+    readonly Timer animation = new Timer { Interval = 16 };
+    readonly ToolTip tip = new ToolTip { ShowAlways = true };
+    string[] files = new string[0];
+    string current;
+    int hovered = -1;
+    float reveal, targetReveal, emphasis, targetEmphasis;
+    int lastTick;
+    internal QuickNoteTabs() {
+        FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
+        BackColor = TransparencyKey = Color.Fuchsia;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        AccessibleName = "最近便签标签";
+        animation.Tick += delegate {
+            int now = Environment.TickCount; float amount = 1 - (float)Math.Exp(-Math.Max(1, unchecked(now - lastTick)) / 36.0); lastTick = now;
+            reveal += (targetReveal - reveal) * amount; emphasis += (targetEmphasis - emphasis) * amount;
+            if (Math.Abs(targetReveal - reveal) < .01f && Math.Abs(targetEmphasis - emphasis) < .01f) {
+                reveal = targetReveal; emphasis = targetEmphasis; animation.Stop(); if (reveal == 0) Hide();
+            }
+            Invalidate();
+        };
+    }
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams { get { var p = base.CreateParams; p.ExStyle |= 0x08000080; return p; } }
+    int Row { get { return Math.Max(30, 36 * DeviceDpi / 96); } }
+    internal void SetFiles(string[] names, string selected) {
+        bool changed = current != selected || files.Length != names.Length;
+        for (int i = 0; !changed && i < names.Length; i++) changed = files[i] != names[i];
+        if (!changed) return;
+        files = names; current = selected; hovered = -1; tip.Hide(this);
+        Height = (files.Length + 1) * Row; Invalidate();
+    }
+    void Animate() { lastTick = Environment.TickCount; if (!animation.Enabled) animation.Start(); }
+    internal void Reveal() { if (targetReveal == 1) return; targetReveal = 1; Animate(); }
+    internal void Conceal() { tip.Hide(this); hovered = -1; targetReveal = targetEmphasis = 0; if (Visible) Animate(); }
+    int Hit(Point point) { int row = point.Y / Row; return (OnRight ? point.X < Width * 4 / 5 : point.X >= Width / 5) && point.X >= 0 && point.X < Width && point.Y >= 0 && row <= files.Length ? row : -1; }
+    protected override void OnMouseMove(MouseEventArgs e) {
+        base.OnMouseMove(e); int index = Hit(e.Location); if (index == hovered) return;
+        tip.Hide(this); hovered = index; emphasis = 0; targetEmphasis = index >= 0 ? 1 : 0; Animate();
+        if (HoverFile != null) HoverFile(index >= 0 && index < files.Length ? files[index] : null);
+        if (index >= 0 && index < files.Length) ShowFileTip(files[index] + (files[index] == current ? "\n当前便签" : "\n悬停预览 · 点击切换"));
+    }
+    internal void ShowFileTip(string text) {
+        if (hovered < 0 || !Visible) return;
+        // Bound very long names without omitting characters. Native screen
+        // clamping must not move a huge tooltip back over the hover target.
+        var wrapped = new StringBuilder(); int column = 0;
+        foreach (char c in text) {
+            if (column >= 24 && !Char.IsLowSurrogate(c)) { wrapped.Append('\n'); column = 0; }
+            wrapped.Append(c); column = c == '\n' ? 0 : column + 1;
+        }
+        string label = wrapped.ToString(); Size size = TextRenderer.MeasureText(label, SystemFonts.StatusFont);
+        int gap = 12 * DeviceDpi / 96;
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        Size padded = new Size(size.Width + 32, size.Height + 20);
+        Rectangle note = Owner == null ? Rectangle.Empty : Owner.Bounds;
+        int rowY = Math.Max(area.Top, Math.Min(Top + hovered * Row, area.Bottom - padded.Height));
+        Point[] candidates = { new Point(Left - gap - padded.Width, rowY), new Point(note.Left, note.Top - gap - padded.Height),
+            new Point(note.Right + gap, rowY), new Point(note.Left, note.Bottom + gap) };
+        foreach (Point point in candidates) {
+            Rectangle candidate = new Rectangle(point, padded);
+            if (!area.Contains(candidate) || candidate.IntersectsWith(note) || candidate.IntersectsWith(Bounds)) continue;
+            tip.Show(label, this, PointToClient(point), 6000);
+            // Windows may clamp its actual popup at a monitor edge. Never let
+            // that turn an otherwise safe placement back into a text overlay.
+            IntPtr handle = (IntPtr)typeof(ToolTip).GetProperty("Handle", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(tip, null);
+            NativeRect actual;
+            if (GetWindowRect(handle, out actual)) {
+                Rectangle bounds = Rectangle.FromLTRB(actual.Left, actual.Top, actual.Right, actual.Bottom);
+                if (area.Contains(bounds) && !bounds.IntersectsWith(note) && !bounds.IntersectsWith(Bounds)) return;
+            }
+            tip.Hide(this);
+        }
+        tip.Hide(this); // No safe room: the full name remains available in More.
+    }
+    protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); tip.Hide(this); }
+    protected override void OnMouseLeave(EventArgs e) {
+        base.OnMouseLeave(e); tip.Hide(this); hovered = -1; targetEmphasis = 0; Animate();
+        if (LeaveRail != null) LeaveRail();
+    }
+    protected override void OnMouseDown(MouseEventArgs e) {
+        base.OnMouseDown(e);
+        int index = Hit(e.Location); tip.Hide(this);
+        if (e.Button == MouseButtons.Right) { if (index >= 0 && index < files.Length && FileMenu != null) FileMenu(files[index], PointToScreen(e.Location)); return; }
+        if (e.Button != MouseButtons.Left) return;
+        if (index >= 0 && index < files.Length && SelectFile != null) SelectFile(files[index]);
+        else if (index == files.Length && More != null) More();
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        // Color-keyed edges must stay opaque; antialiasing against the key
+        // would leave pink fringes on light desktops.
+        e.Graphics.Clear(TransparencyKey); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        Color[] colors = { Color.FromArgb(255, 241, 183), Color.FromArgb(224, 239, 223), Color.FromArgb(222, 235, 249), Color.FromArgb(236, 226, 245), Color.FromArgb(249, 229, 215) };
+        for (int i = 0; i <= files.Length; i++) {
+            bool selected = i < files.Length && String.Equals(files[i], current, StringComparison.OrdinalIgnoreCase);
+            float extra = selected ? 7 : i == hovered ? 7 * emphasis : 0;
+            int width = (int)((70 + extra) * DeviceDpi / 96f * reveal), height = Row - 7 * DeviceDpi / 96;
+            if (width < 8) continue;
+            Rectangle r = new Rectangle(Width - width, i * Row + 2, width + 6, height);
+            if (OnRight) r.X = -6;
+            Color color = i == files.Length ? Color.FromArgb(242, 244, 244) : colors[i % colors.Length];
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath()) {
+                int radius = 6 * DeviceDpi / 96;
+                if (OnRight) { path.AddLine(r.Left, r.Top, r.Right - radius, r.Top); path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90); path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddLine(r.Right - radius, r.Bottom, r.Left, r.Bottom); path.CloseFigure(); }
+                else { path.AddArc(r.Left, r.Top, radius * 2, radius * 2, 180, 90); path.AddLine(r.Left + radius, r.Top, r.Right, r.Top);
+                    path.AddLine(r.Right, r.Top, r.Right, r.Bottom); path.AddArc(r.Left, r.Bottom - radius * 2, radius * 2, radius * 2, 90, 90); path.CloseFigure(); }
+                using (var brush = new SolidBrush(color)) e.Graphics.FillPath(brush, path);
+                using (var pen = new Pen(Color.FromArgb(211, 219, 220))) e.Graphics.DrawPath(pen, path);
+            }
+            Rectangle label = new Rectangle(r.Left + (OnRight ? 13 : 9) * DeviceDpi / 96, r.Top, Math.Max(0, width - 12 * DeviceDpi / 96), r.Height);
+            if (selected) {
+                int dot = 4 * DeviceDpi / 96; using (var brush = new SolidBrush(Color.FromArgb(36, 59, 83))) e.Graphics.FillEllipse(brush, label.Left, r.Top + (r.Height - dot) / 2, dot, dot);
+                label.X += dot + 4; label.Width -= dot + 4;
+            }
+            TextRenderer.DrawText(e.Graphics, i == files.Length ? "更多…" : Path.GetFileNameWithoutExtension(files[i]), Font, label, Color.FromArgb(36, 59, 83), color, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+        }
+    }
+    protected override void Dispose(bool disposing) { if (disposing) { animation.Dispose(); tip.Dispose(); } base.Dispose(disposing); }
+}
+
+internal sealed class QuickNoteRecentPicker : UserControl {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, string text);
+    internal readonly TextBox Search = new TextBox { BorderStyle = BorderStyle.FixedSingle, AccessibleName = "查找便签文件名" };
+    internal readonly ListBox Results = new ListBox { BorderStyle = BorderStyle.None, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, AccessibleName = "最近便签，方向键选择，回车打开" };
+    internal Action<string> SelectFile;
+    internal Action<string, Point> FileMenu;
+    internal Action ClosePopup;
+    readonly Label heading = new Label { Text = "最近便签", AutoSize = false };
+    readonly Label empty = new Label { Text = "没有匹配的便签", TextAlign = ContentAlignment.MiddleCenter };
+    readonly string[] files;
+    readonly string current;
+    internal QuickNoteRecentPicker(string[] names, string selected, Font font, int dpi, Size maximum) {
+        files = names; current = selected; Font = font; BackColor = Results.BackColor = Search.BackColor = Color.FromArgb(250, 250, 248);
+        Search.HandleCreated += delegate { SendMessage(Search.Handle, 0x1501, new IntPtr(1), "搜索便签名称…"); };
+        ForeColor = Results.ForeColor = Color.FromArgb(36, 59, 83);
+        int unit = Math.Max(1, dpi), pad = 12 * unit / 96, row = 40 * unit / 96;
+        Size = new Size(Math.Min(310 * unit / 96, maximum.Width), Math.Min((92 + 40 * Math.Min(6, Math.Max(1, files.Length))) * unit / 96, maximum.Height));
+        heading.SetBounds(pad, pad, Width - pad * 2, 24 * unit / 96);
+        Search.SetBounds(pad, heading.Bottom + 4 * unit / 96, Width - pad * 2, 24 * unit / 96);
+        Results.SetBounds(pad, Search.Bottom + 10 * unit / 96, Width - pad * 2, Math.Max(row, Height - Search.Bottom - pad - 10 * unit / 96));
+        Results.ItemHeight = row; empty.Bounds = Results.Bounds;
+        Controls.AddRange(new Control[] { heading, Search, Results, empty });
+        Results.DrawItem += delegate(object sender, DrawItemEventArgs e) {
+            if (e.Index < 0) return;
+            bool active = (e.State & DrawItemState.Selected) != 0;
+            using (var brush = new SolidBrush(active ? Color.FromArgb(226, 237, 247) : BackColor)) e.Graphics.FillRectangle(brush, e.Bounds);
+            string name = (string)Results.Items[e.Index]; bool isCurrent = String.Equals(name, current, StringComparison.OrdinalIgnoreCase);
+            Rectangle text = Rectangle.Inflate(e.Bounds, -8 * unit / 96, 0);
+            if (isCurrent) { int diameter = 5 * unit / 96; using (var brush = new SolidBrush(Color.FromArgb(40, 104, 168))) e.Graphics.FillEllipse(brush, text.Left, text.Top + (text.Height - diameter) / 2, diameter, diameter); }
+            text.X += 13 * unit / 96; text.Width -= 13 * unit / 96;
+            TextRenderer.DrawText(e.Graphics, Path.GetFileNameWithoutExtension(name), Font, text, ForeColor, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+        };
+        Results.MouseMove += delegate(object sender, MouseEventArgs e) { int index = Results.IndexFromPoint(e.Location); if (index >= 0 && Results.SelectedIndex != index) Results.SelectedIndex = index; };
+        Results.MouseUp += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && Results.IndexFromPoint(e.Location) >= 0) Choose(); };
+        Results.MouseDown += delegate(object sender, MouseEventArgs e) {
+            int index = Results.IndexFromPoint(e.Location);
+            if (e.Button == MouseButtons.Right && index >= 0) { Results.SelectedIndex = index; if (FileMenu != null) FileMenu((string)Results.Items[index], Results.PointToScreen(e.Location)); }
+        };
+        KeyEventHandler key = delegate(object sender, KeyEventArgs e) {
+            if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; if (ClosePopup != null) ClosePopup(); }
+            else if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Choose(); }
+            else if (sender == Search && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up)) { e.SuppressKeyPress = true; if (Results.Items.Count != 0) Results.SelectedIndex = Math.Max(0, Math.Min(Results.Items.Count - 1, Results.SelectedIndex + (e.KeyCode == Keys.Down ? 1 : -1))); }
+        };
+        Search.KeyDown += key; Results.KeyDown += key; Search.TextChanged += delegate { Filter(); }; Filter();
+    }
+    void Choose() { if (Results.SelectedItem != null && SelectFile != null) SelectFile((string)Results.SelectedItem); }
+    void Filter() {
+        Results.BeginUpdate(); Results.Items.Clear(); string query = Search.Text.Trim();
+        foreach (string file in files) if (file.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) Results.Items.Add(file);
+        int selected = Results.Items.IndexOf(current); Results.SelectedIndex = Results.Items.Count == 0 ? -1 : Math.Max(0, selected);
+        Results.EndUpdate(); empty.Visible = Results.Items.Count == 0; Results.Visible = !empty.Visible;
+        heading.Text = "最近便签 · " + Results.Items.Count;
     }
 }
 
 internal sealed class QuickNoteHeaderButton : Button {
     public bool IsPin;
+    internal string ActionIcon;
     public bool Pinned;
     bool hover;
     public QuickNoteHeaderButton() {
@@ -90,25 +342,108 @@ internal sealed class QuickNoteHeaderButton : Button {
                 e.Graphics.DrawLine(pen, cx - 5 * scale, cy + 2 * scale, cx + 5 * scale, cy + 2 * scale);
                 e.Graphics.DrawLine(pen, cx, cy + 2 * scale, cx, cy + 7 * scale);
                 if (!Pinned) e.Graphics.DrawLine(pen, cx - 7 * scale, cy + 7 * scale, cx + 7 * scale, cy - 7 * scale);
-            } else e.Graphics.DrawLine(pen, cx - 5 * scale, cy + 2 * scale, cx + 5 * scale, cy + 2 * scale);
+            } else if (ActionIcon == "close") {
+                e.Graphics.DrawLine(pen, cx - 4 * scale, cy - 4 * scale, cx + 4 * scale, cy + 4 * scale);
+                e.Graphics.DrawLine(pen, cx + 4 * scale, cy - 4 * scale, cx - 4 * scale, cy + 4 * scale);
+            } else {
+                e.Graphics.DrawLine(pen, cx - 5 * scale, cy, cx + 5 * scale, cy);
+                if (ActionIcon == "new") e.Graphics.DrawLine(pen, cx, cy - 5 * scale, cx, cy + 5 * scale);
+            }
         }
         if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4));
     }
 }
 
+internal sealed class QuickNoteTitle : Label {
+    protected override void OnPaint(PaintEventArgs e) {
+        e.Graphics.Clear(BackColor);
+        TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
+            TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+    }
+}
+
+internal sealed class QuickNoteFormatButton : Button {
+    internal string Format;
+    internal bool Active;
+    bool hover;
+    internal QuickNoteFormatButton() {
+        FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TabStop = true;
+        Size = new Size(34, 30); Margin = new Padding(0, 0, 2, 0);
+        BackColor = Color.FromArgb(250, 250, 248); ForeColor = Color.FromArgb(55, 75, 95);
+        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+        MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); };
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        e.Graphics.Clear(hover || Active ? Color.FromArgb(231, 239, 248) : BackColor);
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        float scale = DeviceDpi / 96f, x = Width / 2f, y = Height / 2f;
+        using (var pen = new Pen(Enabled ? ForeColor : SystemColors.GrayText, 1.4f * scale)) {
+            if (Format == "bullet") {
+                for (int row = -1; row <= 1; row++) {
+                    float yy = y + row * 5 * scale;
+                    e.Graphics.DrawEllipse(pen, x - 9 * scale, yy - scale, 2 * scale, 2 * scale);
+                    e.Graphics.DrawLine(pen, x - 3 * scale, yy, x + 8 * scale, yy);
+                }
+            } else if (Format == "location") {
+                e.Graphics.DrawLines(pen, new[] { new PointF(x - 6 * scale, y + 8 * scale), new PointF(x - 6 * scale, y - 8 * scale), new PointF(x + 2 * scale, y - 8 * scale), new PointF(x + 7 * scale, y - 3 * scale), new PointF(x + 7 * scale, y + 8 * scale), new PointF(x - 6 * scale, y + 8 * scale) });
+                e.Graphics.DrawLines(pen, new[] { new PointF(x + 2 * scale, y - 8 * scale), new PointF(x + 2 * scale, y - 3 * scale), new PointF(x + 7 * scale, y - 3 * scale) });
+                e.Graphics.DrawLine(pen, x - 3 * scale, y + 1 * scale, x + 4 * scale, y + 1 * scale);
+                e.Graphics.DrawLine(pen, x - 3 * scale, y + 4 * scale, x + 3 * scale, y + 4 * scale);
+            } else if (Format == "image") {
+                e.Graphics.DrawRectangle(pen, x - 9 * scale, y - 7 * scale, 18 * scale, 14 * scale);
+                e.Graphics.DrawEllipse(pen, x + 3 * scale, y - 4 * scale, 2 * scale, 2 * scale);
+                e.Graphics.DrawLines(pen, new[] { new PointF(x - 8 * scale, y + 5 * scale), new PointF(x - 3 * scale, y - scale), new PointF(x + 2 * scale, y + 4 * scale), new PointF(x + 5 * scale, y + scale), new PointF(x + 8 * scale, y + 5 * scale) });
+            } else {
+                FontStyle style = Format == "bold" ? FontStyle.Bold : Format == "italic" ? FontStyle.Italic : Format == "underline" ? FontStyle.Underline : FontStyle.Strikeout;
+                string label = Format == "bold" ? "B" : Format == "italic" ? "I" : Format == "underline" ? "U" : "ab";
+                using (var font = new Font("Segoe UI", 11, style)) TextRenderer.DrawText(e.Graphics, label, font, ClientRectangle, Enabled ? ForeColor : SystemColors.GrayText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+        }
+        if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
+    }
+}
+
 internal sealed class QuickNoteWindow : Form {
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] static extern bool HideCaret(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool ShowCaret(IntPtr hwnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll")] static extern int GetSystemMetricsForDpi(int index, uint dpi);
     readonly QuickNoteStore store;
     readonly string stateRoot;
     readonly QuickNoteInputBox editor;
     readonly NativeNoteDocument nativeDocument;
     readonly Label dateLabel;
+    readonly Panel top, body, viewport;
+    readonly QuickNoteHeaderButton newButton, hideButton, closeButton;
+    readonly PictureBox brand;
+    readonly QuickNoteScrollBar scroll;
+    readonly Timer hoverTimer = new Timer { Interval = 250 };
+    readonly Timer leaveTimer = new Timer { Interval = 300 };
+    readonly Dictionary<string, NoteView> views = new Dictionary<string, NoteView>(StringComparer.OrdinalIgnoreCase);
+    readonly List<string> recentFiles = new List<string>();
+    QuickNoteTabs tabs;
+    QuickNoteInputBox previewEditor;
+    NativeNoteDocument previewDocument;
+    string requestedFile, hoverFile, previewFile, lastSavedFile;
+    string deleteRequested;
+    bool createRequested, restoreLast, navigationRestored, previewBusy, previewVisible, previewOnHover = true;
+    int previewEpoch;
+    bool chromeVisible = true, statusShown, statusError;
+    bool tabsHaveSpace = true;
+    Rectangle imageDragStart, imageDragOutline;
+    int imageDragCp = -1, imageDragHandle;
+    bool previewCaretHidden;
+    internal Action<string> OpenImageFile = delegate(string path) { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); };
+    internal Func<string, bool> ConfirmDelete = null;
+    sealed class NoteView { public int Start, Length, X, Y; }
+    sealed class NavigationState { public string Last; public bool Preview = true; public Dictionary<string, NoteView> Views; }
     readonly LinkLabel status;
     readonly QuickNoteHeaderButton pin;
+    readonly Panel formatBar;
+    readonly QuickNoteFormatButton location;
     readonly Timer saveTimer = new Timer { Interval = 100 };
-    readonly Timer dayTimer = new Timer { Interval = 30000 };
-    readonly ToolTip tips = new ToolTip();
+    readonly ToolTip tips = new ToolTip { ShowAlways = true, InitialDelay = 300, ReshowDelay = 100, AutoPopDelay = 10000 };
     readonly System.ComponentModel.Container transientMenus = new System.ComponentModel.Container();
     QuickNoteDocument note;
     internal Exception LastLoadError { get; private set; }
@@ -148,49 +483,126 @@ internal sealed class QuickNoteWindow : Form {
         this.store = store; this.stateRoot = Path.GetFullPath(stateRoot); this.beforeStorageWork = beforeStorageWork;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         uiFont = new Font("Microsoft YaHei UI", 9); editorFont = new Font("Microsoft YaHei UI", 10.5f); Font = uiFont;
-        Text = "verbit · 速记"; Icon = MeetingBrand.IdleIcon; ShowInTaskbar = false; TopMost = true;
-        MaximizeBox = MinimizeBox = false; FormBorderStyle = FormBorderStyle.Sizable;
+        Text = "速记"; Icon = MeetingBrand.IdleIcon; ShowInTaskbar = false; TopMost = true;
+        MaximizeBox = false; MinimizeBox = true; FormBorderStyle = FormBorderStyle.None;
+        Padding = new Padding(4); SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer, true);
         ClientSize = new Size(360, 420); MinimumSize = new Size(280, 240);
         StartPosition = FormStartPosition.Manual; BackColor = Color.FromArgb(250, 250, 248);
-        var top = new Panel { Dock = DockStyle.Top, Height = 42, Padding = new Padding(14, 5, 8, 5), BackColor = BackColor };
-        dateLabel = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(36, 59, 83), AccessibleName = "速记日期" };
-        pin = new QuickNoteHeaderButton { Dock = DockStyle.Right, IsPin = true, Pinned = true, AccessibleName = "取消置顶" };
-        var hide = new QuickNoteHeaderButton { Dock = DockStyle.Right, AccessibleName = "保存并收起" };
-        tips.SetToolTip(pin, "取消置顶"); tips.SetToolTip(hide, "保存并收起 · Esc");
-        top.Controls.Add(dateLabel); top.Controls.Add(pin); top.Controls.Add(hide);
-        status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = Color.FromArgb(55, 96, 138), ActiveLinkColor = Color.FromArgb(40, 104, 168), AccessibleName = "速记保存位置与状态" };
-        editor = new QuickNoteInputBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = Color.FromArgb(36, 49, 68), Font = editorFont, AcceptsTab = true, WordWrap = true, ScrollBars = RichTextBoxScrollBars.Vertical, HideSelection = false, AllowDrop = true, AccessibleName = "速记正文", Name = "quick-note-editor", ReadOnly = true };
-        var body = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Padding = new Padding(14, 8, 14, 8) };
-        body.Controls.Add(editor); Controls.Add(body); Controls.Add(status); Controls.Add(top);
+        top = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = BackColor };
+        dateLabel = new QuickNoteTitle { TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, UseMnemonic = false, ForeColor = Color.FromArgb(36, 59, 83), AccessibleName = "当前便签文件名" };
+        brand = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Image = MeetingBrand.LogoBitmap(48), AccessibleName = "片言 Logo" };
+        newButton = new QuickNoteHeaderButton { ActionIcon = "new", AccessibleName = "新建便签", Name = "note-new" };
+        pin = new QuickNoteHeaderButton { IsPin = true, Pinned = true, AccessibleName = "取消置顶", Name = "note-pin" };
+        hideButton = new QuickNoteHeaderButton { AccessibleName = "最小化", Name = "note-minimize" };
+        closeButton = new QuickNoteHeaderButton { ActionIcon = "close", AccessibleName = "保存并关闭便签", Name = "note-close" };
+        tips.SetToolTip(newButton, "新建便签 · Ctrl+N"); tips.SetToolTip(pin, "取消置顶"); tips.SetToolTip(hideButton, "最小化"); tips.SetToolTip(closeButton, "保存并关闭便签 · Esc");
+        top.Controls.AddRange(new Control[] { newButton, brand, dateLabel, pin, hideButton, closeButton });
+        foreach (Control control in new Control[] { newButton, dateLabel, pin, hideButton, closeButton }) {
+            Control target = control;
+            target.MouseEnter += delegate { ShowFormatTip(target); };
+            target.MouseLeave += delegate { tips.Hide(target); };
+            target.MouseDown += delegate { tips.Hide(target); };
+        }
+        top.Layout += delegate { LayoutHeader(); };
+        status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Visible = false, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = Color.FromArgb(55, 96, 138), ActiveLinkColor = Color.FromArgb(40, 104, 168), AccessibleName = "速记保存提示" };
+        editor = new QuickNoteInputBox { BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = Color.FromArgb(36, 49, 68), Font = editorFont, AcceptsTab = true, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, HideSelection = false, AllowDrop = true, AccessibleName = "速记正文", Name = "quick-note-editor", ReadOnly = true };
+        body = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Padding = new Padding(14, 12, 4, 8) };
+        viewport = new Panel { Dock = DockStyle.Fill, BackColor = BackColor };
+        scroll = new QuickNoteScrollBar { Dock = DockStyle.Right, Width = 10, BackColor = BackColor, Target = editor };
+        viewport.Controls.Add(editor); body.Controls.Add(viewport); body.Controls.Add(scroll);
+        viewport.Resize += delegate { LayoutEditors(); };
+        editor.VScroll += delegate { CancelImageDrag(); scroll.Invalidate(); };
+        editor.HScroll += delegate { CancelImageDrag(); };
+        formatBar = new Panel { Dock = DockStyle.Bottom, Height = 38, BackColor = BackColor, AccessibleName = "速记格式工具栏", Enabled = false };
+        string[] formats = { "bold", "italic", "underline", "strike", "bullet", "image", "location" };
+        string[] labels = { "加粗 · Ctrl+B", "斜体 · Ctrl+I", "下划线 · Ctrl+U", "删除线 · Ctrl+Shift+X", "圆点列表 · Ctrl+Shift+L", "插入图片…", "保存位置与恢复选项" };
+        for (int index = 0; index < formats.Length; index++) {
+            string format = formats[index];
+            var button = new QuickNoteFormatButton { Format = format, Name = "format-" + format, AccessibleName = labels[index] };
+            tips.SetToolTip(button, labels[index]);
+            // Tracking tips remain visible above this topmost window, including
+            // when another application owns focus. No mouse polling/timer.
+            button.MouseEnter += delegate { ShowFormatTip(button); };
+            button.MouseLeave += delegate { tips.Hide(button); };
+            button.MouseDown += delegate { tips.Hide(button); };
+            button.Click += delegate { if (format == "location") ShowSaveMenu(); else ApplyFormat(format); }; formatBar.Controls.Add(button);
+        }
+        location = (QuickNoteFormatButton)formatBar.Controls["format-location"];
+        formatBar.Layout += delegate { LayoutFormatBar(); };
+        LayoutFormatBar();
+        formatBar.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Color.FromArgb(226, 230, 233))) e.Graphics.DrawLine(pen, 12, 0, formatBar.Width - 12, 0); };
+        Controls.Add(body); Controls.Add(status); Controls.Add(formatBar); Controls.Add(top);
+        // Keep the content's screen rectangle fixed while hiding chrome. A
+        // cropped native window region removes empty bands without reflowing
+        // RichEdit, moving the caret, or changing its scroll position.
+        top.Dock = body.Dock = formatBar.Dock = status.Dock = DockStyle.None;
         nativeDocument = new NativeNoteDocument(editor, null);
+        editor.ImagePointer = HandleImagePointer;
+        editor.PointerMoved = RevealForPointer;
+        editor.BeforeInput = delegate { if (previewVisible || hoverFile != null) CancelPreview(); };
+        editor.ImagePaint = delegate(Graphics graphics) {
+            if (imageDragCp < 0) return;
+            using (var pen = new Pen(Color.FromArgb(40, 104, 168), Math.Max(1, DeviceDpi / 96f))) {
+                pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+                graphics.DrawRectangle(pen, imageDragOutline);
+            }
+        };
         pin.Click += delegate { TopMost = !TopMost; pin.Pinned = TopMost; pin.AccessibleName = TopMost ? "取消置顶" : "置顶"; tips.SetToolTip(pin, pin.AccessibleName); pin.Invalidate(); SaveWindowState(); };
-        hide.Click += delegate { TryHide(); };
+        newButton.Click += delegate { NewNote(); };
+        hideButton.Click += delegate { CancelPreview(); RememberView(); SaveWindowState(); HideTabs(); WindowState = FormWindowState.Minimized; };
+        closeButton.Click += delegate { TryHide(); };
         // The verified native prototype uses Windows caption dragging. Keep
         // this path and leave the user's DragFullWindows setting untouched.
         MouseEventHandler drag = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xa1, new IntPtr(2), IntPtr.Zero); } };
-        top.MouseDown += drag; dateLabel.MouseDown += drag;
+        top.MouseDown += drag; brand.MouseDown += drag;
+        Point titlePress = Point.Empty;
+        dateLabel.MouseDown += delegate(object sender, MouseEventArgs e) { titlePress = e.Location; };
+        dateLabel.MouseMove += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && (Math.Abs(e.X - titlePress.X) >= SystemInformation.DragSize.Width || Math.Abs(e.Y - titlePress.Y) >= SystemInformation.DragSize.Height)) drag(sender, e); };
+        editor.MouseEnter += delegate { CancelPreview(); RevealForPointer(); };
+        editor.MouseLeave += delegate { ScheduleLeave(); };
+        top.MouseEnter += delegate { leaveTimer.Stop(); }; top.MouseLeave += delegate { ScheduleLeave(); };
+        MouseLeave += delegate { ScheduleLeave(); };
+        MouseMove += delegate(object sender, MouseEventArgs e) { if (body.Bounds.Contains(e.Location)) RevealForPointer(); };
+        dateLabel.Cursor = Cursors.Hand;
+        tips.SetToolTip(dateLabel, "点击切换便签");
+        dateLabel.Click += delegate { ShowRecentMenu(); };
+        Move += delegate { EraseImageOutline(); PositionTabs(); }; Resize += delegate { CancelImageDrag(); LayoutChrome(); if (tabs != null && tabs.Visible) { UpdateTabs(); PositionTabs(); } };
+        VisibleChanged += delegate { if (!Visible) { CancelPreview(); HideTabs(); } };
+        Deactivate += delegate { CancelImageDrag(); if (tabs == null || !tabs.Bounds.Contains(Cursor.Position)) { CancelPreview(); HideTabs(); UpdateChromeForPointer(Cursor.Position); } };
+        hoverTimer.Tick += delegate { hoverTimer.Stop(); StartPreview(); };
+        leaveTimer.Tick += delegate {
+            leaveTimer.Stop();
+            UpdateChromeForPointer(Cursor.Position);
+            if (tabs != null && tabs.Visible && tabs.Bounds.Contains(Cursor.Position)) return;
+            CancelPreview();
+            if (!Visible || WindowState == FormWindowState.Minimized || !Bounds.Contains(Cursor.Position)) HideTabs();
+        };
         editor.TextChanged += delegate {
             if (loading) return;
-            editVersion++; if (!dirty) SetStatus("正在输入…", false);
-            dirty = true; failedText = null; ScheduleSave();
+            editVersion++;
+            dirty = true; failedText = null; ScheduleSave(); scroll.Invalidate();
         };
-        editor.CompositionChanged = delegate(bool active) { composing = active; if (active) saveTimer.Stop(); else if (dirty) ScheduleSave(); else if (completedImage != null) saveTimer.Start(); };
+        editor.SelectionChanged += delegate { if (imageDragCp >= 0 && (editor.SelectionStart != imageDragCp || editor.SelectionLength != 1)) CancelImageDrag(); RefreshFormatButtons(); };
+        editor.ReadOnlyChanged += delegate { formatBar.Enabled = !editor.ReadOnly && !IsComposing; };
+        editor.CompositionChanged = delegate(bool active) { composing = active; formatBar.Enabled = !editor.ReadOnly && !active; if (active) saveTimer.Stop(); else if (dirty) ScheduleSave(); else if (completedImage != null) saveTimer.Start(); };
         editor.HandleKey = delegate(Keys keys) { var e = new KeyEventArgs(keys); EditorKeyDown(editor, e); return e.Handled; };
         editor.UserPaste = PasteFromClipboard; editor.UserCopyOrCut = CopyOrCut;
-        editor.UserContextMenu = ShowEditorMenu; editor.UndoOrRedo = CancelPendingImages;
-        editor.InsertNewline = delegate { try { nativeDocument.InsertText(newline); } catch (Exception error) { SetStatus("无法插入换行：" + error.Message, true); } };
+        editor.UserContextMenu = ShowEditorMenu; editor.UndoOrRedo = delegate {
+            CancelPendingImages();
+            if (!loading && !editor.ReadOnly) { editVersion++; dirty = true; failedText = null; ScheduleSave(); }
+        };
+        editor.InsertNewline = InsertEditorNewline;
         editor.DragEnter += EditorDragOver; editor.DragOver += EditorDragOver; editor.DragDrop += Drop;
         saveTimer.Tick += delegate {
             if (completedImage != null) { if (IsComposing) return; CompleteImageWork(); }
             if (!IsComposing && dirty && (System.Diagnostics.Stopwatch.GetTimestamp() - lastEditStamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency >= 500) { saveTimer.Stop(); Flush(); }
             else if (!dirty) saveTimer.Stop();
         };
-        dayTimer.Tick += delegate { if (Visible && !IsComposing && note != null && noteDate.Date != DateTime.Today) LoadToday(); };
         status.LinkClicked += delegate { ShowSaveMenu(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) { if (!closeAllowed) { e.Cancel = true; TryHide(); } };
         ResizeEnd += delegate { SaveWindowState(); };
         Shown += delegate { editor.Focus(); };
-        dayTimer.Start();
+        ObserveHover(this); LayoutChrome(); LayoutHeader(); LayoutEditors();
     }
     protected override void OnLoad(EventArgs e) {
         base.OnLoad(e);
@@ -199,30 +611,41 @@ internal sealed class QuickNoteWindow : Form {
     }
     public void Toggle() {
         if (IsDisposed) return;
+        if (WindowState == FormWindowState.Minimized) { WindowState = FormWindowState.Normal; Show(); Activate(); editor.Focus(); return; }
         if (Visible) { TryHide(); return; }
         try {
             hideRequested = false;
-            if (note == null || noteDate.Date != DateTime.Today || (!dirty && !workerBusy)) LoadToday();
-            Show(); Activate(); editor.Focus();
+            if (note == null) LoadLastNote();
+            else if (!dirty && !workerBusy) RequestNote(Path.GetFileName(notePath), false);
+            Show(); Activate(); editor.Focus(); UpdateChromeForPointer(Cursor.Position);
         } catch (Exception error) { if (note == null) editor.ReadOnly = true; SetStatus("无法载入速记：" + error.Message, true); Show(); Activate(); }
     }
     public bool FlushAndClose() { return FlushAndClose(null); }
     public bool FlushAndClose(Action onReady) {
         if (IsDisposed) return true;
         if (IsComposing) { SetStatus("请先完成输入法中的文字，再退出。", true); return false; }
-        closeRequested = true; hideRequested = false;
+        CancelPreview(); HideTabs(); closeRequested = true; hideRequested = false;
         if (closeContinuation == null) closeContinuation = onReady;
         if (Flush()) { FinishClose(false); return true; }
         return false;
     }
     void TryHide() {
         if (IsComposing) return;
+        CancelPreview(); HideTabs();
         hideRequested = true;
         if (Flush()) { hideRequested = false; SaveWindowState(); Hide(); }
     }
     void LoadToday() {
+        RequestNote(null, false);
+    }
+    void RequestNote(string file, bool create) {
+        CancelImageDrag();
         if (IsComposing || loadRequested || reloadRequested || (editor.ReadOnly && workerBusy)) return;
+        if (queuedImageCount != 0) { SetStatus("图片正在插入，请稍后切换便签。", false); return; }
+        CancelPreview(); RememberView();
         if (dirty && !CaptureSave()) return;
+        if (note != null && note.Revision == "missing" && !dirty) recentFiles.Remove(Path.GetFileName(notePath));
+        requestedFile = file; createRequested = create;
         loadRequested = true; editor.ReadOnly = true; DrainWork();
     }
     void ApplyLoaded(QuickNoteDocument next, string text, NativeNotePrepared prepared, bool recoveryConflict, bool fromReload) {
@@ -242,9 +665,11 @@ internal sealed class QuickNoteWindow : Form {
             editor.ReadOnly = false; dirty = !fromReload && next.HasRecovery && !recoveryConflict;
             failedText = null; editVersion++; savedVersion = dirty ? editVersion - 1 : editVersion;
             editor.Select(editor.TextLength, 0);
+            RestoreView();
         } catch { editor.ReadOnly = true; throw; }
         finally { loading = false; }
-        dateLabel.Text = next.Date.ToString("M月d日 dddd"); tips.SetToolTip(dateLabel, next.Path);
+        RefreshFormatButtons();
+        TouchRecent(Path.GetFileName(next.Path)); UpdateTitle(); UpdateTabs(); scroll.Invalidate();
         if (fromReload) SetStatus("已载入磁盘版本；原输入另存为恢复草稿", false);
         else if (recoveryConflict) SetStatus("另有未合并草稿，点击查看；磁盘内容未改动", true);
         else { SetSavedStatus(); if (dirty) ScheduleSave(); }
@@ -278,10 +703,15 @@ internal sealed class QuickNoteWindow : Form {
             return false;
         }
     }
-    void CacheNoteMetadata() { if (note != null) { notePath = note.Path; noteDate = note.Date; recoveryPath = note.HasRecovery ? note.RecoveryPath : null; } }
+    void CacheNoteMetadata() {
+        if (note == null) return;
+        notePath = note.Path; noteDate = note.Date; recoveryPath = note.HasRecovery ? note.RecoveryPath : null;
+        if (note.Revision != "missing" || note.HasRecovery) lastSavedFile = Path.GetFileName(note.Path);
+    }
     void DrainWork() {
         if (workerBusy || IsDisposed) return;
         if (imageQueue.Count > 0) { StartImageWork(imageQueue.Dequeue()); return; }
+        if (pendingText == null && deleteRequested != null) { StartDeleteWork(); return; }
         if (pendingText == null && !reloadRequested && !loadRequested) { FinishRequests(); return; }
         bool save = pendingText != null, reload = !save && reloadRequested;
         string text = save ? pendingText : reloadText; long version = pendingVersion;
@@ -293,22 +723,32 @@ internal sealed class QuickNoteWindow : Form {
         } else loadRequested = false;
         QuickNoteDocument document = note;
         DateTime date = DateTime.Today;
+        string file = requestedFile; bool create = createRequested, fallback = restoreLast;
+        if (!save) { createRequested = false; restoreLast = false; }
         string priorArchiveSource = archivedRecoverySource, priorArchiveText = archivedRecoveryText;
         IntPtr dispatcherHandle = Handle;
         workerBusy = true;
         System.Threading.ThreadPool.QueueUserWorkItem(delegate {
             Exception failure = null; bool conflict = false; string archive = null;
-            QuickNoteDocument result = document; string loadedText = null; NativeNotePrepared prepared = null;
+            QuickNoteDocument result = document; string loadedText = null; NativeNotePrepared prepared = null; string[] discovered = null;
             try {
                 if (beforeStorageWork != null) beforeStorageWork();
-                if (save) { store.SaveRecovery(document, text); store.Save(document, text); }
+                if (save) {
+                    if (text.Length != 0 || document.Revision != "missing") { store.SaveRecovery(document, text); store.Save(document, text); }
+                }
                 else {
                     if (reload) archive = store.ArchiveRecovery(document, text);
-                    result = store.Load(date); loadedText = result.Text;
+                    result = reload ? store.LoadFile(Path.GetFileName(document.Path)) : create ? store.NewNote() : file == null ? store.Load(date) : store.LoadFile(file);
+                    if (!reload && !create && file != null && result.Revision == "missing" && !result.HasRecovery) {
+                        if (fallback) result = store.Load(date);
+                        else throw new FileNotFoundException("此便签已被移动或删除，当前内容保持不变。", file);
+                    }
+                    loadedText = result.Text;
                     conflict = result.HasRecovery && !string.Equals(result.RecoveryRevision, result.Revision, StringComparison.Ordinal);
                     if (!reload && result.HasRecovery && !conflict) loadedText = result.RecoveryText;
                     if (!reload && conflict && (priorArchiveSource != result.Path || priorArchiveText != result.RecoveryText)) archive = store.ArchiveRecovery(result, result.RecoveryText);
                     prepared = NativeNoteDocument.PrepareLoad(loadedText, ResolvePreview);
+                    discovered = store.RecentFiles();
                 }
             } catch (Exception error) { failure = error; }
             try { BeginInvoke((Action)delegate {
@@ -317,18 +757,26 @@ internal sealed class QuickNoteWindow : Form {
                 // without rebinding visible text to the newly loaded revision.
                 if (archive != null) { archivedRecovery = archive; archivedRecoverySource = reload ? document.Path : result.Path; archivedRecoveryText = reload ? text : result.RecoveryText; }
                 if (failure != null) {
+                    deleteRequested = null;
                     if (!save) { LastLoadError = failure; CacheLoadFailureRecovery(result, archive); }
                     failedText = save ? text : reload ? text : failedText;
                     hideRequested = closeRequested = false; closeContinuation = null;
                     if (save) { CacheNoteMetadata(); loadRequested = false; if (!reloadRequested) editor.ReadOnly = false; }
-                    else editor.ReadOnly = true;
+                    else editor.ReadOnly = note == null || reload || file == null || String.Equals(file, Path.GetFileName(notePath), StringComparison.OrdinalIgnoreCase);
                     SetStatus(failure is QuickNoteConflictException ? "外部内容已变化；草稿保留，点击处理" : "保存或载入失败，原文件未改动；点击查看恢复方式", true);
                     tips.SetToolTip(status, failure.Message);
                 } else if (save) {
                     CacheNoteMetadata(); savedVersion = Math.Max(savedVersion, version); dirty = editVersion != savedVersion;
+                    if (document.Revision == "missing" && text.Length == 0) { recentFiles.Remove(Path.GetFileName(document.Path)); UpdateTabs(); }
                     if (!dirty) { failedText = null; SetSavedStatus(); }
                 } else {
-                    try { ApplyLoaded(result, loadedText, prepared, conflict, reload); }
+                    try {
+                        if (discovered != null) {
+                            recentFiles.RemoveAll(delegate(string name) { return Array.IndexOf(discovered, name) < 0; });
+                            foreach (string name in discovered) if (!recentFiles.Contains(name)) recentFiles.Add(name);
+                        }
+                        ApplyLoaded(result, loadedText, prepared, conflict, reload);
+                    }
                     catch (Exception error) {
                         LastLoadError = error;
                         CacheLoadFailureRecovery(result, archive);
@@ -355,16 +803,22 @@ internal sealed class QuickNoteWindow : Form {
         SaveWindowState(); closeAllowed = true; Close(); if (!IsDisposed) Dispose();
         if (continueExit && continuation != null) continuation();
     }
-    void SetStatus(string message, bool error) {
+    void SetStatus(string message, bool error, bool show = true) {
         status.Text = message; status.LinkColor = error ? Color.FromArgb(155, 73, 33) : Color.FromArgb(55, 96, 138);
+        statusShown = show; statusError = error && show;
+        if (statusError) SetChromeVisible(true);
+        LayoutChrome();
+        location.ForeColor = error ? Color.FromArgb(155, 73, 33) : Color.FromArgb(55, 75, 95); location.Invalidate();
         status.AccessibleName = message;
         string tip = !error && notePath != null ? notePath : message;
         if (!error && nativeDocument.TextImageFallback) tip += "\n图片较多，部分图片以 Markdown 引用显示；原图已保留。";
         tips.SetToolTip(status, tip);
+        tips.SetToolTip(location, message + (notePath == null ? "" : "\n" + notePath));
     }
     void SetSavedStatus() {
         string folder = Path.GetFileName(store.FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        SetStatus(folder + " / " + Path.GetFileName(notePath), false);
+        SetStatus(folder + " / " + Path.GetFileName(notePath), false, false);
+        tips.SetToolTip(location, "保存位置与恢复选项\n" + notePath);
     }
     void OpenFolder() {
         try {
@@ -374,15 +828,26 @@ internal sealed class QuickNoteWindow : Form {
     }
     void ShowSaveMenu() {
         var menu = CreateTransientMenu();
+        var hoverOption = new ToolStripMenuItem("悬停标签预览内容") { Checked = previewOnHover, CheckOnClick = true };
+        hoverOption.Click += delegate { previewOnHover = hoverOption.Checked; if (!previewOnHover) CancelPreview(); SaveWindowState(); };
+        menu.Items.Add(hoverOption);
         menu.Items.Add("打开速记文件夹", null, delegate { OpenFolder(); });
         menu.Items.Add("复制当前内容", null, delegate { try { string text = ReadMarkdown(); if (text.Length > 0) Clipboard.SetText(text); } catch (Exception error) { SetStatus("无法复制：" + error.Message, true); } });
         string draftPath = loadFailureRecoveryPath ?? archivedRecovery ?? recoveryPath;
         if (!string.IsNullOrEmpty(draftPath)) menu.Items.Add("打开草稿所在文件夹", null, delegate { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + draftPath.Replace("\"", "") + "\""); } catch (Exception error) { tips.SetToolTip(status, error.Message); } });
         if (note != null && failedText != null) menu.Items.Add("保留草稿并载入磁盘版本", null, delegate { ReloadDiskKeepingDraft(); });
-        menu.Show(status, new Point(0, status.Height));
+        menu.Show(location, new Point(location.Width, 0), ToolStripDropDownDirection.AboveLeft);
     }
     void ShowEditorMenu() {
         var menu = CreateTransientMenu();
+        if (!editor.ReadOnly && !IsComposing && !nativeDocument.SelectedImageBounds().IsEmpty) {
+            menu.Items.Add("图片适合窗口", null, delegate { Rectangle picture = nativeDocument.SelectedImageBounds(); if (!picture.IsEmpty) ScaleImage(Math.Max(16, viewport.Width - Math.Max(0, picture.Left) - 10) / (double)picture.Width); });
+            menu.Items.Add("等比例放大", null, delegate { ScaleImage(1.25); });
+            menu.Items.Add("等比例缩小", null, delegate { ScaleImage(.8); });
+            menu.Items.Add("恢复原图比例", null, delegate { Rectangle picture = nativeDocument.SelectedImageBounds(); if (!picture.IsEmpty) ResizeImageTo((int)Math.Round(picture.Width * 96.0 / DeviceDpi / editor.ZoomFactor)); });
+            menu.Items.Add("查看原图", null, delegate { OpenSelectedImage(); });
+            menu.Items.Add(new ToolStripSeparator());
+        }
         menu.Items.Add("撤销", null, delegate { CancelPendingImages(); editor.Undo(); }).Enabled = !editor.ReadOnly && editor.CanUndo;
         menu.Items.Add("重做", null, delegate { CancelPendingImages(); editor.Redo(); }).Enabled = !editor.ReadOnly && editor.CanRedo;
         menu.Items.Add(new ToolStripSeparator());
@@ -393,12 +858,13 @@ internal sealed class QuickNoteWindow : Form {
         menu.Show(editor, editor.PointToClient(Cursor.Position));
     }
     ContextMenuStrip CreateTransientMenu() {
+        SetChromeVisible(true); leaveTimer.Stop();
         var menu = new ContextMenuStrip(transientMenus) { Font = Font, RenderMode = ToolStripRenderMode.System };
         menu.Closed += delegate {
             // WinForms still uses the menu handle after Closed returns.
             // The container owns cleanup if the host closes before this runs.
             if (IsDisposed || Disposing || !IsHandleCreated) return;
-            try { BeginInvoke((Action)delegate { if (!menu.IsDisposed) menu.Dispose(); }); }
+            try { BeginInvoke((Action)delegate { if (!menu.IsDisposed) menu.Dispose(); ScheduleLeave(); }); }
             catch (InvalidOperationException) { }
         };
         return menu;
@@ -412,9 +878,92 @@ internal sealed class QuickNoteWindow : Form {
         editor.ReadOnly = true; DrainWork();
     }
     void EditorKeyDown(object sender, KeyEventArgs e) {
-        if (e.KeyCode == Keys.Escape && !IsComposing) { e.Handled = true; TryHide(); return; }
+        if (e.KeyCode == Keys.Escape && !IsComposing) { e.Handled = true; if (imageDragCp >= 0) CancelImageDrag(); else TryHide(); return; }
+        if (e.KeyData == (Keys.Control | Keys.N)) { e.Handled = true; NewNote(); return; }
+        string format = e.KeyData == (Keys.Control | Keys.B) ? "bold" : e.KeyData == (Keys.Control | Keys.I) ? "italic" : e.KeyData == (Keys.Control | Keys.U) ? "underline" : e.KeyData == (Keys.Control | Keys.Shift | Keys.X) ? "strike" : e.KeyData == (Keys.Control | Keys.Shift | Keys.L) ? "bullet" : null;
+        if (format != null) { e.Handled = true; ApplyFormat(format); return; }
         if (e.Control && (e.KeyCode == Keys.B || e.KeyCode == Keys.I || e.KeyCode == Keys.U || e.KeyCode == Keys.E || e.KeyCode == Keys.L || e.KeyCode == Keys.R)) e.Handled = true;
         if (e.Control && e.KeyCode == Keys.S) { e.Handled = true; Flush(); }
+    }
+    void LayoutFormatBar() {
+        // Bounds are already WinForms-scaled; do not apply DPI a second time.
+        int height = formatBar.ClientSize.Height, inset = 10 * height / 38, top = 4 * height / 38;
+        int count = formatBar.Controls.Count;
+        int width = Math.Min(height - 2 * top, Math.Max(1, (formatBar.ClientSize.Width - 2 * inset) / Math.Max(1, count)));
+        int span = Math.Max(0, formatBar.ClientSize.Width - 2 * inset - width);
+        for (int i = 0; i < count; i++) formatBar.Controls[i].Bounds = new Rectangle(inset + (count < 2 ? 0 : (int)Math.Round((double)span * i / (count - 1))), top, width, height - 2 * top);
+    }
+    void ShowFormatTip(Control button) {
+        string text = tips.GetToolTip(button);
+        Rectangle area = Screen.FromControl(button).WorkingArea;
+        Size content;
+        using (Graphics graphics = button.CreateGraphics())
+            content = TextRenderer.MeasureText(graphics, text, SystemFonts.StatusFont, new Size(Math.Max(1, area.Width / 2), int.MaxValue), TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak);
+        // Measure every line, including long paths. The native tooltip adds
+        // themed padding; keep that and a gap outside the whole hover target.
+        int gap = 8 * DeviceDpi / 96, height = content.Height + 12 * DeviceDpi / 96;
+        int y = button.PointToScreen(Point.Empty).Y - height - gap < area.Top ? button.Height + gap : -height - gap;
+        tips.Show(text, button, new Point(0, y), 10000);
+    }
+    void InsertEditorNewline() {
+        if (editor.ReadOnly || IsComposing) return;
+        try {
+            // Use native line boundaries: wrapping is visual, not a new item.
+            // Only Enter inspects the line; ordinary typing stays native.
+            string raw = nativeDocument.RawText(); int start = editor.SelectionStart, end = start + editor.SelectionLength;
+            int first = start; while (first > 0 && !IsLineBreak(raw[first - 1])) first--;
+            int last = end; while (last < raw.Length && !IsLineBreak(raw[last])) last++;
+            bool bullet = first + 2 <= raw.Length && raw.Substring(first, 2) == "\u2022 " && start >= first + 2 && (ModifierKeys & Keys.Shift) == 0;
+            for (int cp = start; bullet && cp < end; cp++) if (IsLineBreak(raw[cp])) bullet = false;
+            if (bullet && raw.Substring(first + 2, last - first - 2).Trim().Length == 0) {
+                nativeDocument.EditCollection(delegate { editor.Select(first, last - first); editor.SelectedText = ""; });
+            } else nativeDocument.InsertText(newline + (bullet ? "\u2022 " : ""));
+        } catch (Exception error) { SetStatus("无法插入换行：" + error.Message, true); }
+    }
+    static bool IsLineBreak(char character) { return character == '\r' || character == '\n' || character == '\v'; }
+    void RefreshFormatButtons() {
+        if (IsDisposed || Disposing || loading || editor.ReadOnly || nativeDocument == null) return;
+        int style = nativeDocument.SelectionStyle;
+        foreach (QuickNoteFormatButton button in formatBar.Controls) {
+            int bit = button.Format == "bold" ? 1 : button.Format == "italic" ? 2 : button.Format == "underline" ? 4 : button.Format == "strike" ? 8 : 0;
+            bool active = bit != 0 && (style & bit) != 0;
+            if (button.Active != active) { button.Active = active; button.Invalidate(); }
+        }
+    }
+    void ApplyFormat(string format) {
+        if (editor.ReadOnly || IsComposing || note == null) return;
+        try {
+            if (format == "image") {
+                using (var dialog = new OpenFileDialog { Title = "插入图片", Filter = "图片文件|*.png;*.jpg;*.jpeg;*.gif;*.bmp", Multiselect = false, CheckFileExists = true }) {
+                    if (dialog.ShowDialog(this) == DialogResult.OK) InsertImageFile(dialog.FileName);
+                }
+                editor.Focus(); return;
+            }
+            if (format == "bullet") {
+                string raw = nativeDocument.RawText(); int start = editor.SelectionStart, end = start + editor.SelectionLength;
+                int first = start; while (first > 0 && raw[first - 1] != '\r' && raw[first - 1] != '\v' && raw[first - 1] != '\n') first--;
+                int last = end;
+                if (last > start && (raw[last - 1] == '\r' || raw[last - 1] == '\v' || raw[last - 1] == '\n')) last--;
+                while (last < raw.Length && raw[last] != '\r' && raw[last] != '\v' && raw[last] != '\n') last++;
+                var lines = new List<int>(); lines.Add(first);
+                for (int cp = first; cp < last; cp++) if (raw[cp] == '\r' || raw[cp] == '\v' || raw[cp] == '\n') lines.Add(cp + 1);
+                bool remove = true;
+                foreach (int cp in lines) if (cp + 2 > raw.Length || raw.Substring(cp, 2) != "\u2022 ") { remove = false; break; }
+                if (!remove && (long)raw.Length + 2L * lines.Count > NativeNoteDocument.MaxTextLength) throw new IOException("正文已达速记长度上限。");
+                nativeDocument.EditCollection(delegate {
+                    for (int index = lines.Count - 1; index >= 0; index--) { editor.Select(lines[index], remove ? 2 : 0); editor.SelectedText = remove ? "" : "\u2022 "; }
+                });
+                if (start == end) editor.Select(Math.Max(first, start + (remove ? -Math.Min(2, start - first) : 2)), 0);
+                else editor.Select(first, Math.Max(0, last - first + (remove ? -2 : 2) * lines.Count));
+            } else {
+                int bit = format == "bold" ? 1 : format == "italic" ? 2 : format == "underline" ? 4 : format == "strike" ? 8 : 0;
+                if (bit == 0) return;
+                nativeDocument.ToggleStyle(bit);
+            }
+            // RichEdit font-only changes do not reliably raise TextChanged.
+            editVersion++; dirty = true; failedText = null; ScheduleSave();
+            RefreshFormatButtons(); editor.Focus();
+        } catch (Exception error) { SetStatus("无法应用格式：" + error.Message, true); }
     }
     void CopyOrCut(bool cut) {
         if (editor.SelectionLength == 0 || IsComposing || (cut && editor.ReadOnly)) return;
@@ -594,11 +1143,15 @@ internal sealed class QuickNoteWindow : Form {
         DrainWork();
     }
     void SaveWindowState() {
-        if (!Visible || WindowState != FormWindowState.Normal) return;
+        RememberView();
         try {
             Directory.CreateDirectory(stateRoot);
             string value = Bounds.X + "," + Bounds.Y + "," + Bounds.Width + "," + Bounds.Height + "," + (TopMost ? "1" : "0");
-            File.WriteAllText(Path.Combine(stateRoot, "quick-note-window.txt"), value, new UTF8Encoding(false));
+            if (Visible && WindowState == FormWindowState.Normal) File.WriteAllText(Path.Combine(stateRoot, "quick-note-window.txt"), value, new UTF8Encoding(false));
+            var state = new NavigationState { Last = lastSavedFile, Preview = previewOnHover, Views = views };
+            string target = NavigationPath, temporary = target + ".tmp";
+            File.WriteAllText(temporary, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(state), new UTF8Encoding(false));
+            if (File.Exists(target)) File.Replace(temporary, target, null); else File.Move(temporary, target);
         } catch { }
     }
     void RestoreWindowState() {
@@ -625,7 +1178,12 @@ internal sealed class QuickNoteWindow : Form {
     }
     protected override void Dispose(bool disposing) {
         if (disposing) {
-            saveTimer.Dispose(); dayTimer.Dispose(); tips.Dispose(); transientMenus.Dispose();
+            CancelImageDrag(); if (previewCaretHidden) { ShowCaret(editor.Handle); previewCaretHidden = false; }
+            editor.ImagePointer = null; editor.ImagePaint = null; editor.PointerMoved = null; editor.BeforeInput = null;
+            saveTimer.Dispose(); hoverTimer.Dispose(); leaveTimer.Dispose(); tips.Dispose(); transientMenus.Dispose();
+            if (tabs != null) tabs.Dispose();
+            if (previewDocument != null) previewDocument.Dispose();
+            if (brand.Image != null) { brand.Image.Dispose(); brand.Image = null; }
             while (imageQueue.Count > 0) ReleaseImage(imageQueue.Dequeue());
             if (completedImage != null) { ReleaseImage(completedImage); completedImage = null; }
             ClearImageAnchors(); nativeDocument.Dispose();
@@ -633,6 +1191,397 @@ internal sealed class QuickNoteWindow : Form {
             if (editorFont != null) { editorFont.Dispose(); editorFont = null; }
         }
         base.Dispose(disposing);
+    }
+
+    string NavigationPath {
+        get {
+            string key;
+            using (var hash = System.Security.Cryptography.SHA256.Create()) key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(store.FolderPath.ToUpperInvariant()))).Replace("-", "").Substring(0, 16);
+            return Path.Combine(stateRoot, "quick-note-files-" + key + ".json");
+        }
+    }
+    void LoadLastNote() {
+        string last = null;
+        if (!navigationRestored) {
+            navigationRestored = true;
+            try {
+                string path = NavigationPath;
+                if (new FileInfo(path).Length <= 65536) {
+                    var state = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<NavigationState>(File.ReadAllText(path));
+                    if (state != null) {
+                        previewOnHover = state.Preview; last = state.Last; lastSavedFile = last;
+                        if (state.Views != null) foreach (var entry in state.Views) {
+                            if (views.Count == 50) break;
+                            if (entry.Value != null && entry.Key == Path.GetFileName(entry.Key)) views[entry.Key] = entry.Value;
+                        }
+                    }
+                }
+            } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
+        }
+        if (last != null && (last != Path.GetFileName(last) || !last.EndsWith(".md", StringComparison.OrdinalIgnoreCase))) last = null;
+        restoreLast = true; RequestNote(last, false);
+    }
+    void NewNote() { RequestNote(null, true); }
+    void RememberView() {
+        if (notePath == null || loading) return;
+        Point position = QuickNoteScrollBar.Position(editor);
+        string name = Path.GetFileName(notePath);
+        if (!views.ContainsKey(name) && views.Count >= 50) views.Remove(new List<string>(views.Keys)[0]);
+        views[name] = new NoteView { Start = editor.SelectionStart, Length = editor.SelectionLength, X = position.X, Y = position.Y };
+    }
+    void RestoreView() {
+        NoteView view;
+        if (notePath == null || !views.TryGetValue(Path.GetFileName(notePath), out view)) return;
+        int start = Math.Min(editor.TextLength, Math.Max(0, view.Start));
+        editor.Select(start, Math.Min(editor.TextLength - start, Math.Max(0, view.Length)));
+        QuickNoteScrollBar.SetPosition(editor, new Point(Math.Max(0, view.X), Math.Max(0, view.Y)));
+    }
+    void TouchRecent(string name) {
+        if (recentFiles.Exists(delegate(string value) { return String.Equals(value, name, StringComparison.OrdinalIgnoreCase); })) return;
+        recentFiles.Insert(0, name); if (recentFiles.Count > 50) recentFiles.RemoveRange(50, recentFiles.Count - 50);
+    }
+    void UpdateTitle() {
+        string file = previewVisible ? previewFile : notePath == null ? null : Path.GetFileName(notePath);
+        dateLabel.Text = (file ?? "新便签") + (previewVisible ? " · 预览" : "");
+        Text = file ?? "速记"; tips.SetToolTip(dateLabel, dateLabel.Text); LayoutHeader();
+    }
+    void LayoutHeader() {
+        if (closeButton == null || brand == null) return;
+        int h = top.Height, unit = Math.Max(24, h - 8), y = (h - unit) / 2, pad = Math.Max(4, h / 8);
+        newButton.Bounds = new Rectangle(pad, y, unit, unit);
+        closeButton.Bounds = new Rectangle(top.Width - pad - unit, y, unit, unit);
+        hideButton.Bounds = new Rectangle(closeButton.Left - unit, y, unit, unit);
+        pin.Bounds = new Rectangle(hideButton.Left - unit, y, unit, unit);
+        int left = newButton.Right + pad, available = Math.Max(0, pin.Left - pad - left), icon = h / 2;
+        int textWidth = Math.Min(Math.Max(0, available - icon - pad), TextRenderer.MeasureText(dateLabel.Text, dateLabel.Font).Width);
+        int x = left + Math.Max(0, (available - icon - pad - textWidth) / 2);
+        brand.Bounds = new Rectangle(x, (h - icon) / 2, icon, icon);
+        dateLabel.Bounds = new Rectangle(x + icon + pad, y, textWidth, unit);
+    }
+    void LayoutChrome() {
+        if (Disposing || IsDisposed || body == null || formatBar == null) return;
+        Rectangle area = DisplayRectangle;
+        top.Bounds = new Rectangle(area.Left, area.Top, area.Width, top.Height);
+        formatBar.Bounds = new Rectangle(area.Left, area.Bottom - formatBar.Height, area.Width, formatBar.Height);
+        status.Bounds = new Rectangle(area.Left, formatBar.Top - status.Height, area.Width, status.Height);
+        body.Bounds = Rectangle.FromLTRB(area.Left, top.Bottom, area.Right, statusShown ? status.Top : formatBar.Top);
+        top.Visible = formatBar.Visible = chromeVisible;
+        status.Visible = chromeVisible && statusShown;
+        Region old = Region;
+        Region = chromeVisible ? null : new Region(Rectangle.Inflate(body.Bounds, Padding.Left, 0));
+        if (old != null) old.Dispose();
+    }
+    void SetChromeVisible(bool visible) {
+        if (chromeVisible == visible) return;
+        chromeVisible = visible;
+        if (!visible) { tips.Hide(status); foreach (Control c in top.Controls) tips.Hide(c); foreach (Control c in formatBar.Controls) tips.Hide(c); }
+        LayoutChrome();
+    }
+    void UpdateChromeForPointer(Point screen) {
+        bool held = statusError || imageDragCp >= 0 || editor.Capture;
+        foreach (System.ComponentModel.Component component in transientMenus.Components) {
+            var menu = component as ContextMenuStrip; if (menu != null && menu.Visible) held = true;
+        }
+        SetChromeVisible(held || Visible && WindowState == FormWindowState.Normal &&
+            (Bounds.Contains(screen) || tabs != null && tabs.Visible && tabs.Bounds.Contains(screen)));
+    }
+    void LayoutEditors() {
+        if (viewport == null) return;
+        // Clip the native scrollbar offscreen. RichEdit keeps its native wheel,
+        // IME and scrolling range; only the narrow external thumb is painted.
+        Rectangle bounds = new Rectangle(0, 0, viewport.Width + GetSystemMetricsForDpi(2, (uint)DeviceDpi), viewport.Height);
+        editor.Bounds = bounds; if (previewEditor != null) previewEditor.Bounds = bounds;
+        if (scroll != null) scroll.Invalidate();
+    }
+    void ScaleImage(double scale) {
+        Rectangle bounds = nativeDocument.SelectedImageBounds();
+        if (!bounds.IsEmpty) {
+            double ratio = nativeDocument.SelectedImageDisplayRatio;
+            int maximum = Math.Max(16, Math.Min(NativeNoteDocument.MaxImageLogicalSize, (int)(NativeNoteDocument.MaxImageLogicalSize * ratio)));
+            int width = Math.Max(16, Math.Min(maximum, (int)Math.Round(bounds.Width * 96.0 / DeviceDpi / editor.ZoomFactor * scale)));
+            ResizeImageDimensions(width, Math.Max(1, (int)Math.Round(width / ratio)));
+        }
+    }
+    void ResizeImageTo(int width) {
+        ResizeImageDimensions(width, 0);
+    }
+    void ResizeImageDimensions(int width, int height) {
+        if (IsComposing || queuedImageCount != 0 || editor.ReadOnly) return;
+        try {
+            Rectangle bounds = nativeDocument.SelectedImageBounds(); if (bounds.IsEmpty) return;
+            int maximum = height > 0 ? NativeNoteDocument.MaxImageLogicalSize : Math.Max(16, Math.Min(NativeNoteDocument.MaxImageLogicalSize, (int)(NativeNoteDocument.MaxImageLogicalSize * nativeDocument.SelectedImageAspectRatio)));
+            nativeDocument.ResizeSelectedImage(Math.Max(16, Math.Min(maximum, width)), Math.Max(0, Math.Min(NativeNoteDocument.MaxImageLogicalSize, height)));
+            editor.Invalidate(); editor.Focus();
+        } catch (Exception error) { SetStatus("无法缩放图片，原图仍在：" + error.Message, true); }
+    }
+    void EraseImageOutline() { if (imageDragCp >= 0) editor.Invalidate(); }
+    void CancelImageDrag() {
+        if (imageDragCp < 0) return;
+        imageDragCp = -1; editor.Capture = false; editor.Invalidate(); editor.Cursor = Cursors.IBeam;
+        if (!Disposing && !IsDisposed) ScheduleLeave();
+    }
+    bool HandleImagePointer(int message, Point point) {
+        if (message == 0x204 || message == 0x203) {
+            CancelImageDrag();
+            if (SelectImageAt(point) && message == 0x203) { OpenSelectedImage(); return true; }
+            return false;
+        }
+        if (imageDragCp >= 0) {
+            if (message == 0x215 || message == 0x100) { CancelImageDrag(); return message == 0x100; }
+            if (message == 0x200 || message == 0x202) {
+                // Wheel scrolling, zoom and reflow invalidate the captured
+                // handle coordinates; never commit using stale geometry.
+                if (nativeDocument.SelectedImageBounds() != imageDragStart) { CancelImageDrag(); return true; }
+                int column = imageDragHandle % 3, row = imageDragHandle / 3;
+                double sx = column == 0 ? (imageDragStart.Right - point.X) / (double)imageDragStart.Width : (point.X - imageDragStart.Left) / (double)imageDragStart.Width;
+                double sy = row == 0 ? (imageDragStart.Bottom - point.Y) / (double)imageDragStart.Height : (point.Y - imageDragStart.Top) / (double)imageDragStart.Height;
+                double factor = column == 1 ? sy : row == 1 ? sx : Math.Abs(sx - 1) > Math.Abs(sy - 1) ? sx : sy;
+                double pixelsPerUnit = DeviceDpi * editor.ZoomFactor / 96.0;
+                double ratio = nativeDocument.SelectedImageDisplayRatio;
+                bool free = row == 1 || column == 1;
+                int maximum = Math.Max(16, Math.Min(NativeNoteDocument.MaxImageLogicalSize, (int)(NativeNoteDocument.MaxImageLogicalSize * ratio)));
+                double minimum = 16 * pixelsPerUnit;
+                double limit = Math.Max(minimum, Math.Min(Math.Floor(maximum * pixelsPerUnit), viewport.Width - imageDragStart.Left - 10));
+                double freeLimit = Math.Max(minimum, Math.Min(NativeNoteDocument.MaxImageLogicalSize * pixelsPerUnit, viewport.Width - imageDragStart.Left - 10));
+                double widthFactor = free ? (row == 1 ? sx : 1) : factor;
+                int width = (int)Math.Round(Math.Max(minimum, Math.Min(free ? freeLimit : limit, imageDragStart.Width * widthFactor)));
+                int height = free ? (int)Math.Round(Math.Max(pixelsPerUnit, Math.Min(NativeNoteDocument.MaxImageLogicalSize * pixelsPerUnit, imageDragStart.Height * (column == 1 ? sy : 1)))) : Math.Max(1, (int)Math.Round(width / ratio));
+                imageDragOutline = new Rectangle(imageDragStart.Location, new Size(width, height));
+                editor.Invalidate();
+                if (message == 0x202) {
+                    int cp = imageDragCp, logical = (int)Math.Round(width * 96.0 / DeviceDpi / editor.ZoomFactor);
+                    CancelImageDrag();
+                    if (editor.SelectionStart == cp && editor.SelectionLength == 1) ResizeImageDimensions(logical, Math.Max(1, (int)Math.Round(height / pixelsPerUnit)));
+                }
+                return true;
+            }
+        }
+        if (editor.ReadOnly || IsComposing || queuedImageCount != 0) return false;
+        Rectangle bounds = nativeDocument.SelectedImageBounds();
+        int hit = -1, radius = Math.Max(6, 6 * DeviceDpi / 96);
+        if (!bounds.IsEmpty) for (int row = 0; row < 3; row++) for (int col = 0; col < 3; col++) {
+            if (row == 1 && col == 1) continue;
+            int x = bounds.Left + bounds.Width * col / 2, y = bounds.Top + bounds.Height * row / 2;
+            if (Math.Abs(point.X - x) <= radius && Math.Abs(point.Y - y) <= radius) hit = row * 3 + col;
+        }
+        if (message == 0x200) {
+            Cursor cursor = hit < 0 ? Cursors.IBeam : hit == 1 || hit == 7 ? Cursors.SizeNS : hit == 3 || hit == 5 ? Cursors.SizeWE : hit == 2 || hit == 6 ? Cursors.SizeNESW : Cursors.SizeNWSE;
+            if (editor.Cursor != cursor) editor.Cursor = cursor;
+        }
+        if (message != 0x201 || hit < 0) return false;
+        imageDragCp = editor.SelectionStart; imageDragHandle = hit;
+        imageDragStart = imageDragOutline = bounds; editor.Capture = true; return true;
+    }
+    bool SelectImageAt(Point point) {
+        if (IsComposing || queuedImageCount != 0) return false;
+        if (nativeDocument.SelectedImageBounds().Contains(point)) return true;
+        int position = editor.GetCharIndexFromPosition(point), start = editor.SelectionStart, length = editor.SelectionLength;
+        string raw = nativeDocument.RawText();
+        foreach (int candidate in new[] { position, position - 1 }) if (candidate >= 0 && candidate < raw.Length && raw[candidate] == '\ufffc') {
+            editor.Select(candidate, 1);
+            if (nativeDocument.SelectedImageBounds().Contains(point)) return true;
+        }
+        editor.Select(start, length); return false;
+    }
+    void OpenSelectedImage() {
+        try {
+            string target = nativeDocument.SelectedImageTarget(), path = target == null ? null : store.ResolveImage(target);
+            if (path == null) throw new IOException("原图已移动、删除或不是安全的本地图片。");
+            OpenImageFile(path);
+        } catch (Exception error) { SetStatus("无法查看原图：" + error.Message, true); }
+    }
+    void RevealForPointer() {
+        if (!Visible || WindowState != FormWindowState.Normal) return;
+        leaveTimer.Stop(); SetChromeVisible(true);
+        if (tabs == null || tabsHaveSpace && (!tabs.Visible || !tabs.IsRevealed)) ShowTabs();
+    }
+    void ShowTabs() {
+        leaveTimer.Stop();
+        if (IsDisposed || !Visible || WindowState != FormWindowState.Normal || note == null) return;
+        if (tabs == null) {
+            tabs = new QuickNoteTabs(); tabs.Font = uiFont;
+            tabs.HoverFile = HoverNote; tabs.SelectFile = delegate(string file) { RequestNote(file, false); editor.Focus(); };
+            tabs.FileMenu = ShowTabMenu;
+            tabs.More = ShowRecentMenu; tabs.LeaveRail = ScheduleLeave;
+        }
+        UpdateTabs(); if (!PositionTabs()) return; if (!tabs.Visible) tabs.Show(this);
+        tabs.Reveal();
+    }
+    void ObserveHover(Control control) {
+        if (control != this) {
+            control.MouseEnter += delegate {
+                SetChromeVisible(true);
+                leaveTimer.Stop();
+                if (control == editor || control == viewport || control == body || control == scroll || tabs != null && tabs.Visible) ShowTabs();
+            };
+            control.MouseLeave += delegate { ScheduleLeave(); };
+            if (control is Button) control.Enter += delegate { SetChromeVisible(true); };
+        }
+        foreach (Control child in control.Controls) ObserveHover(child);
+    }
+    void UpdateTabs() {
+        if (tabs == null) return;
+        int count = Math.Min(5, Math.Max(1, (body.Height - 30 * DeviceDpi / 96) / (36 * DeviceDpi / 96)));
+        var visible = recentFiles.GetRange(0, Math.Min(count, recentFiles.Count));
+        string selected = Path.GetFileName(notePath ?? "");
+        if (visible.Count > 0 && !visible.Exists(delegate(string value) { return String.Equals(value, selected, StringComparison.OrdinalIgnoreCase); }) && selected.Length != 0) visible[visible.Count - 1] = selected;
+        tabs.SetFiles(visible.ToArray(), selected);
+    }
+    bool PositionTabs() {
+        if (tabs == null || !IsHandleCreated) return false;
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        Point origin = PointToScreen(new Point(0, top.Bottom));
+        tabs.Width = 94 * DeviceDpi / 96;
+        bool right = Left - tabs.Width < area.Left;
+        tabsHaveSpace = !right || Right + tabs.Width <= area.Right;
+        if (!tabsHaveSpace) { tabs.Hide(); return false; }
+        if (tabs.OnRight != right) { tabs.OnRight = right; tabs.Invalidate(); }
+        tabs.Location = new Point(right ? Right : Left - tabs.Width, Math.Max(area.Top, Math.Min(origin.Y, area.Bottom - tabs.Height)));
+        return true;
+    }
+    void ScheduleLeave() { leaveTimer.Stop(); leaveTimer.Start(); }
+    void HideTabs() { hoverTimer.Stop(); leaveTimer.Stop(); if (tabs != null) tabs.Conceal(); }
+    void HoverNote(string file) {
+        leaveTimer.Stop(); hoverTimer.Stop();
+        if (String.Equals(hoverFile, file, StringComparison.OrdinalIgnoreCase) && previewVisible) return;
+        CancelPreview(); hoverFile = file;
+        if (file != null && previewOnHover && !String.Equals(file, Path.GetFileName(notePath ?? ""), StringComparison.OrdinalIgnoreCase)) hoverTimer.Start();
+    }
+    void StartPreview() {
+        if (!previewOnHover || hoverFile == null || IsComposing || loadRequested || reloadRequested || note == null || !Visible) return;
+        if (previewBusy) { hoverTimer.Start(); return; }
+        string file = hoverFile; int epoch = previewEpoch;
+        previewBusy = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            NativeNotePrepared prepared = null; string failure = null;
+            try {
+                var candidate = store.LoadFile(file);
+                if (candidate.Revision == "missing") throw new IOException("文件已移动或删除");
+                string text = candidate.Text;
+                // A preview is bounded and read-only. Full text and images are
+                // loaded on click; no image decode or save occurs on hover.
+                if (text.Length > 12000) text = text.Substring(0, 12000) + "\n…（点击标签查看完整便签）";
+                prepared = NativeNoteDocument.PrepareLoad(text, null);
+            } catch (Exception error) { failure = error.Message; }
+            try { BeginInvoke((Action)delegate {
+                previewBusy = false;
+                if (IsDisposed || epoch != previewEpoch || hoverFile != file || IsComposing || loadRequested || !Visible) return;
+                if (failure != null) { if (tabs != null) tabs.ShowFileTip("无法预览：" + failure); return; }
+                try {
+                    EnsurePreviewEditor(); previewEditor.ReadOnly = false;
+                    previewDocument.ApplyPrepared(prepared); previewEditor.ReadOnly = true;
+                    previewEditor.Select(0, 0); QuickNoteScrollBar.SetPosition(previewEditor, Point.Empty);
+                    previewFile = file; previewVisible = true;
+                    previewCaretHidden = editor.Focused && HideCaret(editor.Handle);
+                    previewEditor.Show(); previewEditor.BringToFront(); scroll.Target = previewEditor;
+                    formatBar.Enabled = false; UpdateTitle(); scroll.Invalidate();
+                } catch (Exception error) { CancelPreview(); if (tabs != null) tabs.ShowFileTip("无法预览：" + error.Message); }
+            }); } catch (InvalidOperationException) { }
+        });
+    }
+    void EnsurePreviewEditor() {
+        if (previewEditor != null) return;
+        previewEditor = new QuickNoteInputBox { Visible = false, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = editor.ForeColor, Font = editorFont, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, TabStop = false, AccessibleName = "便签只读预览；点击标签切换" };
+        // Every clipboard path is swallowed, including context menus and
+        // keyboard fallback. This view never owns editable note state.
+        previewEditor.UserCopyOrCut = delegate { }; previewEditor.UserPaste = delegate { }; previewEditor.UserContextMenu = delegate { };
+        previewEditor.HandleKey = delegate { CancelPreview(); editor.Focus(); return true; };
+        previewEditor.MouseEnter += delegate { CancelPreview(); RevealForPointer(); };
+        previewEditor.PointerMoved = delegate { CancelPreview(); RevealForPointer(); };
+        previewEditor.MouseDown += delegate { CancelPreview(); editor.Focus(); };
+        previewEditor.MouseLeave += delegate { ScheduleLeave(); };
+        previewEditor.VScroll += delegate { scroll.Invalidate(); };
+        viewport.Controls.Add(previewEditor); previewDocument = new NativeNoteDocument(previewEditor, null); LayoutEditors();
+    }
+    void CancelPreview() {
+        hoverTimer.Stop(); previewEpoch++; hoverFile = null;
+        if (!previewVisible) return;
+        previewVisible = false;
+        if (previewEditor != null) previewEditor.Hide();
+        if (previewCaretHidden) { ShowCaret(editor.Handle); previewCaretHidden = false; }
+        editor.Visible = true; scroll.Target = editor; formatBar.Enabled = !editor.ReadOnly && !IsComposing;
+        UpdateTitle(); scroll.Invalidate();
+    }
+    void ShowRecentMenu() {
+        CancelPreview(); leaveTimer.Stop();
+        var menu = CreateTransientMenu();
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        var picker = new QuickNoteRecentPicker(recentFiles.ToArray(), Path.GetFileName(notePath ?? ""), Font, DeviceDpi, new Size(Math.Min(area.Width - 8, Math.Max(220 * DeviceDpi / 96, Width - 8)), area.Height - 8));
+        var host = new ToolStripControlHost(picker) { AutoSize = false, Size = picker.Size, Margin = Padding.Empty, Padding = Padding.Empty };
+        menu.ShowImageMargin = menu.ShowCheckMargin = false; menu.Padding = new Padding(1); menu.Items.Add(host);
+        picker.SelectFile = delegate(string name) { menu.Close(); RequestNote(name, false); editor.Focus(); };
+        picker.FileMenu = delegate(string name, Point position) {
+            menu.Close();
+            // Wait for the old list's native MouseDown/focus handling to end;
+            // otherwise it immediately dismisses the newly opened context menu.
+            BeginInvoke((Action)delegate { if (!IsDisposed) ShowTabMenu(name, position); });
+        };
+        picker.ClosePopup = delegate { menu.Close(); };
+        menu.Opened += delegate { picker.Search.Focus(); };
+        Point point = tabs == null || !tabs.Visible ? PointToScreen(new Point(0, top.Bottom)) : new Point(tabs.Left, tabs.Bottom);
+        point.X = Math.Max(area.Left, Math.Min(point.X, area.Right - picker.Width - 4));
+        point.Y = Math.Max(area.Top, Math.Min(point.Y, area.Bottom - picker.Height - 4));
+        menu.Show(point);
+    }
+    void ShowTabMenu(string file, Point position) {
+        CancelPreview();
+        var menu = CreateTransientMenu();
+        var remove = new ToolStripMenuItem("删除便签…");
+        remove.Click += delegate { DeleteNote(file); };
+        menu.Items.Add(remove); menu.Show(position);
+    }
+    void DeleteNote(string file) {
+        CancelPreview(); CancelImageDrag();
+        if (IsComposing || workerBusy || queuedImageCount != 0 || loadRequested || reloadRequested || editor.ReadOnly || note == null) {
+            SetStatus("请先完成输入、图片插入或保存，再删除便签。", true); return;
+        }
+        bool confirmed = ConfirmDelete != null ? ConfirmDelete(file) : MessageBox.Show(this,
+            "将「" + Path.GetFileNameWithoutExtension(file) + "」移入 Windows 回收站？\n可在回收站还原。图片附件会保留，不会删除共用图片。",
+            "删除便签", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        if (!confirmed) return;
+        // The modal confirmation pumps messages: autosave or IME may have
+        // changed state while it was open. Recheck before freezing the editor.
+        if (IsComposing || workerBusy || queuedImageCount != 0 || loadRequested || reloadRequested || editor.ReadOnly) {
+            SetStatus("便签正在更新，请保存完成后再删除。", true); return;
+        }
+        if (dirty && !CaptureSave()) return;
+        deleteRequested = file; editor.ReadOnly = true; DrainWork();
+    }
+    void StartDeleteWork() {
+        string file = deleteRequested; deleteRequested = null;
+        bool current = String.Equals(file, Path.GetFileName(notePath), StringComparison.OrdinalIgnoreCase);
+        QuickNoteDocument target = current ? note : null;
+        workerBusy = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            Exception failure = null;
+            try { store.Recycle(target ?? store.LoadFile(file)); }
+            catch (Exception error) { failure = error; }
+            try { BeginInvoke((Action)delegate {
+                workerBusy = false; if (IsDisposed) return;
+                editor.ReadOnly = false;
+                if (failure != null) { hideRequested = closeRequested = false; closeContinuation = null; SetStatus("无法删除便签：" + failure.Message, true); return; }
+                recentFiles.RemoveAll(delegate(string name) { return String.Equals(name, file, StringComparison.OrdinalIgnoreCase); }); views.Remove(file);
+                if (String.Equals(lastSavedFile, file, StringComparison.OrdinalIgnoreCase)) lastSavedFile = null;
+                if (current) {
+                    note = null; notePath = null; dirty = false; failedText = pendingText = null; savedVersion = editVersion;
+                    editor.ReadOnly = true;
+                    RequestNote(recentFiles.Count == 0 ? null : recentFiles[0], recentFiles.Count == 0);
+                } else { UpdateTabs(); SetSavedStatus(); DrainWork(); }
+                SaveWindowState();
+            }); } catch (InvalidOperationException) { }
+        });
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        base.OnPaint(e); using (var border = new Pen(Color.FromArgb(211, 219, 225))) e.Graphics.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
+    }
+    protected override void WndProc(ref Message message) {
+        base.WndProc(ref message);
+        if (message.Msg == 0x84 && message.Result.ToInt32() == 1 && WindowState == FormWindowState.Normal) {
+            long packed = message.LParam.ToInt64(); Point p = PointToClient(new Point((short)(packed & 0xffff), (short)((packed >> 16) & 0xffff)));
+            int edge = Math.Max(4, 4 * DeviceDpi / 96);
+            bool left = p.X < edge, right = p.X >= Width - edge, up = p.Y < edge, down = p.Y >= Height - edge;
+            message.Result = new IntPtr(up ? left ? 13 : right ? 14 : 12 : down ? left ? 16 : right ? 17 : 15 : left ? 10 : right ? 11 : 1);
+        }
     }
 
 

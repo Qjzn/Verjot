@@ -35,6 +35,7 @@ internal static class TestQuickNoteStore {
     }
 
     static void Run() {
+        CheckRecycle();
         var store = new QuickNoteStore(vault, "速记", work);
         var fresh = store.Load(Date);
         True(fresh.Text == "" && fresh.Revision == "missing" && !fresh.HasRecovery, "new date has no placeholder or synthetic heading");
@@ -295,6 +296,30 @@ internal static class TestQuickNoteStore {
         }
     }
 
+    static void CheckRecycle() {
+        var store = new QuickNoteStore(vault, "recycle-notes", Path.Combine(root, "recycle-recovery"));
+        var note = store.NewNote(); store.Save(note, "原文");
+        int calls = 0; string target = Path.Combine(root, "recycled.md");
+        store.RecycleFile = delegate(string path) { calls++; File.Move(path, target); };
+        var stale = store.LoadFile(Path.GetFileName(note.Path)); File.WriteAllText(note.Path, "外部更新");
+        Throws<QuickNoteConflictException>(delegate { store.Recycle(stale); }, "external changes block recycle");
+        True(calls == 0 && File.ReadAllText(note.Path) == "外部更新", "external update survives without calling the shell");
+        note = store.LoadFile(Path.GetFileName(note.Path)); store.SaveRecovery(note, "恢复草稿");
+        Throws<IOException>(delegate { store.Recycle(note); }, "outstanding recovery blocks deletion");
+        True(calls == 0 && File.Exists(note.RecoveryPath), "recovery remains accessible");
+        store.Save(note, "外部更新"); store.Recycle(note);
+        True(calls == 1 && !File.Exists(note.Path) && File.ReadAllText(target) == "外部更新", "only the exact owned revision is recycled");
+        Throws<QuickNoteConflictException>(delegate { store.Recycle(note); }, "repeated deletion cannot target a different file");
+        var foreign = new QuickNoteStore(vault, "other-recycle", Path.Combine(root, "foreign-recycle-recovery")).NewNote();
+        Throws<ArgumentException>(delegate { store.Recycle(foreign); }, "foreign document is rejected");
+        Throws<ArgumentException>(delegate { store.LoadFile("../outside.md"); }, "recycle cannot target traversal");
+        var failed = store.NewNote(); store.Save(failed, "失败保留");
+        store.RecycleFile = delegate { throw new IOException("合成故障"); };
+        Throws<IOException>(delegate { store.Recycle(failed); }, "recycle failure propagates");
+        Equal(File.ReadAllText(failed.Path), "失败保留", "no permanent delete fallback");
+        var empty = store.NewNote(); store.Recycle(empty);
+        True(!File.Exists(empty.Path), "an unsaved empty tab is discarded without touching the shell or creating a file");
+    }
     static void True(bool condition, string message) { if (!condition) throw new Exception(message); passed++; }
     static void Equal(string actual, string expected, string message) { True(actual == expected, message); }
     static void Throws<T>(Action action, string message) where T : Exception {

@@ -6,6 +6,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 
 internal sealed class QuickNoteDocument {
     public DateTime Date { get; internal set; }
@@ -37,6 +38,35 @@ internal sealed class QuickNoteStore {
     readonly object owner = new object();
 
     public string FolderPath { get { return noteRoot; } }
+    internal Action<string> RecycleFile = RecycleLocalFile;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct ShellFileOperation {
+        internal IntPtr Window;
+        internal uint Operation;
+        [MarshalAs(UnmanagedType.LPWStr)] internal string From, To;
+        internal ushort Flags;
+        [MarshalAs(UnmanagedType.Bool)] internal bool Aborted;
+        internal IntPtr Mappings;
+        [MarshalAs(UnmanagedType.LPWStr)] internal string Title;
+    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHFileOperation(ref ShellFileOperation operation);
+    static void RecycleLocalFile(string path) {
+        // WANTNUKEWARNING overrides NOCONFIRMATION for an unrecyclable item:
+        // Windows must ask, rather than silently deleting it permanently.
+        var operation = new ShellFileOperation { Operation = 3, From = path + "\0\0", Flags = 0x40 | 0x10 | 0x4 | 0x400 | 0x4000 };
+        int result = SHFileOperation(ref operation);
+        if (result != 0 || operation.Aborted) throw new IOException("无法移入 Windows 回收站，便签已保留。错误码：" + result);
+    }
+    internal void Recycle(QuickNoteDocument doc) {
+        Validate(doc);
+        RequireRevision(doc);
+        if (File.Exists(doc.RecoveryPath)) throw new IOException("此便签有未处理的恢复草稿，请先打开并处理后再删除。");
+        // A new, empty tab has no file to recycle. The revision check above
+        // still protects any file another editor created at the same path.
+        if (doc.Revision == MissingRevision) return;
+        RecycleFile(doc.Path);
+        if (File.Exists(doc.Path)) throw new IOException("便签未移入回收站，请检查文件权限。");
+    }
 
     public QuickNoteStore(string vaultRoot, string relativeFolder, string recoveryRoot) {
         this.vaultRoot = Full(vaultRoot);
@@ -53,12 +83,43 @@ internal sealed class QuickNoteStore {
     }
 
     public QuickNoteDocument Load(DateTime date) {
-        string path = NotePath(date);
+        return LoadPath(NotePath(date), date.Date);
+    }
+    internal QuickNoteDocument LoadFile(string name) {
+        string path = FilePath(name);
+        DateTime date;
+        if (!DateTime.TryParseExact(System.IO.Path.GetFileNameWithoutExtension(name), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date)) date = DateTime.Today;
+        return LoadPath(path, date);
+    }
+    internal QuickNoteDocument NewNote() {
+        return LoadFile("便签 " + DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".md");
+    }
+    internal string[] RecentFiles() {
+        CheckOrdinaryPath(noteRoot);
+        if (!Directory.Exists(noteRoot)) return new string[0];
+        var files = new System.Collections.Generic.List<FileInfo>();
+        foreach (string path in Directory.EnumerateFiles(noteRoot, "*.md", SearchOption.TopDirectoryOnly)) {
+            try { FilePath(System.IO.Path.GetFileName(path)); files.Add(new FileInfo(path)); }
+            catch (ArgumentException) { } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        files.Sort(delegate(FileInfo a, FileInfo b) { return b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc); });
+        var names = new System.Collections.Generic.List<string>();
+        foreach (FileInfo file in files) { if (names.Count == 50) break; names.Add(file.Name); }
+        return names.ToArray();
+    }
+    string FilePath(string name) {
+        string safe = SafeRelative(name);
+        if (System.IO.Path.GetFileName(safe) != safe || !safe.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("只能打开速记文件夹内的 Markdown 文件。");
+        string path = Full(System.IO.Path.Combine(noteRoot, safe));
+        CheckOrdinaryPath(path);
+        return path;
+    }
+    QuickNoteDocument LoadPath(string path, DateTime date) {
         CheckOrdinaryPath(path);
         byte[] bytes = ReadOptional(path, MaxNoteBytes);
         var doc = new QuickNoteDocument { Owner = owner, Date = date.Date, Path = path,
             Revision = bytes == null ? MissingRevision : Hash(bytes), Text = Decode(bytes),
-            HasBom = HasBom(bytes), RecoveryPath = RecoveryPath(date) };
+            HasBom = HasBom(bytes), RecoveryPath = RecoveryForPath(path) };
         byte[] recovery = ReadOptional(doc.RecoveryPath, MaxNoteBytes + 256);
         if (recovery != null) {
             string stored = Decode(recovery);
@@ -189,8 +250,8 @@ internal sealed class QuickNoteStore {
     }
 
     void Validate(QuickNoteDocument doc) {
-        if (doc == null || !Object.ReferenceEquals(doc.Owner, owner) || !Same(doc.Path, NotePath(doc.Date)) ||
-            !Same(doc.RecoveryPath, RecoveryPath(doc.Date))) throw new ArgumentException("速记文档不属于此存储。");
+        if (doc == null || !Object.ReferenceEquals(doc.Owner, owner) || !Same(doc.Path, FilePath(System.IO.Path.GetFileName(doc.Path))) ||
+            !Same(doc.RecoveryPath, RecoveryForPath(doc.Path))) throw new ArgumentException("速记文档不属于此存储。");
         CheckOrdinaryPath(doc.RecoveryPath);
     }
 
@@ -209,9 +270,14 @@ internal sealed class QuickNoteStore {
 
     string NotePath(DateTime date) { return System.IO.Path.Combine(noteRoot, date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".md"); }
     string RecoveryPath(DateTime date) {
+        return RecoveryForPath(NotePath(date));
+    }
+    string RecoveryForPath(string path) {
         // One shared application work directory may serve several vaults/folders. Windows path aliases use one key.
-        string identity = Hash(Utf8.GetBytes(Full(NotePath(date)).ToUpperInvariant())).Substring(0, 24);
-        return System.IO.Path.Combine(recoveryRoot, date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "-" + identity + ".draft");
+        string identity = Hash(Utf8.GetBytes(Full(path).ToUpperInvariant())).Substring(0, 24);
+        string label = System.IO.Path.GetFileNameWithoutExtension(path);
+        if (label.Length > 40) label = label.Substring(0, 40);
+        return System.IO.Path.Combine(recoveryRoot, label + "-" + identity + ".draft");
     }
 
     void AtomicWrite(string path, byte[] content, string expectedRevision) {

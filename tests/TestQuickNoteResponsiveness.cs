@@ -59,7 +59,9 @@ internal static class TestQuickNoteResponsiveness {
                 string nativeClassName = nativeClass.ToString();
                 Check(nativeClassName.Equals("RICHEDIT50W", StringComparison.OrdinalIgnoreCase) || nativeClassName.StartsWith("WindowsForms10.RICHEDIT50W.app.", StringComparison.OrdinalIgnoreCase), "The production editor must use the native RichEdit 5 HWND. Actual class=[" + nativeClass + "]");
                 editor.PerformLayout(); editor.Update();
+                if (show) Call(window, "ShowTabs");
                 var warmup = Stopwatch.StartNew(); while (warmup.ElapsedMilliseconds < 500) { Application.DoEvents(); Thread.Sleep(1); }
+                if (show) Console.WriteLine("Tab rail visible at start=" + ((Form)Field(window, "tabs")).Visible);
                 var watch = Stopwatch.StartNew();
                 using (var heartbeat = new System.Threading.Timer(delegate {
                     long due = watch.ElapsedTicks; Interlocked.Increment(ref posted);
@@ -81,6 +83,7 @@ internal static class TestQuickNoteResponsiveness {
                 Console.WriteLine("UI queue lag ms: p50=" + Percentile(lags, .5).ToString("F2") + ", p95=" + Percentile(lags, .95).ToString("F2") + ", max=" + Percentile(lags, 1).ToString("F2"));
                 Console.WriteLine("Input+native update ms: p95=" + Percentile(edits, .95).ToString("F2") + ", max=" + Percentile(edits, 1).ToString("F2") + "; native position-call max=" + Percentile(moves, 1).ToString("F2"));
                 Console.WriteLine("Probe callbacks=" + arrived + "; edits=" + edits.Count + "; moves=" + moves.Count + "; visible=" + window.Visible);
+                if (show) Console.WriteLine("Tab rail visible at end=" + ((Form)Field(window, "tabs")).Visible);
                 Console.WriteLine("Native editor class=" + nativeClass + "; position and queue timings are not screen FPS.");
                 Check(arrived >= 50 && Percentile(lags, .95) < 100, "The UI must keep serving callbacks during controlled 120ms storage work.");
                 if (Array.IndexOf(args, "--assert-responsive") >= 0 && Percentile(lags, 1) >= 100) throw new Exception("The editor must continue serving UI callbacks while durable storage is slow.");

@@ -168,6 +168,104 @@ internal static class TestNativeNoteDocument {
                 Check(note.Markdown() == "X" + before && note.RetainedObjectCount == retained && box.CanUndo, "Resize rebuilt RTF or mappings");
                 box.Undo(); Check(note.Markdown() == before, "Resize destroyed the typing undo action");
             });
+            Case("proportional image size persists for Markdown titles, wiki links and duplicate images", delegate {
+                foreach (string token in new[] { first, second, "![caption|120](<图片/image.png>)", "![[图片/image.png|120]]" }) {
+                    note.Load("<b>前</b>" + token + "\n" + token + "后");
+                    int cp = note.ObjectPositions()[0]; box.Select(cp, 1);
+                    string before = note.Markdown();
+                    Check(note.ResizeSelectedImage(160), "Proportional resize was rejected for " + token);
+                    Rectangle bounds = note.SelectedImageBounds();
+                    Check(Math.Abs(bounds.Width / (double)bounds.Height - 2.5) < .03, "Original ratio changed for " + token);
+                    string after = note.Markdown();
+                    Check(after.Contains("|160") && after.Contains(token) && note.ObjectPositions().Length == 2, "Resizing one duplicate changed the other image or its path");
+                    box.Undo(); Check(note.Markdown() == before, "Undo did not restore original width token");
+                    box.Redo(); Check(note.Markdown() == after, "Redo lost the new width token");
+                    note.Load(after); box.Select(note.ObjectPositions()[0], 1);
+                    Check(Math.Abs(note.SelectedImageBounds().Width * 96.0 / box.DeviceDpi - 160) <= 1 && note.Markdown() == after, "Width failed to reload exactly");
+                }
+                note.Load("普通文字"); box.Select(0, 1); Check(note.SelectedImageBounds().IsEmpty && !note.ResizeSelectedImage(160), "Plain text was mistaken for an image");
+                byte[] portrait = Png(40, 80, 96);
+                note.ApplyPrepared(NativeNoteDocument.PrepareLoad("![竖图](图片/image.png)", delegate { return portrait; })); box.Select(0, 1);
+                note.ResizeSelectedImage(80); Rectangle upright = note.SelectedImageBounds();
+                Check(Math.Abs(upright.Width / (double)upright.Height - .5) < .02, "Portrait image was stretched");
+                box.ZoomFactor = 2; Rectangle zoomed = note.SelectedImageBounds();
+                Check(Math.Abs(zoomed.Width - upright.Width * 2) <= 1 && Math.Abs(zoomed.Height - upright.Height * 2) <= 1, "Image sizing ignored the editor's native zoom");
+                box.ZoomFactor = 1;
+                byte[] narrow = Png(40, 800, 96);
+                note.ApplyPrepared(NativeNoteDocument.PrepareLoad("![长图|4096](图片/image.png)", delegate { return narrow; })); box.Select(0, 1);
+                Check(note.SelectedImageBounds().Height * 96.0 / box.DeviceDpi <= NativeNoteDocument.MaxImageLogicalSize + 1, "Externally supplied width caused an unbounded preview height");
+                string narrowSource = note.Markdown(); bool refused = false;
+                try { note.ResizeSelectedImage(2000); } catch (NativeNoteSerializationException) { refused = true; }
+                Check(refused && note.Markdown() == narrowSource, "Unsafe enlargement must refuse before changing the image");
+                byte[] extreme = Png(4, 4000, 96);
+                note.ApplyPrepared(NativeNoteDocument.PrepareLoad("![狭长图](图片/image.png)", delegate { return extreme; }));
+                Check(note.TextImageFallback && note.ObjectPositions().Length == 0 && note.Markdown() == "![狭长图](图片/image.png)", "An unsupported extreme aspect ratio must preserve the editable reference instead of failing import");
+            });
+            Case("free image dimensions preserve original targets, undo, and reload", delegate {
+                foreach (string token in new[] { first, second, "![caption|120x70](<图片/image.png>)", "![[图片/image.png|alias|120x70]]" }) {
+                    string source = "前" + token + "\n后"; note.Load(source); box.Select(note.ObjectPositions()[0], 1);
+                    Check(note.SelectedImageTarget() == "图片/image.png", "Original image target was not resolved without its size/title");
+                    Check(note.ResizeSelectedImage(160, 90), "Free dimensions were rejected");
+                    string saved = note.Markdown(); Rectangle size = note.SelectedImageBounds();
+                    Check(saved.Contains("|160x90") && Math.Abs(size.Width / (double)size.Height - 160.0 / 90) < .02, "Free dimensions were forced back to the original ratio");
+                    box.Undo(); Check(note.Markdown() == source, "Undo of free dimensions changed the original source");
+                    box.Redo(); Check(note.Markdown() == saved, "Redo of free dimensions lost the image mapping");
+                    note.Load(saved); box.Select(note.ObjectPositions()[0], 1);
+                    Check(Math.Abs(note.SelectedImageBounds().Height * 96.0 / box.DeviceDpi - 90) <= 1 && note.SelectedImageTarget() == "图片/image.png", "Free height or original target failed to reload");
+                    note.ResizeSelectedImage(160); Check(!note.Markdown().Contains("x90") && Math.Abs(note.SelectedImageBounds().Width / (double)note.SelectedImageBounds().Height - 2.5) < .03, "Restoring original proportions failed");
+                }
+            });
+            Case("native rich styles render and source remains unchanged before edits", delegate {
+                string source = "**粗体** *斜体* <u>下划线</u> ~~删除~~\r\n- 列表\n`**代码**`";
+                note.Load(source);
+                Check(box.Text.Contains("粗体") && !box.Text.Contains("<u>") && !box.Text.Contains("~~") && box.Text.Contains("**代码**"), "Supported formatting was shown as syntax or code was interpreted");
+                box.Select(0, 2); Check(box.SelectionFont.Bold, "Bold did not render");
+                box.Select(3, 2); Check(box.SelectionFont.Italic, "Italic did not render");
+                box.Select(6, 3); Check(box.SelectionFont.Underline, "Underline did not render");
+                box.Select(10, 2); Check(box.SelectionFont.Strikeout, "Strikeout did not render");
+                Check(box.Text.Contains("\u2022 列表") && note.Markdown() == source, "Original Markdown or list rendering was changed on load");
+                box.Select(0, 2); note.ToggleStyle(2); string saved = note.Markdown(); note.Load(saved);
+                box.Select(0, 2); Check(box.SelectionFont.Bold && box.SelectionFont.Italic && !box.Text.Contains("<b>"), "Combined styles did not survive a Markdown reload");
+            });
+            Case("styled inline images and mixed newlines survive an edit and reload", delegate {
+                string source = "<b>前😀" + first + "\r\n后</b>\n末尾";
+                note.Load(source); Check(note.Markdown() == source && note.ObjectPositions().Length == 1, "Rich source was rewritten or its image was lost");
+                box.Select(0, 1); note.ToggleStyle(4); string saved = note.Markdown();
+                note.Load(saved); box.Select(0, 1);
+                Check(box.SelectionFont.Bold && box.SelectionFont.Underline && note.ObjectPositions().Length == 1 && note.Markdown() == saved, "Image identity, styles or line endings were lost after saving");
+            });
+            Case("formatting the complete list preserves visible bullets on reload", delegate {
+                note.Load("- 第一项\n- 第二项"); string original = note.RawText();
+                box.SelectAll(); note.ToggleStyle(1); note.ToggleStyle(4);
+                string saved = note.Markdown(); note.Load(saved);
+                Check(note.RawText() == original, "Formatting a list changed visible bullets into literal Markdown after reload: " + saved);
+                box.Select(0, 5); Check(box.SelectionFont.Bold && box.SelectionFont.Underline, "Reload lost first list character styles");
+                box.Select(box.TextLength - 5, 5); Check(box.SelectionFont.Bold && box.SelectionFont.Underline, "Reload lost second list character styles");
+                Check(note.Markdown() == saved, "Unedited styled list rewrote its source");
+            });
+            Case("styled list with an inline image retains its bullet and object", delegate {
+                note.Load("- 首项" + first + "\n- 后项"); string original = note.RawText();
+                box.SelectAll(); note.ToggleStyle(2); note.ToggleStyle(8); string saved = note.Markdown();
+                note.Load(saved);
+                Check(note.RawText() == original && note.ObjectPositions().Length == 1 && note.Markdown() == saved, "Styled image list lost bullets, text or its reference");
+                box.Select(2, 2); Check(box.SelectionFont.Italic && box.SelectionFont.Strikeout, "Styled image list lost text styling");
+                note.Load("<b>前缀</b><u>- 非列表</u>");
+                Check(note.RawText() == "前缀- 非列表", "An inline dash after visible text was incorrectly converted to a bullet");
+            });
+            Case("unclosed style tags stay literal and preparation remains bounded", delegate {
+                string source = "<b>没有结束的标签 **未闭合";
+                note.Load(source); Check(note.Markdown() == source && box.Text == source, "Unclosed formatting deleted user text");
+                var repeated = new StringBuilder(); for (int i = 0; i < 20000; i++) repeated.Append("<b>");
+                var watch = System.Diagnostics.Stopwatch.StartNew(); NativeNotePrepared prepared = NativeNoteDocument.PrepareLoad(repeated.ToString(), null);
+                Check(prepared.NativeText == repeated.ToString() && watch.ElapsedMilliseconds < 5000, "Unclosed-tag preparation rescanned the entire suffix per tag");
+            });
+            Case("legacy empty nested toolbar markers render without garbage and retain source", delegate {
+                string source = "- ***<u>~~~~</u>***";
+                note.Load(source); Check(box.Text == "\u2022 " && note.Markdown() == source, "Legacy empty nested styles remained visible or rewrote the source");
+                string unusualImage = "![**图片**](<图片/**not-a-style**.png>)";
+                note.ApplyPrepared(NativeNoteDocument.PrepareLoad(unusualImage, null));
+                Check(box.Text == unusualImage && note.Markdown() == unusualImage, "An unresolved image filename became style markup");
+            });
             Case("live selection follows edits and unload invalidates it", delegate {
                 note.Load("AA选中ZZ"); NativeNoteDocument.LiveRange range = note.CaptureRange(2, 4);
                 try {

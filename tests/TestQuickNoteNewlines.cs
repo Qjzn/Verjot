@@ -63,12 +63,17 @@ internal static class TestQuickNoteNewlines {
         NextCase();
     }
     static void NextCase() {
-        string seed = caseIndex == 0 ? "" : caseIndex == 2 ? "AB" : caseIndex == 3 ? "ABCDE" : caseIndex == 4 ? "中文" : "A";
+        string seed = caseIndex == 9 ? "- 第一项" : caseIndex == 10 ? "- " : caseIndex >= 11 ? "- 甲乙丙" : caseIndex == 0 ? "" : caseIndex == 2 ? "AB" : caseIndex == 3 ? "ABCDE" : caseIndex == 4 ? "中文" : "A";
         int start = caseIndex == 2 || caseIndex == 3 || caseIndex == 4 ? 1 : seed.Length;
         int length = caseIndex == 3 ? 3 : 0, repetitions = caseIndex == 5 ? 3 : 1;
         string inserted = ""; for (int i = 0; i < repetitions; i++) inserted += newline;
-        bool cancelled = caseIndex >= 6;
+        if (caseIndex >= 11) { start = 3; length = caseIndex == 12 ? 1 : 0; }
+        bool cancelled = caseIndex >= 6 && caseIndex <= 8;
         string expected = cancelled ? seed : seed.Remove(start, length).Insert(start, inserted);
+        if (caseIndex == 9) expected = seed + newline + "- ";
+        if (caseIndex == 10) expected = "";
+        if (caseIndex == 11) expected = "- 甲" + newline + "- 乙丙";
+        if (caseIndex == 12) expected = "- 甲" + newline + "- 丙";
         input.ReadOnly = false; document.Load(seed); input.Select(start, length);
         insertions = 0; probe.ReturnCharacters = 0; probe.CurrentMessage = 0; probe.Changes.Clear();
         KeyEventHandler keyDown = delegate(object sender, KeyEventArgs args) { if (caseIndex == 6) args.SuppressKeyPress = true; };
@@ -96,7 +101,7 @@ internal static class TestQuickNoteNewlines {
             }
             Console.WriteLine("PASS " + label + "; translated=" + probe.ReturnCharacters + "; inserted=" + insertions);
             caseIndex++;
-            if (caseIndex < 9) Later(NextCase); else SaveAndReopen();
+            if (caseIndex < 13) Later(NextCase); else SaveAndReopen();
         });
     }
     static void SaveAndReopen() {
@@ -116,7 +121,7 @@ internal static class TestQuickNoteNewlines {
         Check(window.FlushAndClose(), "The fixture closes after durable save.");
         Application.RemoveMessageFilter(probe); probe = null; window.Dispose(); window = null;
         if (++lineStyle < 2) BeginStyle();
-        else { Console.WriteLine("PASS translated Return regression; assertions=" + assertions + "; 18 content/cancellation cases plus durable save/reopen for LF and CRLF."); context.ExitThread(); }
+        else { Console.WriteLine("PASS translated Return regression; assertions=" + assertions + "; 26 content/cancellation/list cases plus durable save/reopen for LF and CRLF."); context.ExitThread(); }
     }
     [STAThread] static int Main() {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
