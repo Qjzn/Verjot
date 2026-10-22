@@ -9,6 +9,7 @@ param(
     [switch]$StartWithWindows,
     [switch]$EnablePlaybackLinks,
     [switch]$SkipDeviceCheck,
+    [switch]$RuntimeOnly,
     [switch]$Plan
 )
 
@@ -26,6 +27,7 @@ $taskStatus = Join-Path $taskInstallation 'status.json'
 $taskPhase = 'preflight'
 $taskStatusStarted = $false
 $taskModeExplicit = $PSBoundParameters.ContainsKey('Mode')
+$taskRuntimeLock = $null
 
 function Assert-OrdinaryDirectory([string]$Path) {
     $taskPathCursor = [IO.Path]::GetFullPath($Path)
@@ -78,21 +80,25 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
 }
 
 try {
+    if ($RuntimeOnly -and ($Mode -ne 'local' -or $StartWithWindows -or $EnablePlaybackLinks)) { throw 'RuntimeOnly 仅准备推荐本地环境，不修改模式、自启或回放协议。' }
     $taskExistingConfig = Test-Path -LiteralPath $taskConfigPath -PathType Leaf
     if ($taskExistingConfig) {
         $taskConfig = Get-Content -LiteralPath $taskConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $taskConfiguredMode = [string]$taskConfig.transcription_mode
         if ([string]::IsNullOrWhiteSpace($taskConfiguredMode)) { $taskConfiguredMode = 'local' }
         if ($taskConfiguredMode -notin @('local', 'api')) { throw '已有 config.json 的 transcription_mode 必须是 local 或 api。' }
-        if ($taskModeExplicit -and $Mode -ne $taskConfiguredMode) { throw "已有配置使用 $taskConfiguredMode 模式；-Mode $Mode 不会覆盖它。请核对配置后重试。" }
-        $Mode = $taskConfiguredMode
+        if ($taskModeExplicit -and $Mode -ne $taskConfiguredMode -and -not $RuntimeOnly) { throw "已有配置使用 $taskConfiguredMode 模式；-Mode $Mode 不会覆盖它。请核对配置后重试。" }
+        if (-not $RuntimeOnly) { $Mode = $taskConfiguredMode }
         $taskNotes = [string]$taskConfig.vault_root
         if ($NotesPath -and [IO.Path]::GetFullPath($NotesPath) -ine [IO.Path]::GetFullPath($taskNotes)) {
             throw '已有 config.json；-NotesPath 不会覆盖现有配置。请先核对配置，或省略该参数。'
         }
     } else {
         $taskNotes = $NotesPath
-        if ([string]::IsNullOrWhiteSpace($taskNotes)) { throw '首次安装必须提供 -NotesPath <完整 Windows 输出路径>。' }
+        if ([string]::IsNullOrWhiteSpace($taskNotes)) {
+            if ($RuntimeOnly) { $taskNotes = $taskRoot }
+            else { throw '首次安装必须提供 -NotesPath <完整 Windows 输出路径>。' }
+        }
     }
     if ($taskNotes -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+(?:\\|$))') {
         throw 'NotesPath / config.json 的 vault_root 必须是完整 Windows 路径，例如 D:\Notes\会议。'
@@ -114,7 +120,7 @@ try {
         [ordered]@{
             action = 'plan'; mode = $Mode; root = $taskRoot; notes_path = $taskNotes; backend = $Backend
             python = $(if ($PythonExe) { $PythonExe } else { 'py -3.12 (已安装的 Python 3.12 x64)' })
-            config = $(if ($taskExistingConfig) { '保留现有 config.json' } else { '从 config.example.json 创建，写入 vault_root / open_in_obsidian / transcription_mode' })
+            config = $(if ($RuntimeOnly) { '不创建或修改 config.json，不构建 EXE，不修改快捷方式' } elseif ($taskExistingConfig) { '保留现有 config.json' } else { '从 config.example.json 创建，写入 vault_root / open_in_obsidian / transcription_mode' })
             open_in_obsidian_on_first_install = [bool]$UseObsidian
             start_with_windows = [bool]$StartWithWindows
             enable_playback_links = [bool]$EnablePlaybackLinks
@@ -126,9 +132,9 @@ try {
                 $(if ($Mode -eq 'local') { "检查/安装官方 torch==$taskTorchVersion；后端不匹配则失败，不改装已有 torch" } else { 'API 模式跳过 torch / transformers；密钥只读取配置指定的环境变量' }),
                 "安装 $taskRequirements，pip check",
                 $(if ($Mode -eq 'local') { '断点下载中文识别和说话人模型' } else { 'download_models.py --speaker-only，仅下载本地说话人模型（约 50 MB）' }),
-                '构建 ObsidianMeeting.exe；已有配置原样保留；首次输出目录可新建',
+                $(if ($RuntimeOnly) { '不构建 EXE，不创建或修改配置，不修改自启和快捷方式' } else { '构建 ObsidianMeeting.exe；已有配置原样保留；首次输出目录可新建' }),
                 $(if ($Mode -eq 'api') { '首次 API 配置需填写 api_base_url / api_model，并设置 TINGJI_API_KEY；未填写时 doctor 会失败，补齐后重跑' } else { '本地转写使用已下载模型，不上传音频' }),
-                '运行 tingji.py doctor --full --json；不启动应用、不录音',
+                $(if ($RuntimeOnly) { '验证本地依赖可导入；不录音，不调用 API，不宣称设备和识别质量通过' } else { '运行 tingji.py doctor --full --json；不启动应用、不录音' }),
                 $(if ($StartWithWindows) { '健康后运行 Install-Shortcuts.ps1，建立开始菜单与 Startup 快捷方式' } else { '不修改 Startup' }),
                 $(if ($EnablePlaybackLinks) { '健康后为当前用户注册 HKCU Software\Classes\pianyan 时间点回听协议；不覆盖其他安装' } else { '不注册时间点回听协议' })
             )
@@ -138,11 +144,18 @@ try {
         exit 0
     }
 
+    if ($RuntimeOnly) {
+        . (Join-Path $taskRoot 'RecommendedModel.ps1') -FunctionsOnly
+        $taskRuntimeLockPath = Join-Path $taskRoot 'runtime-install.lock'
+        Assert-ModelPath $taskRuntimeLockPath
+        $taskRuntimeLock = [IO.File]::Open($taskRuntimeLockPath, 'OpenOrCreate', 'ReadWrite', 'None')
+        Assert-ModelIdle $taskRoot
+    }
     $OutputEncoding = $taskUtf8
     [Console]::OutputEncoding = $taskUtf8
     $env:PYTHONIOENCODING = 'utf-8'
     if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) { throw '安装仅支持 64 位 Windows。' }
-    if ($taskRunning.Count) { throw '本目录 verbit 正在运行。请从托盘正常退出后再安装；不要中断录音。' }
+    if ($taskRunning.Count -and -not $RuntimeOnly) { throw '本目录 verbit 正在运行。请从托盘正常退出后再安装；不要中断录音。' }
     foreach ($taskRequired in @('Build.ps1', $taskRequirements, 'download_models.py', 'config.example.json', 'tingji.py', 'config.schema.json', 'Install-Shortcuts.ps1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $taskRoot $taskRequired) -PathType Leaf)) { throw "安装源码缺失：$taskRequired" }
     }
@@ -288,6 +301,16 @@ print(json.dumps(value))
     if ($Mode -eq 'api') { $taskModelArguments += '--speaker-only' }
     Invoke-Checked $taskPython $taskModelArguments
 
+    if ($RuntimeOnly) {
+        # The desktop download entry prepares only this installation's engine.
+        # Never rebuild a running EXE, create first-run config or change shortcuts.
+        $taskPhase = 'runtime-check'
+        Set-InstallStatus 'installing' '检查本地转写依赖；不录音、不修改配置'
+        Invoke-Checked $taskPython @('-B', '-c', "import torch,transformers,accelerate,sherpa_onnx,numpy,scipy,soundfile,imageio_ffmpeg; print('Local runtime imports OK; device and transcription quality not tested')")
+        $taskPhase = 'completed'
+        Set-InstallStatus 'completed' '推荐模型及依赖已准备；尚未进行真实录音和转写验收。'
+        exit 0
+    }
     $taskPhase = 'build'
     Set-InstallStatus 'installing' '构建 verbit 桌面程序'
     if (@(Get-RecorderProcesses).Count) { throw 'verbit 在安装过程中启动了。请从托盘正常退出后重试；未覆盖运行中的程序。' }
@@ -338,4 +361,4 @@ print(json.dumps(value))
     if ($taskStatusStarted) { Set-InstallStatus 'error' $_.Exception.Message }
     Write-Error $_
     exit 1
-}
+} finally { if ($taskRuntimeLock) { $taskRuntimeLock.Dispose() } }

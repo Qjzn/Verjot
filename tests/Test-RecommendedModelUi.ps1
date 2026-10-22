@@ -1,0 +1,32 @@
+﻿#requires -Version 5.1
+[CmdletBinding()]
+param([Parameter(Mandatory=$true)][string]$Helper, [Parameter(Mandatory=$true)][string]$Output)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$taskUiTimer = New-Object Windows.Forms.Timer
+$taskUiTimer.Interval = 300
+$taskUiResult = @{ captured=$false; failure=$null }
+$taskUiTimer.Add_Tick({
+    $taskForm = @([Windows.Forms.Application]::OpenForms | Where-Object { $_.Text -eq 'verbit · 下载推荐模型' }) | Select-Object -First 1
+    if (-not $taskForm) { return }
+    try {
+        $taskButton = $taskForm.Controls.Find('download_recommended', $true)
+        if ($taskButton.Count -ne 1 -or -not $taskButton[0].Visible -or -not $taskButton[0].Enabled) { throw 'Download action missing/invisible' }
+        $taskLabels = @($taskForm.Controls[0].Controls | Where-Object { $_ -is [Windows.Forms.Label] })
+        foreach ($taskLabel in $taskLabels) {
+            $taskNeeded = [Windows.Forms.TextRenderer]::MeasureText($taskLabel.Text, $taskLabel.Font, (New-Object Drawing.Size($taskLabel.Width, [int]::MaxValue)), [Windows.Forms.TextFormatFlags]::WordBreak)
+            if ($taskNeeded.Height -gt $taskLabel.Height) { throw ('Download helper label is clipped: ' + $taskLabel.Size + '; needs ' + $taskNeeded) }
+        }
+        if ($taskLabels[0].Bounds.IntersectsWith($taskLabels[1].Bounds)) { throw 'Download helper labels overlap' }
+        $taskImage = New-Object Drawing.Bitmap($taskForm.Width, $taskForm.Height)
+        try { $taskForm.DrawToBitmap($taskImage, (New-Object Drawing.Rectangle(0,0,$taskForm.Width,$taskForm.Height))); $taskImage.Save($Output) } finally { $taskImage.Dispose() }
+        $taskUiResult.captured=$true
+    } catch { $taskUiResult.failure=$_.Exception.Message }
+    finally { $taskUiTimer.Stop(); $taskForm.Close() }
+})
+$taskUiTimer.Start()
+try { & $Helper } finally { $taskUiTimer.Dispose() }
+if ($taskUiResult.failure) { throw $taskUiResult.failure }
+if (-not $taskUiResult.captured) { throw 'Actual helper UI did not render' }
+Write-Output 'PASS: actual recommended-model helper UI renders on isolated desktop; no download clicked.'

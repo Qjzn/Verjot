@@ -54,7 +54,7 @@ internal sealed class MeetingSettingsSnapshot {
             candidate["recording_protection_seconds"] = seconds;
         }
         if (transcription != null) foreach (var item in transcription) candidate[item.Key] = item.Value;
-        return MeetingConfig.Validate(candidate);
+        return MeetingConfig.Validate(candidate, false);
     }
     static bool Same(byte[] first, byte[] second) {
         if (first.Length != second.Length) return false;
@@ -72,7 +72,7 @@ internal sealed class MeetingSettingsSnapshot {
         return new UTF8Encoding(false).GetBytes(text.ToString());
     }
     public void Commit(Dictionary<string, object> candidate) {
-        var validated = MeetingConfig.Validate(Clone(candidate));
+        var validated = MeetingConfig.Validate(Clone(candidate), false);
         byte[] replacement = Serialize(validated);
         MeetingConfig.CheckOrdinaryPath(path);
         if (original == null) {
@@ -177,11 +177,11 @@ internal sealed class MeetingSettingsDialog : Form {
         MaximizeBox = MinimizeBox = false; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.CenterScreen;
         var tabs = new TabControl { Name = "settingsTabs", Dock = DockStyle.Fill };
-        var general = new TabPage("常规") { Padding = new Padding(8) };
+        var general = new TabPage("常规") { Padding = new Padding(8), AutoScroll = true };
         var models = new TabPage("转写") { Padding = new Padding(8), AutoScroll = true };
         var about = new TabPage("关于与更新") { Padding = new Padding(12), AutoScroll = true };
         tabs.TabPages.AddRange(new[] { general, models, about });
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 14 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 14 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
@@ -195,13 +195,13 @@ internal sealed class MeetingSettingsDialog : Form {
         var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
         layout.Controls.Add(folders, 0, 3); layout.SetColumnSpan(folders, 3);
         AddField(layout, 4, "开始 / 结束", "hotkey", current);
-        AddField(layout, 5, "暂停 / 继续", "pause_hotkey", current);
+        AddField(layout, 5, "麦克风暂停", "pause_hotkey", current);
         AddField(layout, 6, "标记重点", "bookmark_hotkey", current);
         AddField(layout, 7, "打开速记", "quick_note_hotkey", current);
-        var shortcuts = new Label { Text = "快捷键填写示例：Ctrl+Alt+J、Alt+Space。保存后立即生效。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
+        var shortcuts = new Label { Text = "麦克风暂停键再按恢复，电脑声音持续录制。示例：Alt+Space。保存后生效。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
         layout.Controls.Add(shortcuts, 0, 8); layout.SetColumnSpan(shortcuts, 3);
         AddField(layout, 9, "录音保护（秒）", "recording_protection_seconds", current);
-        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停时间不计入。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
+        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
         layout.Controls.Add(protection, 0, 10); layout.SetColumnSpan(protection, 3);
         originalStartup = DesktopServices.StartsWithWindows;
         startup = new CheckBox { Name = "start_with_windows", Text = "登录 Windows 后启动 verbit", Checked = originalStartup, Dock = DockStyle.Fill, AccessibleName = "开机自启" };
@@ -215,6 +215,7 @@ internal sealed class MeetingSettingsDialog : Form {
         general.Controls.Add(layout);
         BuildModels(models, current); BuildAbout(about);
         var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 76, RowCount = 2, ColumnCount = 1 };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         footer.Controls.Add(error, 0, 0); footer.Controls.Add(actions, 0, 1);
         Controls.Add(tabs); Controls.Add(footer); AcceptButton = save; CancelButton = cancel;
@@ -234,28 +235,36 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     string Choice(string key) { return ((string[])choices[key].Tag)[choices[key].SelectedIndex]; }
     void BuildModels(TabPage page, Dictionary<string, object> current) {
-        var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 12 };
+        var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 13 };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
-        for (int row = 0; row < 12; row++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 1 || row == 11 ? 58 : 32));
+        for (int row = 0; row < 13; row++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 1 || row == 12 ? 58 : 32));
         AddChoice(grid, 0, "转写方式", "transcription_mode", current, new[] { "local", "api" }, new[] { "本地 · Qwen3-ASR-1.7B", "API · 音频将发送至服务商" });
-        var hint = new Label { Text = "本地模型需先按安装说明准备依赖和权重。API 仅支持 /audio/transcriptions；普通聊天模型不能直接替代。", Dock = DockStyle.Fill };
+        var hint = new Label { Name = "transcription_readiness", Text = "", Dock = DockStyle.Fill };
         grid.Controls.Add(hint, 0, 1); grid.SetColumnSpan(hint, 3);
-        AddField(grid, 2, "API 地址", "api_base_url", current);
-        AddField(grid, 3, "API 模型 ID", "api_model", current);
-        AddField(grid, 4, "密钥变量名", "api_key_env", current);
-        AddField(grid, 5, "超时（秒）", "api_timeout_seconds", current);
-        AddField(grid, 6, "术语提示", "asr_terms", current); inputs["asr_terms"].MaxLength = 1000;
-        AddField(grid, 7, "转写上下文", "asr_context", current); inputs["asr_context"].MaxLength = 2000;
-        AddChoice(grid, 8, "轻量降噪", "asr_denoise", current, new[] { "light", "off" }, new[] { "开启 · 降低低频轰鸣", "关闭" });
+        var download = new Button { Name = "download_recommended_model", Text = "下载推荐模型…", AutoSize = true, Dock = DockStyle.Fill, AccessibleName = "下载推荐模型" };
+        download.Click += delegate { try { DesktopServices.DownloadRecommendedModel(); } catch (Exception failure) { error.Text = failure.Message; } };
+        grid.Controls.Add(download, 0, 2); grid.SetColumnSpan(download, 3);
+        AddField(grid, 3, "API 地址", "api_base_url", current);
+        AddField(grid, 4, "API 模型 ID", "api_model", current);
+        AddField(grid, 5, "密钥变量名", "api_key_env", current);
+        AddField(grid, 6, "超时（秒）", "api_timeout_seconds", current);
+        AddField(grid, 7, "术语提示", "asr_terms", current); inputs["asr_terms"].MaxLength = 1000;
+        AddField(grid, 8, "转写上下文", "asr_context", current); inputs["asr_context"].MaxLength = 2000;
+        AddChoice(grid, 9, "轻量降噪", "asr_denoise", current, new[] { "light", "off" }, new[] { "开启 · 降低低频轰鸣", "关闭" });
         echoFilter = new CheckBox { Name = "asr_echo_filter", Text = "去除有高置信证据的重复回声（不修改原录音）", Checked = Convert.ToBoolean(current["asr_echo_filter"]), Dock = DockStyle.Fill };
-        grid.Controls.Add(echoFilter, 0, 9); grid.SetColumnSpan(echoFilter, 3);
+        grid.Controls.Add(echoFilter, 0, 10); grid.SetColumnSpan(echoFilter, 3);
         var guide = new LinkLabel { Text = "打开本地模型与 API 安装说明", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
         guide.LinkClicked += delegate { OpenLink(Path.Combine(MeetingFiles.Home, "documentation", "install-windows.md")); };
-        grid.Controls.Add(guide, 0, 10); grid.SetColumnSpan(guide, 3);
-        var secret = new Label { Text = "这里只填环境变量名，不填密钥。请在 Windows 用户环境变量中配置密钥后重启 verbit。保存仅影响新会议，不会下载或切换实验模型。", Dock = DockStyle.Fill };
-        grid.Controls.Add(secret, 0, 11); grid.SetColumnSpan(secret, 3);
-        Action refresh = delegate { bool api = Choice("transcription_mode") == "api"; foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api; };
-        choices["transcription_mode"].SelectedIndexChanged += delegate { refresh(); }; refresh();
+        grid.Controls.Add(guide, 0, 11); grid.SetColumnSpan(guide, 3);
+        var secret = new Label { Text = "选择本地不会自动下载模型。API 只填密钥变量名，提交前检查。保存后，尚未开始转写的新录音重试时使用新设置。", Dock = DockStyle.Fill };
+        grid.Controls.Add(secret, 0, 12); grid.SetColumnSpan(secret, 3);
+        Action refresh = delegate {
+            bool api = Choice("transcription_mode") == "api";
+            foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api;
+            hint.Text = api ? "API 音频转写：保存可先于密钥配置；实际提交前确认服务商并检查密钥。普通聊天模型不能替代语音转写。" : MeetingConfig.LocalRuntimeStatus(MeetingFiles.Home);
+        };
+        choices["transcription_mode"].SelectedIndexChanged += delegate { refresh(); };
+        Activated += delegate { refresh(); }; refresh();
         page.Controls.Add(grid);
     }
     void OpenLink(string url) { try { DesktopServices.Open(url); } catch (Exception failure) { error.Text = "无法打开：" + failure.Message; } }

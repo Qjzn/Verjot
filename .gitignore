@@ -102,6 +102,7 @@
 !/src/Compact-Completed-Meetings.py
 !/src/Install-Shortcuts.ps1
 !/src/Install.ps1
+!/src/RecommendedModel.ps1
 !/src/MeetingActions.cs
 !/src/MeetingSettings.cs
 !/src/NativeNoteDocument.cs
@@ -139,6 +140,8 @@
 !/tests/TestMeetingExperience.cs
 !/tests/TestMeetingHotkeys.cs
 !/tests/TestMeetingSettings.cs
+!/tests/Test-RecommendedModel.ps1
+!/tests/Test-RecommendedModelUi.ps1
 !/tests/TestNativeNoteDocument.cs
 !/tests/TestQuickNoteEditor.cs
 !/tests/TestQuickNoteInput.cs

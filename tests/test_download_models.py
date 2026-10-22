@@ -27,6 +27,20 @@ class Response:
 
 
 class ModelDownloadTests(unittest.TestCase):
+    def test_unexpected_recommended_revision_preserves_existing_files(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent / "validation") as temporary:
+            root = Path(temporary)
+            existing = root / "keep.safetensors"
+            existing.write_bytes(b"existing-model")
+            http = Mock()
+            http.get.return_value.json.return_value = {"sha": "unreviewed-upstream-revision"}
+            with patch.object(models, "ROOT", root), patch.object(models, "HTTP", http), patch.object(models, "download") as fetch:
+                with self.assertRaisesRegex(OSError, "Unexpected recommended model revision"):
+                    models.main([])
+            self.assertIn("/revision/" + models.QWEN_REVISION, http.get.call_args.args[0])
+            fetch.assert_not_called()
+            self.assertEqual(existing.read_bytes(), b"existing-model")
+
     def test_wrong_resume_range_does_not_publish_corrupt_model(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent / "validation") as temporary:
             destination = Path(temporary) / "speaker.onnx"

@@ -346,7 +346,7 @@ class DownloadRoutingTests(unittest.TestCase):
                 destination.write_bytes(b"synthetic-model")
 
             response = SimpleNamespace(raise_for_status=lambda: None,
-                                       json=lambda: {"sha": "revision", "siblings": [
+                                       json=lambda: {"sha": downloader.QWEN_REVISION, "siblings": [
                                            {"rfilename": "config.json"}, {"rfilename": "model.safetensors"}]})
             package = MagicMock()
             package.__enter__.return_value.getmembers.return_value = []
@@ -366,7 +366,8 @@ class DownloadRoutingTests(unittest.TestCase):
             else:
                 metadata_get.assert_called_once()
                 self.assertEqual(len(calls), 4)
-                self.assertEqual(json.loads(previous_manifest.read_text(encoding="utf-8"))["revision"], "revision")
+                self.assertEqual(json.loads(previous_manifest.read_text(encoding="utf-8"))["revision"], downloader.QWEN_REVISION)
+                self.assertIn('/revision/' + downloader.QWEN_REVISION, metadata_get.call_args.args[0])
             self.assertEqual(json.loads((root / "download-status.json").read_text(encoding="utf-8"))["state"], "completed")
 
 

@@ -39,6 +39,13 @@ foreach ($taskTest in @('TestDesktopServices', 'TestSessionCatalog', 'TestJsonRe
 }
 & (Join-Path $taskTests 'Test-InstallPrerequisites.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
 if ($LASTEXITCODE -ne 0) { throw "Install prerequisite regression failed: $LASTEXITCODE" }
+& (Join-Path $taskTests 'Test-RecommendedModel.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
+$taskModelUiRoot = Join-Path $taskOutput 'model-ui'
+[IO.Directory]::CreateDirectory((Join-Path $taskModelUiRoot 'assets')) | Out-Null
+Copy-Item -LiteralPath (Join-Path $taskRoot 'RecommendedModel.ps1') -Destination $taskModelUiRoot
+Copy-Item -LiteralPath (Join-Path $taskRepo 'assets\tingji.ico') -Destination (Join-Path $taskModelUiRoot 'assets')
+& $taskDesktopRunner (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $taskTests 'Test-RecommendedModelUi.ps1') -Helper (Join-Path $taskModelUiRoot 'RecommendedModel.ps1') -Output (Join-Path $taskModelUiRoot 'recommended-model.png')
+if ($LASTEXITCODE -ne 0) { throw 'Recommended model download UI failed in the isolated desktop.' }
 if (-not $NativeOnly) {
     $taskPython = if ($PythonExe) { [IO.Path]::GetFullPath($PythonExe) } else { Join-Path $taskRoot '.venv\Scripts\python.exe' }
     if (-not (Test-Path -LiteralPath $taskPython)) { throw 'Install the selected Python dependencies before running worker regressions.' }

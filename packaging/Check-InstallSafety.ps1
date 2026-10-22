@@ -32,6 +32,14 @@ function Read-State([string]$Path) {
 try {
     $taskRoot = [IO.Path]::GetFullPath($Root)
     Assert-OrdinaryPath $taskRoot
+    foreach ($taskSetupLockName in @('recommended-model.lock', 'runtime-install.lock')) {
+        $taskSetupLockPath = Join-Path $taskRoot $taskSetupLockName
+        Assert-OrdinaryPath $taskSetupLockPath
+        if (Test-Path -LiteralPath $taskSetupLockPath -PathType Leaf) {
+            $taskSetupHandle = [IO.File]::Open($taskSetupLockPath, 'Open', 'ReadWrite', 'None')
+            $taskSetupHandle.Dispose()
+        }
+    }
     Assert-ExecutableIdle (Join-Path $taskRoot 'ObsidianMeeting.exe')
     Assert-ExecutableIdle (Join-Path $taskRoot '.venv\Scripts\python.exe')
     Assert-ExecutableIdle (Join-Path $taskRoot '.venv\Scripts\pythonw.exe')

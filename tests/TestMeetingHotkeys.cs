@@ -1,8 +1,14 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
 using System.Threading;
 using System.Windows.Forms;
+using NAudio.Wave;
 
 internal static class TestMeetingHotkeys {
     const string StartKey = "Ctrl+Alt+Shift+F21";
@@ -147,6 +153,106 @@ internal static class TestMeetingHotkeys {
         using (var released = new OccupiedKey(StartKey)) { Check(true, "Controller disposal after quick-note conflict must release the start key"); }
         using (var released = new OccupiedKey(QuickNoteKey)) { Check(true, "Conflict fixture must release its isolated quick-note key"); }
     }
+    static object Field(object target, string name) {
+        return target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public).GetValue(target);
+    }
+    static void Set(object target, string name, object value) {
+        target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public).SetValue(target, value);
+    }
+    static void MicrophoneOnlyController() {
+        // Invoke the real hotkey/controller/menu path with in-memory endpoint
+        // fixtures and actual WAV writers. Never enumerate or capture a device.
+        string root = Path.Combine(MeetingFiles.Home, "microphone-hotkey");
+        Directory.CreateDirectory(root);
+        var config = new Dictionary<string, object> {
+            { "vault_root", root }, { "hotkey", StartKey }, { "pause_hotkey", PauseKey },
+            { "bookmark_hotkey", BookmarkKey }, { "quick_note_hotkey", QuickNoteKey },
+            { "check_updates", false }, { "show_processing_window", false }, { "open_in_obsidian", false }
+        };
+        var session = (RecordingSession)FormatterServices.GetUninitializedObject(typeof(RecordingSession));
+        Set(session, "gate", new object()); Set(session, "clock", Stopwatch.StartNew());
+        Set(session, "DirectoryPath", root); Set(session, "captureProblems", new List<string>());
+        var micRanges = new List<Dictionary<string, object>>();
+        var wholeRanges = new List<Dictionary<string, object>>();
+        Set(session, "microphonePauses", micRanges); Set(session, "recordingPauses", wholeRanges);
+        var metadata = new Dictionary<string, object> {
+            { "microphone_pauses", micRanges }, { "recording_pauses", wholeRanges },
+            { "recording_paused", false }, { "microphone_paused", false }
+        };
+        Set(session, "metadata", metadata);
+        Type sourceType = typeof(RecordingSession).GetNestedType("Source", BindingFlags.NonPublic);
+        var sources = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(sourceType));
+        Set(session, "sources", sources);
+        var writers = new List<TimelineWriter>();
+        MeetingContext context = null;
+        try {
+            foreach (string key in new[] { "mic", "output-one", "output-two" }) {
+                string path = Path.Combine(root, key + ".wav");
+                var writer = new TimelineWriter(path, new WaveFormat(16000, 16, 1)); writers.Add(writer);
+                var track = (CaptureTrack)FormatterServices.GetUninitializedObject(typeof(CaptureTrack));
+                Set(track, "writer", writer); Set(track, "PathName", path);
+                Set(track, "diagnostics", new List<Dictionary<string, object>>());
+                var source = Activator.CreateInstance(sourceType, true);
+                Set(source, "Key", key); Set(source, "Kind", key == "mic" ? "microphone" : "loopback");
+                Set(source, "DeviceId", key); Set(source, "Name", key); Set(source, "Track", track);
+                sources.Add(source);
+            }
+            context = new MeetingContext(config, null, null);
+            ((NotifyIcon)Field(context, "tray")).Visible = false;
+            ((System.Windows.Forms.Timer)Field(context, "timer")).Stop();
+            var hotkey = (MeetingHotkey)Field(context, "hotkey");
+            Press(hotkey, 0x85); Application.DoEvents();
+            Check(!session.MicrophonePaused, "Idle pause key must not affect a recording fixture");
+            Set(context, "recording", session);
+            var panel = (RecorderPanel)Field(context, "panel");
+            panel.ShowRecording("mic", "output-one; output-two"); panel.Show();
+            var micMenu = (ToolStripMenuItem)Field(context, "pauseMicrophone");
+            micMenu.Enabled = true;
+            hotkey.EnablePause(true);
+            Thread.Sleep(20); Press(hotkey, 0x85);
+            Receive(delegate { return session.MicrophonePaused || session.RecordingPaused; });
+            Check(session.MicrophonePaused && !session.RecordingPaused, "Pause hotkey must mute only microphone, never system audio");
+            Check(panel.MicrophoneButton.MicrophoneDisabled && !panel.Heading.Visible, "Mic mute must update the icon without a whole-recording pause label");
+            Check(micMenu.Text.Contains("继续麦克风") && micMenu.Text.Contains(PauseKey), "One menu action must show resume and the configured microphone hotkey");
+            foreach (ToolStripItem item in panel.ContextMenuStrip.Items)
+                Check(!item.Text.Contains("整场录音"), "The shared menu must not expose whole-session pause");
+            Thread.Sleep(20); panel.MicrophoneButton.PerformClick();
+            Check(!session.MicrophonePaused && !session.RecordingPaused, "Clicking the microphone after keyboard pause must resume it");
+            Check(micMenu.Text.Contains("暂停麦克风"), "Resume must restore the menu action to pause microphone");
+            Thread.Sleep(20); micMenu.PerformClick();
+            Check(session.MicrophonePaused && !session.RecordingPaused, "Menu pause must share the same mic-only state");
+            Thread.Sleep(20); Press(hotkey, 0x85); Receive(delegate { return !session.MicrophonePaused; });
+            Check(!session.RecordingPaused && wholeRanges.Count == 0, "Mixed keyboard, icon and menu actions must never create whole-session pauses");
+            Check(micRanges.Count == 2, "The two microphone pause intervals must be persisted");
+            var saved = MeetingFiles.ReadJson(Path.Combine(root, "session.json"));
+            Check(!(bool)saved["recording_paused"] && !(bool)saved["microphone_paused"], "Persisted session state must reflect mic-only resume");
+            int frames = (int)Math.Ceiling(((Stopwatch)Field(session, "clock")).Elapsed.TotalSeconds * 16000) + 1600;
+            byte[] pcm = new byte[frames * 2];
+            for (int i = 0; i < pcm.Length; i += 2) { pcm[i] = 0xe8; pcm[i + 1] = 3; }
+            foreach (var writer in writers) { writer.Add(pcm, pcm.Length, frames / 16.0); writer.Finish(frames / 16.0); }
+            foreach (string key in new[] { "mic", "output-one", "output-two" }) {
+                using (var reader = new WaveFileReader(Path.Combine(root, key + ".wav"))) {
+                    Check(reader.Length == pcm.Length, "Microphone pauses must preserve each track's wall-clock length");
+                    byte[] actual = new byte[pcm.Length]; int count = reader.Read(actual, 0, actual.Length);
+                    Check(count == actual.Length, "Every track must remain fully readable");
+                    bool samplesCorrect = true;
+                    for (int i = 0; i < count; i += 2) {
+                        double seconds = i / 32000.0; bool muted = false, boundary = false;
+                        if (key == "mic") foreach (var range in micRanges) {
+                            double start = (double)range["start_seconds"], end = (double)range["end_seconds"];
+                            muted |= seconds > start && seconds < end;
+                            boundary |= Math.Abs(seconds - start) < .002 || Math.Abs(seconds - end) < .002;
+                        }
+                        if (!boundary && BitConverter.ToInt16(actual, i) != (muted ? 0 : 1000)) samplesCorrect = false;
+                    }
+                    Check(samplesCorrect, "Only mic pause intervals may be silent; both computer sources must remain sample-identical: " + key);
+                }
+            }
+        } finally {
+            if (context != null) { Set(context, "recording", null); context.ExitThread(); context.Dispose(); }
+            foreach (var writer in writers) writer.Dispose();
+        }
+    }
     [STAThread]
     static int Main() {
         try {
@@ -173,6 +279,7 @@ internal static class TestMeetingHotkeys {
             using (var released = new OccupiedKey(BookmarkKey)) { Check(true, "Disposal releases bookmark independently"); }
             QuickNoteLifetime();
             QuickNoteConflict();
+            MicrophoneOnlyController();
             Console.WriteLine("PASS TestMeetingHotkeys: " + assertions + " assertions; actual isolated key registration and targeted WM_HOTKEY dispatch; no global input, clipboard, audio or user windows.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

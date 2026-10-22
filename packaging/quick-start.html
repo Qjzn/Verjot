@@ -19,11 +19,12 @@
     <p>首次打开时，选择录音和笔记的保存目录，确认快捷键后点击「保存并启动」。之后程序驻留托盘，右键菜单中的「设置…」可以再次修改。</p>
     <h2>速记可以直接用</h2>
     <p>按 <kbd>Ctrl + Alt + J</kbd> 打开置顶便签。支持输入文字、粘贴图片和自动保存；收起后重新打开可继续写，不需要 Python、模型或 Obsidian。</p>
-    <h2>会议功能需要单独准备环境</h2>
-    <p>安装包不含 Python、语音模型或 FFmpeg。请先按 <a href="https://github.com/Qjzn/verbit/blob/main/documentation/install-windows.md">完整安装说明</a> 选择 API 转写或本地中文模型，再开始录音。仓库目前私有，在线说明需要仓库访问权限；离线原文位于程序目录 <a href="../documentation/install-windows.md">documentation/install-windows.md</a>。</p>
+    <h2>先录音，转写时再准备模型</h2>
+    <p>没有 Python 或模型也能先录音。结束后若提示「录音已保存 · 待配置转写」，无损录音保存在程序目录 work 下。准备好模型并保存设置后，从「最近会议」选择对应场次「重试这场转写」。此时才生成最终 MP3 和 Markdown；等待期间不要删除恢复资料。</p>
+    <p>安装时可勾选下载推荐的千问中文转写，或稍后从“设置 → 转写 → 下载推荐模型…”准备。无需预装系统 Python，所需依赖与说话人组件一起安装；下载需数 GB 空间，音频留本机。安装包本身不含模型，速记可直接使用。详见程序目录的 <a href="../documentation/install-windows.md">本地完整安装说明</a>。</p>
     <dl>
       <dt><kbd>Ctrl + Alt + L</kbd> 开始 / 结束会议</dt><dd>默认不足 5 秒的误触录音不保存、不转写。</dd>
-      <dt><kbd>Alt + Space</kbd> 暂停 / 继续整场录音</dt><dd>浮窗中的麦克风按钮只控制麦克风，电脑声音继续录制。</dd>
+      <dt><kbd>Alt + Space</kbd> 暂停 / 继续麦克风</dt><dd>按一次暂停麦克风，再按一次恢复；与浮窗麦克风按钮共用状态，电脑声音持续录制。</dd>
       <dt><kbd>Ctrl + Alt + K</kbd> 标记重点时间</dt><dd>会后从 Markdown 中查看对应时间点。</dd>
     </dl>
     <h2>你的文件由你保管</h2>

@@ -9,6 +9,16 @@ internal static class TestDesktopServices {
     static void Reject(Action action, string message) { bool rejected = false; try { action(); } catch (InvalidDataException) { rejected = true; } Check(rejected, message); }
     [STAThread] static int Main() {
         try {
+            string setupRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "model-setup-gate"); Directory.CreateDirectory(setupRoot);
+            using (DesktopServices.EnterModelSetupGate(setupRoot)) {
+                bool blocked = false; try { using (DesktopServices.EnterModelSetupGate(setupRoot)) { } } catch (IOException) { blocked = true; }
+                Check(blocked, "A model preparation gate blocks capture/another preparation without touching audio");
+            }
+            using (DesktopServices.EnterModelSetupGate(setupRoot)) { Check(true, "Gate releases after setup and is reusable"); }
+            string setupScript = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RecommendedModel.ps1");
+            File.WriteAllText(setupScript, "# isolated launcher fixture; not executed");
+            var setupInfo = DesktopServices.RecommendedModelStartInfo();
+            Check(!setupInfo.UseShellExecute && setupInfo.CreateNoWindow && setupInfo.Arguments.Contains("\"" + setupScript + "\"") && setupInfo.Arguments.Contains("-NoProfile"), "Download opens a quoted, isolated helper without a shell console");
             Check(DesktopServices.Newer("v0.1.0-beta.10", "0.1.0-beta.4"), "Numeric prerelease order");
             Check(!DesktopServices.Newer("v0.1.0-beta.2", "0.1.0-beta.4"), "No prerelease downgrade");
             Check(DesktopServices.Newer("v0.1.0", "0.1.0-rc.3"), "Stable follows RC");

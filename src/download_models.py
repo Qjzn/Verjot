@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent / "models"
 ROOT.mkdir(exist_ok=True)
 STATUS = ROOT / "download-status.json"
 HTTP = requests.Session()
+QWEN_REVISION = "bcd2b5b7f32b480ab5790554cfa8347f246a14f3"
 
 
 def report(**data):
@@ -101,10 +102,12 @@ def main(argv=None):
     revision = None
     manifest = []
     if not args.speaker_only:
-        response = HTTP.get(f"https://huggingface.co/api/models/{repo}?blobs=true", timeout=30)
+        response = HTTP.get(f"https://huggingface.co/api/models/{repo}/revision/{QWEN_REVISION}?blobs=true", timeout=30)
         response.raise_for_status()
         metadata = response.json()
         revision = metadata["sha"]
+        if revision != QWEN_REVISION:
+            raise IOError("Unexpected recommended model revision; existing files were not changed")
         for item in metadata["siblings"]:
             name = item["rfilename"]
             if name.endswith((".json", ".jinja", ".safetensors")):
@@ -118,14 +121,16 @@ def main(argv=None):
                                  "sha256": sha256(destination)})
     archive = ROOT / "segmentation.tar.bz2"
     download("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/"
-             "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2", archive, 6958444)
+             "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2", archive, 6958444,
+             "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488")
     with tarfile.open(archive) as package:
         for member in package.getmembers():
             (ROOT / member.name).resolve().relative_to(ROOT.resolve())
         package.extractall(ROOT, filter="data")
     speaker = ROOT / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
     download("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
-             + speaker.name, speaker, 39593761)
+             + speaker.name, speaker, 39593761,
+             "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b")
     if args.speaker_only:
         (ROOT / "speaker-model-manifest.json").write_text(json.dumps({
                  "speaker_sha256": sha256(speaker), "segmentation_sha256": sha256(archive)},

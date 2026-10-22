@@ -19,10 +19,36 @@ internal static class DesktopServices {
     }
     public static string StartupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
     public static string Executable { get { return Assembly.GetExecutingAssembly().Location; } }
+    public static ProcessStartInfo RecommendedModelStartInfo() {
+        string script = Path.Combine(Path.GetDirectoryName(Executable), "RecommendedModel.ps1");
+        MeetingConfig.CheckOrdinaryPath(script);
+        if (!File.Exists(script)) throw new IOException("缺少推荐模型安装组件，请使用完整安装包。");
+        return new ProcessStartInfo {
+            FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
+            Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\"",
+            WorkingDirectory = Path.GetDirectoryName(Executable), UseShellExecute = false, CreateNoWindow = true
+        };
+    }
+    public static void DownloadRecommendedModel() { using (var process = Process.Start(RecommendedModelStartInfo())) { } }
+    // Held until a transcription worker publishes its identity. Native capture
+    // does not use Python or model files and may start during model setup.
+    public static IDisposable EnterModelSetupGate(string home) { return new ModelSetupGate(home); }
+    sealed class ModelSetupGate : IDisposable {
+        readonly System.Collections.Generic.List<FileStream> handles = new System.Collections.Generic.List<FileStream>();
+        public ModelSetupGate(string home) {
+            try {
+                foreach (string name in new[] { "recommended-model.lock", "runtime-install.lock" }) {
+                    string path = Path.Combine(home, name); MeetingConfig.CheckOrdinaryPath(path);
+                    handles.Add(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None));
+                }
+            } catch { Dispose(); throw new IOException("转写环境正在准备，请完成后重试转写；录音和速记可继续使用。"); }
+        }
+        public void Dispose() { foreach (var handle in handles) handle.Dispose(); handles.Clear(); }
+    }
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.5-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.6-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {

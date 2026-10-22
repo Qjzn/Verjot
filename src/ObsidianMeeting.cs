@@ -190,10 +190,16 @@ internal static class MeetingConfig {
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
                 throw new InvalidOperationException("api_base_url 必须是无密钥、无查询参数的 HTTP(S) API 前缀。");
             if (string.IsNullOrWhiteSpace((string)config["api_model"])) throw new InvalidOperationException("API 模式必须填写 api_model 音频转写模型名。");
-            if (requireApiKey && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable((string)config["api_key_env"])))
-                throw new InvalidOperationException("未设置 API 密钥环境变量：" + (string)config["api_key_env"] + "；设置后重新启动verbit。");
+            if (requireApiKey && string.IsNullOrWhiteSpace(ApiKeyValue((string)config["api_key_env"])))
+                throw new InvalidOperationException("未设置 API 密钥环境变量：" + (string)config["api_key_env"] + "；请配置 Windows 用户环境变量后重试转写。");
         }
         return config;
+    }
+    public static string ApiKeyValue(string name) {
+        // Read newly configured user variables without requiring a tray restart.
+        // Never persist this value in config/session/status/log files.
+        return Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.User)
+            ?? Environment.GetEnvironmentVariable(name);
     }
     public static void CheckOrdinaryPath(string path) {
         for (var directory = new DirectoryInfo(path); directory != null; directory = directory.Parent) {
@@ -218,7 +224,31 @@ internal static class MeetingConfig {
     }
     public static void CheckRecordingRuntime(string home) {
         if (!File.Exists(Path.Combine(home, ".venv", "Scripts", "python.exe")) || !File.Exists(Path.Combine(home, "meeting_worker.py")))
-            throw new IOException("会议转写环境尚未安装完整，未开始录音。请按程序目录中 documentation\\install-windows.md 配置本地模型或 API 并完成自检；速记仍可直接使用。");
+            throw new IOException("缺少独立 Python 转写环境。请打开「设置 → 转写 → 下载推荐模型…」准备环境，完成后从「最近会议」重试。原始录音已保留。");
+    }
+    public static string LocalRuntimeStatus(string home) {
+        try { CheckTranscriptionRuntime(home, new Dictionary<string, object> { { "transcription_mode", "local" } }); }
+        catch (IOException) { return "本地转写环境未就绪，请点击「下载推荐模型…」。仅选择本地不会下载；不影响录音和速记。"; }
+        return "本地模型文件已就绪（Qwen3-ASR-1.7B）。实际转写时检查依赖与模型加载；音频留在本机。";
+    }
+    public static void CheckTranscriptionRuntime(string home, Dictionary<string, object> settings) {
+        CheckRecordingRuntime(home);
+        string models = Path.Combine(home, "models");
+        bool segmentation = false;
+        foreach (string file in new[] { Path.Combine(models, "segmentation", "model.onnx"),
+            Path.Combine(models, "sherpa-onnx-pyannote-segmentation-3-0", "model.onnx"),
+            Path.Combine(models, "sherpa-onnx-pyannote-segmentation-3-0", "model.int8.onnx") })
+            if (File.Exists(file) && new FileInfo(file).Length > 0) segmentation = true;
+        if (!segmentation) throw new IOException("缺少本地说话人分段模型。请在「设置 → 转写 → 下载推荐模型…」准备，完成后重试；原始录音已保留。");
+        var required = new List<string> {
+            Path.Combine(models, "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+        };
+        if (MeetingFiles.Text(settings, "transcription_mode", "local") == "local") {
+            string qwen = Path.Combine(models, "Qwen3-ASR-1.7B-hf");
+            foreach (string file in new[] { "config.json", "model.safetensors", "processor_config.json", "tokenizer_config.json", "tokenizer.json" }) required.Add(Path.Combine(qwen, file));
+        }
+        foreach (string file in required) if (!File.Exists(file) || new FileInfo(file).Length == 0)
+            throw new IOException("本地转写模型尚未准备完整，请打开「设置 → 转写 → 下载推荐模型…」；完成后从「最近会议」重试。原始录音已保留。缺少：" + Path.GetFileName(file));
     }
 }
 
@@ -995,6 +1025,7 @@ internal sealed class RecordingSession : IDisposable {
             { "schema_version", 2 }, { "start_time", started.ToString("o") }, { "state", "recording" },
             { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
+            { "transcription_deferred", true },
             { "transcription_mode", config["transcription_mode"] }, { "asr_denoise", config["asr_denoise"] },
             { "asr_context", MeetingFiles.Text(config, "asr_context", "") },
             { "asr_terms", MeetingFiles.Text(config, "asr_terms", "") },
@@ -2104,7 +2135,7 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
         string warning;
         if (!pauseRegistered) {
             pauseRegistered = TryRegisterAuxiliary(pauseText, PauseId, "pause_hotkey", out warning);
-            if (!pauseRegistered) warnings.Add("暂停快捷键 " + warning);
+            if (!pauseRegistered) warnings.Add("麦克风暂停快捷键 " + warning);
         }
         if (!bookmarkRegistered) {
             bookmarkRegistered = TryRegisterAuxiliary(bookmarkText, BookmarkId, "bookmark_hotkey", out warning);
@@ -2144,8 +2175,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly RecorderPanel panel = new RecorderPanel();
     readonly List<TranscriptionJob> jobs = new List<TranscriptionJob>();
     readonly ToolStripMenuItem toggle = new ToolStripMenuItem("开始录音");
-    readonly ToolStripMenuItem pauseRecording = new ToolStripMenuItem("暂停整场录音");
-    readonly ToolStripMenuItem pauseMicrophone = new ToolStripMenuItem("关闭麦克风");
+    readonly ToolStripMenuItem pauseMicrophone = new ToolStripMenuItem("暂停麦克风");
     readonly ToolStripMenuItem summary = new ToolStripMenuItem("verbit已就绪") { Enabled = false };
     readonly ToolStripMenuItem recent = new ToolStripMenuItem("最近会议");
     readonly ToolStripMenuItem bookmark = new ToolStripMenuItem("标记重点") { Name = "bookmark", Enabled = false };
@@ -2184,7 +2214,7 @@ internal sealed class MeetingContext : ApplicationContext {
         IntPtr dispatchHandle = dispatch.Handle;
         hotkey = new MeetingHotkey(StartHotkey, PauseHotkey, BookmarkHotkey, QuickNoteHotkey);
         hotkey.Pressed += Toggle;
-        hotkey.PausePressed += ToggleRecordingPause;
+        hotkey.PausePressed += ToggleMicrophone;
         hotkey.BookmarkPressed += MarkBookmark;
         hotkey.QuickNotePressed += ToggleQuickNote;
         hotkey.ExitRequested += RequestExit;
@@ -2200,10 +2230,7 @@ internal sealed class MeetingContext : ApplicationContext {
         toggle.Click += delegate { Toggle(); };
         toggle.Text = "开始录音 · " + StartHotkey;
         menu.Items.Add(toggle);
-        pauseRecording.Text = "暂停整场录音 · " + PauseHotkey;
-        pauseRecording.Enabled = false;
-        pauseRecording.Click += delegate { ToggleRecordingPause(); };
-        menu.Items.Add(pauseRecording);
+        pauseMicrophone.Text = "暂停麦克风 · " + PauseHotkey;
         pauseMicrophone.Click += delegate { ToggleMicrophone(); };
         pauseMicrophone.Enabled = false;
         menu.Items.Add(pauseMicrophone);
@@ -2294,13 +2321,13 @@ internal sealed class MeetingContext : ApplicationContext {
         catalog = new SessionCatalog(MeetingFiles.Home, MeetingFiles.VaultRoot(config));
         focusedSession = null; focusedRecord = null;
         toggle.Text = "开始录音 · " + StartHotkey;
-        pauseRecording.Text = "暂停整场录音 · " + PauseHotkey;
+        pauseMicrophone.Text = "暂停麦克风 · " + PauseHotkey;
         bookmark.Text = "标记重点 · " + BookmarkHotkey;
         var quickItem = tray.ContextMenuStrip.Items["quickNote"];
         if (quickItem != null) quickItem.Text = "速记便签 · " + QuickNoteHotkey;
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
         RefreshFeedback();
-        Notice("设置已生效", "新记录保存到：" + MeetingFiles.VaultRoot(config) + "；旧文件保留在原位置。", ToolTipIcon.Info);
+        Notice("设置已生效", "尚未开始转写的新录音重试时使用当前模型设置。旧文件保留在原位置。", ToolTipIcon.Info);
         return null;
     }
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
@@ -2324,10 +2351,9 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void Start() {
         try {
-            // Missing API credentials must never disable quick notes/settings,
-            // but must be rejected before any capture or meeting files exist.
-            MeetingConfig.Validate(new Dictionary<string, object>(config));
-            if (workerLauncher == null) MeetingConfig.CheckRecordingRuntime(MeetingFiles.Home);
+            // Native capture has no Python/model dependency. Validate paths and
+            // shortcuts here; credentials and models belong to transcription.
+            MeetingConfig.Validate(new Dictionary<string, object>(config), false);
             preserveShortRecording = false;
             hotkey.EnablePause(true);
             RecordingSession startedSession = null;
@@ -2346,9 +2372,7 @@ internal sealed class MeetingContext : ApplicationContext {
             focusedSession = recording.DirectoryPath;
             focusedRecord = null;
             toggle.Text = "结束录音 · " + StartHotkey;
-            pauseRecording.Text = "暂停整场录音 · " + PauseHotkey;
-            pauseRecording.Enabled = true;
-            pauseMicrophone.Text = "关闭麦克风";
+            pauseMicrophone.Text = "暂停麦克风 · " + PauseHotkey;
             pauseMicrophone.Enabled = true;
             deviceCheckTicks = 0;
             silence.Reset();
@@ -2358,8 +2382,8 @@ internal sealed class MeetingContext : ApplicationContext {
             tray.Icon = MeetingBrand.RecordingIcon;
             RefreshFeedback();
             string startMessage = "正在录制麦克风和电脑声音；" + StartHotkey + " 结束。";
-            if (hotkey.AuxiliaryWarning.Length == 0) startMessage += PauseHotkey + " 暂停。";
-            else startMessage += hotkey.AuxiliaryWarning + " 仍可从浮窗或托盘右键菜单暂停录音、标记重点。";
+            if (hotkey.AuxiliaryWarning.Length == 0) startMessage += PauseHotkey + " 暂停/继续麦克风，电脑声音持续录制。";
+            else startMessage += hotkey.AuxiliaryWarning + " 仍可从浮窗或托盘右键菜单暂停麦克风、标记重点；电脑声音持续录制。";
             Notice("会议录音已开始", startMessage, hotkey.AuxiliaryWarning.Length == 0 ? ToolTipIcon.Info : ToolTipIcon.Warning);
         } catch (Exception error) {
             hotkey.EnablePause(false);
@@ -2396,24 +2420,16 @@ internal sealed class MeetingContext : ApplicationContext {
             RefreshFeedback();
         } catch (Exception error) { MeetingFiles.Log(error); Notice("无法命名这场会议", error.Message, ToolTipIcon.Warning); }
     }
-    void ToggleRecordingPause() {
-        if (recording == null || recording.Stopping) return;
-        try { recording.SetRecordingPaused(!recording.RecordingPaused); }
-        catch (Exception error) { MeetingFiles.Log(error); Notice("暂停状态保存异常", error.Message, ToolTipIcon.Error); }
-        finally { UpdateRecordingState(); }
-    }
     void UpdateRecordingState() {
         panel.SetMicPaused(recording.MicrophonePaused);
         panel.SetRecordingPaused(recording.RecordingPaused);
-        pauseMicrophone.Text = recording.MicrophonePaused ? "开启麦克风" : "关闭麦克风";
-        pauseRecording.Text = (recording.RecordingPaused ? "继续整场录音 · " : "暂停整场录音 · ") + PauseHotkey;
+        pauseMicrophone.Text = (recording.MicrophonePaused ? "继续麦克风 · " : "暂停麦克风 · ") + PauseHotkey;
         RefreshFeedback();
     }
     void Stop() {
         if (recording == null || recording.Stopping) return;
         RecordingSession ended = recording;
         hotkey.EnablePause(false);
-        pauseRecording.Enabled = false;
         pauseMicrophone.Enabled = false;
         bookmark.Enabled = false;
         silence.Reset();
@@ -2542,12 +2558,12 @@ internal sealed class MeetingContext : ApplicationContext {
         RefreshFeedback();
         if (show) { panel.Show(); panel.Activate(); }
     }
-    void RecordLaunchFailure(string session, string detail) {
+    void RecordLaunchFailure(string session, string detail, bool configuration = false) {
         try {
             catalog.SaveWorker(session, null);
             var status = MeetingFiles.ReadJson(Path.Combine(session, "status.json"));
-            status["state"] = "error"; status["stage"] = "launch";
-            status["message"] = "转写未启动，原始资料已保留"; status["error"] = detail;
+            status["state"] = "error"; status["stage"] = configuration ? "configuration" : "launch";
+            status["message"] = configuration ? "录音已保存 · 待配置转写。" + detail : "转写未启动，原始资料已保留"; status["error"] = detail;
             status["updated_at"] = DateTimeOffset.Now.ToString("o");
             MeetingFiles.WriteJson(Path.Combine(session, "status.json"), status);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
@@ -2555,11 +2571,31 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void LaunchWorker(string session) {
         Process startedProcess = null;
+        IDisposable setupGate = null;
+        bool checkingConfiguration = true;
         try {
             var record = catalog.Get(session);
             if (record == null) throw new IOException("会议资料不在当前程序的 work 中。");
             if (ActiveJob(session)) return;
             if (!record.CanRetry) throw new IOException(record.Message);
+            if (workerLauncher == null) {
+                setupGate = DesktopServices.EnterModelSetupGate(MeetingFiles.Home);
+                MeetingConfig.Validate(new Dictionary<string, object>(config));
+                MeetingConfig.CheckTranscriptionRuntime(MeetingFiles.Home, config);
+            }
+            var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+            if (MeetingFiles.Text(metadata, "transcription_deferred", "").Equals("True", StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(session, "result.json"))) {
+                bool api = (string)config["transcription_mode"] == "api";
+                if (api && MessageBox.Show("这场录音将发送到：" + config["api_base_url"] + "\n模型：" + config["api_model"] + "\n是否允许这次云端转写？取消后录音保留在本机。", MeetingBrand.Name,
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) throw new IOException("已取消云端提交，录音留在本机。可在设置中选择本地模式后重试。");
+                MeetingFiles.WriteJson(Path.Combine(session, "transcription-settings.json"), new {
+                    transcription_mode = config["transcription_mode"],
+                    transcription_model = api ? config["api_model"] : "Qwen3-ASR-1.7B",
+                    transcription_api_base_url = api ? ((string)config["api_base_url"]).TrimEnd('/') : "",
+                    api_upload_confirmed = api, asr_context = config["asr_context"], asr_terms = config["asr_terms"]
+                });
+            }
+            checkingConfiguration = false;
             DateTime previousStatus = File.GetLastWriteTimeUtc(Path.Combine(session, "status.json"));
             // Check metadata persistence before any potentially uploading worker
             // starts. A running worker must never be overwritten as launch-failed.
@@ -2571,10 +2607,12 @@ internal sealed class MeetingContext : ApplicationContext {
                 string python = Path.Combine(MeetingFiles.Home, ".venv", "Scripts", "python.exe");
                 string worker = Path.Combine(MeetingFiles.Home, "meeting_worker.py");
                 if (!File.Exists(python) || !File.Exists(worker)) throw new FileNotFoundException("转写程序未安装完整；录音已保留。");
-                process = Process.Start(new ProcessStartInfo {
+                var start = new ProcessStartInfo {
                     FileName = python, Arguments = Quote(worker) + " --session " + Quote(session),
                     WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true
-                });
+                };
+                if ((string)config["transcription_mode"] == "api") start.EnvironmentVariables[(string)config["api_key_env"]] = MeetingConfig.ApiKeyValue((string)config["api_key_env"]);
+                process = Process.Start(start);
             }
             if (process == null) throw new IOException("未能启动转写进程。");
             startedProcess = process;
@@ -2603,10 +2641,10 @@ internal sealed class MeetingContext : ApplicationContext {
                 Notice("转写状态需要检查", "后台处理已启动，原始资料已保留；请从最近会议查看对应场次。", ToolTipIcon.Warning);
                 return;
             }
-            RecordLaunchFailure(session, error.Message);
+            RecordLaunchFailure(session, error.Message, checkingConfiguration);
             RefreshFeedback();
-            Notice("转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Error);
-        }
+            Notice(checkingConfiguration ? "录音已保存 · 待配置转写" : "转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Warning);
+        } finally { if (setupGate != null) setupGate.Dispose(); }
     }
     void ReportJobFailure(TranscriptionJob job, string detail) {
         job.Reported = true;
@@ -2740,6 +2778,7 @@ internal sealed class MeetingContext : ApplicationContext {
         }
     }
     static string StateLabel(SessionRecord record) {
+        if (record.CanRetry && record.Message.StartsWith("录音已保存 · 待配置转写")) return "录音已保存 · 待配置转写";
         if (!record.CanRetry && (record.State == "failed" || record.State == "retry")) return "转写未完成 · 检查资料";
         return StateLabel(record.State);
     }

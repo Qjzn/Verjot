@@ -226,7 +226,9 @@ internal static class TestMeetingSettings {
         Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", null);
         try {
             Check(MeetingSettingsSnapshot.Open(path) != null, "Missing API credentials must not prevent opening repair settings");
-            Check(Reject(delegate { MeetingConfig.Validate(ConfigWithApi(root)); }), "Recording validation still requires an API key");
+            Check(Reject(delegate { MeetingConfig.Validate(ConfigWithApi(root)); }), "Transcription validation requires an API key");
+            snapshot = MeetingSettingsSnapshot.Open(path); snapshot.Commit(Candidate(snapshot, nextRoot));
+            Check((string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "api", "Settings can be saved before an API key is installed");
             Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", "synthetic-test-only");
             snapshot = MeetingSettingsSnapshot.Open(path); snapshot.Commit(Candidate(snapshot, nextRoot));
             Check((string)MeetingSettingsSnapshot.Open(path).Values["api_key_env"] == "VERBIT_SETTINGS_SYNTHETIC_KEY", "API secret variable reference survives settings");
@@ -327,12 +329,27 @@ internal static class TestMeetingSettings {
         Check(Reject(delegate { pending.Commit(pending.Values); }) && concurrent.SequenceEqual(File.ReadAllBytes(raced)), "Concurrent config creation is preserved byte-exact and rejects first-run save");
         Check(Directory.GetFiles(directory, "*.settings-*").Length == 0, "First-run save and conflict leave no temporary files");
         string runtime = Path.Combine(directory, "synthetic-runtime"); Directory.CreateDirectory(runtime);
-        Check(Reject(delegate { MeetingConfig.CheckRecordingRuntime(runtime); }), "Missing runtime is rejected before capture");
+        Check(Reject(delegate { MeetingConfig.CheckRecordingRuntime(runtime); }), "Missing runtime is rejected before transcription");
+        Check(MeetingConfig.Validate(Config(root), false) != null, "Recording configuration needs neither Python nor model files");
+        Check(MeetingConfig.LocalRuntimeStatus(runtime).Contains("未就绪"), "Settings explicitly shows missing local runtime");
         File.WriteAllText(Path.Combine(runtime, "meeting_worker.py"), "synthetic; never executed");
         Check(Reject(delegate { MeetingConfig.CheckRecordingRuntime(runtime); }), "Worker alone cannot pass runtime preflight");
         Directory.CreateDirectory(Path.Combine(runtime, ".venv", "Scripts"));
         File.WriteAllText(Path.Combine(runtime, ".venv", "Scripts", "python.exe"), "synthetic; never executed");
         MeetingConfig.CheckRecordingRuntime(runtime); Check(true, "Runtime preflight checks file presence without executing Python or loading models");
+        Check(Reject(delegate { MeetingConfig.CheckTranscriptionRuntime(runtime, Config(root)); }), "Python alone does not make local models ready");
+        foreach (string name in new[] { "segmentation/model.onnx", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+            "Qwen3-ASR-1.7B-hf/config.json", "Qwen3-ASR-1.7B-hf/model.safetensors", "Qwen3-ASR-1.7B-hf/processor_config.json",
+            "Qwen3-ASR-1.7B-hf/tokenizer_config.json", "Qwen3-ASR-1.7B-hf/tokenizer.json" }) {
+            string file = Path.Combine(runtime, "models", name); Directory.CreateDirectory(Path.GetDirectoryName(file));
+            File.WriteAllText(file, "synthetic; never loaded");
+        }
+        MeetingConfig.CheckTranscriptionRuntime(runtime, Config(root));
+        Check(MeetingConfig.LocalRuntimeStatus(runtime).Contains("文件已就绪"), "Ready file layout is detected without importing ML libraries");
+        File.WriteAllText(Path.Combine(runtime, "models", "Qwen3-ASR-1.7B-hf", "model.safetensors"), "");
+        Check(Reject(delegate { MeetingConfig.CheckTranscriptionRuntime(runtime, Config(root)); }), "An incomplete empty ASR weight is not treated as ready");
+        MeetingConfig.CheckTranscriptionRuntime(runtime, ConfigWithApi(root));
+        Check(true, "API mode requires speaker files but does not require Qwen weights");
     }
     static void CheckChildren(Control parent, int dpi) {
         foreach (Control input in parent.Controls) {
@@ -415,10 +432,15 @@ internal static class TestMeetingSettings {
                 Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "local", "Missing old API key can be repaired by switching to local through the actual dialog");
             }
             var api = ConfigWithApi(root);
+            // Never contend with the user's running verbit default shortcuts.
+            api["hotkey"] = "Ctrl+Alt+Shift+F21"; api["pause_hotkey"] = "Ctrl+Alt+Shift+F22";
+            api["bookmark_hotkey"] = "Ctrl+Alt+Shift+F23"; api["quick_note_hotkey"] = "Ctrl+Alt+Shift+F24";
             using (var context = new MeetingContext(api, delegate { throw new Exception("No worker may launch"); }, delegate { throw new Exception("No external app may open"); })) {
                 ((System.Windows.Forms.Timer)Field(context, "timer")).Stop();
                 Check(context != null, "Missing API key no longer prevents desktop context from starting");
-                Check(Reject(delegate { MeetingConfig.Validate(new Dictionary<string, object>(api)); }), "Capture preflight remains strict without the API key");
+                Check(Reject(delegate { MeetingConfig.Validate(new Dictionary<string, object>(api)); }), "Transcription preflight remains strict without the API key");
+                Check(MeetingConfig.Validate(new Dictionary<string, object>(api), false) != null, "Native recording accepts a configured API mode without credentials");
+                context.ExitThread();
             }
         } finally { Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", previous); }
     }
@@ -438,13 +460,13 @@ internal static class TestMeetingSettings {
             var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
             Check(tabs.TabPages.Count == 3, "General, transcription and about pages exist");
             tabs.SelectedIndex = 1; Application.DoEvents();
+            Check(form.Controls.Find("download_recommended_model", true).Length == 1 && form.Controls.Find("download_recommended_model", true)[0].Visible, "One recommended local model download entry is visible");
             Check(Input(form, "asr_terms").Visible && !Input(form, "api_model").Enabled, "Local terms editable; API disabled for local mode");
+            Check(form.Controls.Find("transcription_readiness", true)[0].Text.Contains("未就绪"), "Actual settings distinguishes choosing local from installing its model");
+            using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-local.png")); }
             var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 1;
             Check(Input(form, "api_model").Enabled, "Choosing API exposes API model fields");
             Input(form, "api_key_env").Text = "VERBIT_SYNTHETIC_UNSET_KEY";
-            ((Button)form.AcceptButton).PerformClick();
-            Check(form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "local", "Missing API key prevents mode switch without damaging config");
-            mode.SelectedIndex = 0; Input(form, "api_key_env").Text = "VERBIT_SETTINGS_SYNTHETIC_KEY";
             Input(form, "asr_terms").Text = "产品名,术语";
             CheckChildren(tabs.SelectedTab, form.DeviceDpi);
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-models.png")); }
@@ -454,6 +476,7 @@ internal static class TestMeetingSettings {
             ((CheckBox)form.Controls.Find("check_updates", true)[0]).Checked = true;
             ((Button)form.AcceptButton).PerformClick();
             var saved = MeetingSettingsSnapshot.Open(path).Values;
+            Check(!form.Visible && (string)saved["transcription_mode"] == "api", "Missing API key does not prevent saving a mode switch; checked at transcription");
             Check(!form.Visible && (string)saved["asr_terms"] == "产品名,术语" && (bool)saved["check_updates"], "Transcription terms and opt-in update preference persist");
         }
     }

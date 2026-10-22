@@ -373,6 +373,70 @@ class NoteTests(unittest.TestCase):
 
 
 class MinimalStorageTests(unittest.TestCase):
+    def deferred(self, mode="local", confirmed=False):
+        self.metadata["transcription_deferred"] = True
+        worker.atomic_json(self.session / "session.json", self.metadata)
+        worker.atomic_json(self.session / "transcription-settings.json", {
+            "transcription_mode": mode,
+            "transcription_model": "Qwen3-ASR-1.7B" if mode == "local" else "api-model",
+            "transcription_api_base_url": "" if mode == "local" else "https://provider.example/v1",
+            "api_upload_confirmed": confirmed, "asr_context": "保存后的新提示", "asr_terms": "新术语"})
+
+    def test_deferred_recording_uses_explicit_first_transcription_settings(self):
+        self.metadata.update(transcription_mode="api", transcription_model="not-used",
+                             transcription_api_base_url="https://old.invalid/v1")
+        self.deferred()
+        original = (self.session / "session.json").read_bytes()
+        commands = []
+        def stage(session, command, name):
+            commands.append(command)
+            self.stage(session, command, name)
+        self.assertEqual(self.process(stage), 0)
+        self.assertIn("asr_engine.py", commands[-1][1])
+        self.assertEqual(commands[-1][-1], "保存后的新提示\n术语：新术语。")
+        self.assertEqual((self.session / "session.json").read_bytes(), original)
+        self.assertFalse((self.session / "transcription-settings.json").exists())
+
+    def test_deferred_local_to_api_requires_explicit_per_meeting_upload_confirmation(self):
+        self.config.update(transcription_mode="api", api_model="api-model",
+                           api_base_url="https://provider.example/v1")
+        worker.atomic_json(self.home / "config.json", self.config)
+        self.deferred("api", confirmed=False)
+        original = (self.session / "mic.wav").read_bytes()
+        with patch.object(worker, "run_stage", side_effect=AssertionError("must not submit")):
+            self.assertEqual(self.process(), 1)
+        self.assertFalse(self.output.exists())
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        self.deferred("api", confirmed=True)
+        commands = []
+        def stage(session, command, name):
+            commands.append(command)
+            self.stage(session, command, name)
+        self.assertEqual(self.process(stage), 0)
+        self.assertIn("api_asr.py", commands[-1][1])
+
+    def test_deferred_without_binding_cannot_start_or_publish(self):
+        self.metadata["transcription_deferred"] = True
+        worker.atomic_json(self.session / "session.json", self.metadata)
+        with patch.object(worker, "run_stage", side_effect=AssertionError("no selection")):
+            self.assertEqual(self.process(), 1)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(worker.read_json(self.session / "status.json")["stage"], "configuration")
+
+    def test_deferred_partial_result_rejects_a_model_change_without_touching_audio_or_text(self):
+        self.deferred()
+        checkpoint = b'{"complete": false, "segments": []}'
+        (self.session / "result.json").write_bytes(checkpoint)
+        self.config.update(transcription_mode="api", api_model="api-model",
+                           api_base_url="https://provider.example/v1")
+        worker.atomic_json(self.home / "config.json", self.config)
+        original = (self.session / "mic.wav").read_bytes()
+        with patch.object(worker, "run_stage", side_effect=AssertionError("no mixed checkpoint")):
+            self.assertEqual(self.process(), 1)
+        self.assertEqual((self.session / "result.json").read_bytes(), checkpoint)
+        self.assertEqual((self.session / "mic.wav").read_bytes(), original)
+        self.assertFalse(self.output.exists())
+
     def test_decoupled_clips_and_speaker_manifest_are_compacted(self):
         self.metadata.update(speaker_anchor_mode="clean", asr_segmentation="speech", asr_context="旧提示", asr_terms="挚达")
         (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")

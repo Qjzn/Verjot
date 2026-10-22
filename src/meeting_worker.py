@@ -33,7 +33,7 @@ COMPACT_FILES = frozenset({
     "meeting.wav", "meeting.wav.tmp",
     "merged_audio.json", "merged_audio.json.tmp", "segments.json", "segments.json.tmp",
     "prepared_input.json", "prepared_input.json.tmp", "prepare_summary.json", "prepare_summary.json.tmp",
-    "speaker_turns.json",
+    "speaker_turns.json", "transcription-settings.json",
     "result.json", "result.json.tmp", "asr_status.json", "asr_status.json.tmp",
     "prepare.log", "asr.log", "merge.log", "worker.log",
 })
@@ -863,12 +863,22 @@ def process_session(session: Path):
             return 1
         finish_compaction(session, config, metadata, previous)
         return 0
-    recorded_mode = metadata.get("transcription_mode", "local")
+    binding = metadata
+    if metadata.get("transcription_deferred") is True:
+        binding = read_json(session / "transcription-settings.json", {})
+        if not binding or (binding.get("transcription_mode") == "api"
+                           and binding.get("api_upload_confirmed") is not True):
+            message = "录音已保存 · 待配置转写。请在设置中配置后，从最近会议重试；云端转写需确认上传。"
+            status(session, message, state="error", stage="configuration", error=message, note_path=str(note))
+            return 1
+        # Keep recording metadata byte-for-byte independent of this selection;
+        # cleanup verifies it against the on-disk recording snapshot.
+    recorded_mode = binding.get("transcription_mode", "local")
     transcription_mode = config.get("transcription_mode", "local")
-    recorded_model = metadata.get("transcription_model", "Qwen3-ASR-1.7B" if recorded_mode == "local" else None)
+    recorded_model = binding.get("transcription_model", "Qwen3-ASR-1.7B" if recorded_mode == "local" else None)
     transcription_model = config["api_model"] if transcription_mode == "api" else "Qwen3-ASR-1.7B"
     if recorded_mode != transcription_mode or recorded_model != transcription_model or (
-            recorded_mode == "api" and metadata.get("transcription_api_base_url") != config["api_base_url"].rstrip("/")):
+            recorded_mode == "api" and binding.get("transcription_api_base_url") != config["api_base_url"].rstrip("/")):
         message = "转写设置已改变，录音和现有成品已保留；请恢复录制时的模式、模型和服务配置后重试"
         status(session, message, state="error", stage="configuration", error=message,
                note_path=str(note))
@@ -903,7 +913,7 @@ def process_session(session: Path):
         with processing_slot(session):
             fingerprint, denoise, echo_filter, needs_preparation = preparation_state(session, metadata, config)
             options = preparation_options(metadata, config, read_json(session / "prepared_input.json", {}))
-            context = transcription_context(config, metadata)
+            context = transcription_context(config, binding)
             if needs_preparation:
                 status(session, "正在分析麦克风和电脑声音，区分说话人", stage="speakers")
                 run_stage(session, [sys.executable, str(HOME / "prepare_audio.py"),

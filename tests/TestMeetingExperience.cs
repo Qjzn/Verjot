@@ -94,6 +94,37 @@ internal static class TestMeetingExperience {
         Set(value, "DirectoryPath", session); Set(value, "stopping", true);
         return value;
     }
+    static void DeferredTranscription(Dictionary<string, object> config) {
+        string session = Fixture("20991022-120000-deferred", "recorded");
+        var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+        metadata["transcription_deferred"] = true;
+        MeetingFiles.WriteJson(Path.Combine(session, "session.json"), metadata);
+        byte[] recordingMetadata = File.ReadAllBytes(Path.Combine(session, "session.json"));
+        byte[] raw = File.ReadAllBytes(Path.Combine(session, "mic.wav"));
+        using (var pending = new MeetingContext(config, null, delegate { throw new Exception("No external app"); })) {
+            ((System.Windows.Forms.Timer)Field(pending, "timer")).Stop();
+            Call(pending, "LaunchWorker", session);
+            var status = MeetingFiles.ReadJson(Path.Combine(session, "status.json"));
+            Check((string)status["stage"] == "configuration", "Missing Python is deferred to transcription, not a capture failure");
+            Check(((string)status["message"]).Contains("录音已保存 · 待配置转写"), "Pending UI explains that audio is preserved and configuration is required");
+            Check(new SessionCatalog(MeetingFiles.Home, MeetingFiles.VaultRoot(config)).Get(session).CanRetry, "Unconfigured recording remains retryable");
+            Check(Convert.ToBase64String(raw) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(session, "mic.wav"))), "Missing dependencies never rewrite recorded bytes");
+            Check(!File.Exists(Path.Combine(session, "transcription-settings.json")), "Failed preflight cannot authorize an upload or bind an unready engine");
+            pending.ExitThread();
+        }
+        config["asr_context"] = "updated locally before first transcription";
+        string launched = null;
+        Process child = null;
+        using (var ready = new MeetingContext(config, delegate(string path) { launched = path; child = Child(false); return child; }, delegate { throw new Exception("No external app"); })) {
+            ((System.Windows.Forms.Timer)Field(ready, "timer")).Stop();
+            Call(ready, "RetrySession", session);
+            var selection = MeetingFiles.ReadJson(Path.Combine(session, "transcription-settings.json"));
+            Check(launched == session && (string)selection["asr_context"] == (string)config["asr_context"], "Actual retry binds current model settings and vocabulary without a tray restart");
+            Check(!(bool)selection["api_upload_confirmed"] && (string)selection["transcription_mode"] == "local", "Local retry cannot authorize cloud upload");
+            Check(Convert.ToBase64String(recordingMetadata) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(session, "session.json"))), "First transcription preserves recording metadata byte-exact");
+            child.WaitForExit(); Call(ready, "Tick"); ready.ExitThread();
+        }
+    }
     [STAThread]
     static int Main(string[] args) {
         if (args.Length == 2 && args[0] == "--child") { Thread.Sleep(1800); return int.Parse(args[1]); }
@@ -371,6 +402,7 @@ internal static class TestMeetingExperience {
             Check(noteWindow.IsDisposed && (bool)Field(context, "exiting"), "Successful note persistence must automatically resume the controller exit");
             Check(noteStore.Load(DateTime.Today).Text == "退出保护样本恢复后尾文", "The actual controller exit must preserve the final note text");
             context.Dispose(); context = null; menu.Dispose();
+            DeferredTranscription(config);
             Console.WriteLine("Meeting experience: " + assertions + " assertions passed; no audio, model, cloud or external editor.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.5',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.6',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -24,7 +24,7 @@ $taskFiles = @(
     'tingji.py', 'tingji_config.py', 'meeting_worker.py', 'asr_engine.py', 'api_asr.py',
     'prepare_audio.py', 'merge_audio.py', 'audio_sources.py', 'mp3_audio.py',
     'download_models.py', 'download_torch.py', 'requirements.txt', 'requirements-api.txt',
-    'Install.ps1', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
+    'Install.ps1', 'RecommendedModel.ps1', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
     'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'MeetingSettings.cs', 'DesktopServices.cs',
     'QuickNoteStore.cs', 'QuickNoteWindow.cs', 'NativeNoteDocument.cs', 'app.manifest',
     'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png',
