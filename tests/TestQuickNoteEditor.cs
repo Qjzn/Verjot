@@ -9,6 +9,7 @@ using System.Windows.Forms;
 
 internal static class TestQuickNoteEditor {
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int WindowStyle(IntPtr window, int index);
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] struct NativeRectangle { internal int Left, Top, Right, Bottom; }
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out NativeRectangle rectangle);
@@ -826,7 +827,10 @@ internal static class TestQuickNoteEditor {
             Call(window, "HandleImagePointer", 0x200, horizontal); Call(window, "HandleImagePointer", 0x202, horizontal);
             Rectangle stretched = Document(window).SelectedImageBounds();
             Check(stretched.Width > before.Width && stretched.Height == before.Height, "Horizontal side drag changes width freely without changing height");
-            Check(window.ReadMarkdown().Contains("|200x80]"), "Free dimensions persist as one Markdown width-by-height reference");
+            double pixelsPerUnit = input.DeviceDpi * input.ZoomFactor / 96.0;
+            string expectedDimensions = "|" + (int)Math.Round((before.Width + 60) / pixelsPerUnit) + "x" + (int)Math.Round(before.Height / pixelsPerUnit) + "]";
+            Check(window.ReadMarkdown().Contains(expectedDimensions), "Free dimensions persist as one Markdown width-by-height reference: DPI=" + input.DeviceDpi + "; expected=" + expectedDimensions + "; actual=" + window.ReadMarkdown());
+            Console.WriteLine("Image gesture DPI=" + input.DeviceDpi + "; expected Markdown dimensions=" + expectedDimensions);
             input.Undo(); Check(Document(window).SelectedImageBounds().Size == before.Size, "Side sizing is one undo"); input.Redo(); input.Select(Document(window).ObjectPositions()[0], 1);
             Rectangle start = Document(window).SelectedImageBounds(); Point corner = new Point(start.Right, start.Bottom);
             Check((bool)Call(window, "HandleImagePointer", 0x201, corner), "The diagonal case starts on the selected picture's corner");
@@ -951,6 +955,7 @@ internal static class TestQuickNoteEditor {
     }
     static string windowNotePath(QuickNoteWindow window) { return (string)Field(window, "notePath"); }
     [STAThread] static int Main(string[] arguments) {
+        if (Array.IndexOf(arguments, "--dpi96") >= 0) SetThreadDpiAwarenessContext(new IntPtr(-1));
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         string root = Path.Combine(Path.GetTempPath(), "tingji-quick-note-editor-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
