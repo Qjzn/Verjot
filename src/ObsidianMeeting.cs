@@ -803,16 +803,21 @@ internal sealed class CaptureTrack : IDisposable {
         // Driver QPC is the packet's capture time, never minutes after arrival.
         // Keep valid delayed packets; callback scheduling is not capture timing.
         estimated = invalid || double.IsNaN(startMs) || double.IsInfinity(startMs) || startMs > arrivalMs + 20 ||
-            (!double.IsNaN(previousStartMs) && startMs < previousStartMs);
+            (!double.IsNaN(previousStartMs) && (startMs < previousStartMs || position < previousPosition));
         if (!estimated) return startMs;
         double fallback = arrivalMs - frames * 1000.0 / rate;
         if (!double.IsNaN(previousStartMs)) {
             double fromPosition = previousStartMs + (position - previousPosition) * 1000.0 / rate;
             if (position >= previousPosition + previousFrames && fromPosition <= arrivalMs + 20)
                 fallback = fromPosition;
-            fallback = Math.Max(previousStartMs + previousFrames * 1000.0 / rate, fallback);
         }
-        return Math.Max(0, Math.Min(arrivalMs, fallback));
+        fallback = Math.Max(0, Math.Min(arrivalMs, fallback));
+        // A previously accepted QPC may lead callback time by <=20 ms. Clamp
+        // first, then retain its complete packet: clamping afterward can turn
+        // the next estimated timestamp backwards and abort a healthy stream.
+        // This remains explicitly uncertain; never erase the diagnostic.
+        if (!double.IsNaN(previousStartMs)) fallback = Math.Max(previousStartMs + previousFrames * 1000.0 / rate, fallback);
+        return fallback;
     }
     void CaptureTimestamped() {
         try {

@@ -243,6 +243,22 @@ internal static class TestCaptureReliability {
         Check(!estimated && valid == 10, "valid delayed packets must retain hardware time, not callback time");
         double reset = CaptureTrack.ResolvePacketStart(1, 120, 160, 16000, 0, 1600, 100, 160, false, out estimated);
         Check(estimated && reset >= 110 && reset <= 120, "counter/timestamp reset must use bounded monotonic fallback");
+        double ahead = CaptureTrack.ResolvePacketStart(110, 100, 160, 16000, 0, 0, double.NaN, 0, false, out estimated);
+        Check(!estimated && ahead==110,"A small driver timestamp lead remains within existing tolerance");
+        double next = CaptureTrack.ResolvePacketStart(0, 101, 160, 16000, 160, 0, ahead, 160, true, out estimated);
+        Check(estimated && next>=120,"Invalid next packet cannot move behind the previous packet or truncate its samples");
+        double positionReset = CaptureTrack.ResolvePacketStart(120, 130, 160, 16000, 0, 1600, 100, 160, false, out estimated);
+        Check(estimated && positionReset>=110&&positionReset<=130,"A device-position reset is uncertain even when its QPC still increases");
+        string leadPath=Path.Combine(root,"small-lead-followed-by-invalid.wav");
+        using(var writer=new TimelineWriter(leadPath,new WaveFormat(16000,16,1))) {
+            byte[] a=new byte[320],b=new byte[320];for(int i=0;i<160;i++){Buffer.BlockCopy(BitConverter.GetBytes((short)1000),0,a,i*2,2);Buffer.BlockCopy(BitConverter.GetBytes((short)2000),0,b,i*2,2);}
+            writer.AddTimestamped(a,a.Length,ahead,0,false);writer.AddTimestamped(b,b.Length,next,160,true);writer.Finish(140);
+        }
+        using(var reader=new WaveFileReader(leadPath)) {
+            byte[] sample=new byte[2];reader.Position=1760*2;reader.Read(sample,0,2);Check(BitConverter.ToInt16(sample,0)==1000,"Accepted preceding packet retains its first sample");
+            reader.Position=1919*2;reader.Read(sample,0,2);Check(BitConverter.ToInt16(sample,0)==1000,"Accepted preceding packet retains its final sample");
+            reader.Position=1920*2;reader.Read(sample,0,2);Check(BitConverter.ToInt16(sample,0)==2000,"Estimated next packet retains its exact adjacent boundary");
+        }
         string path = Path.Combine(root,"bounded-driver-clock.wav");
         using(var writer = new TimelineWriter(path,new WaveFormat(16000,16,1))) {
             byte[] packet = new byte[320]; for(int i=0;i<160;i++) Buffer.BlockCopy(BitConverter.GetBytes((short)1234),0,packet,i*2,2);
