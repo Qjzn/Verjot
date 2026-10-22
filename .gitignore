@@ -64,6 +64,8 @@
 !/packaging/licenses/
 /packaging/licenses/*
 !/packaging/licenses/NAudio.txt
+!/packaging/licenses/LAME.txt
+!/packaging/licenses/LAME-SOURCE.md
 !/assets/screenshots/
 /assets/screenshots/*
 !/assets/screenshots/recording.png
@@ -104,6 +106,8 @@
 !/src/Install.ps1
 !/src/RecommendedModel.ps1
 !/src/MeetingActions.cs
+!/src/NativeAudioExport.cs
+!/src/Restore-Encoder.ps1
 !/src/MeetingSettings.cs
 !/src/NativeNoteDocument.cs
 !/src/ObsidianMeeting.cs
@@ -151,6 +155,7 @@
 !/tests/TestRecorderMotion.cs
 !/tests/TestRecorderPanel.cs
 !/tests/TestRecordingProtection.cs
+!/tests/TestRecordingExport.cs
 !/tests/TestSegmentedTimeline.cs
 !/tests/TestSessionCatalog.cs
 !/tests/TestTimestampedTimeline.cs

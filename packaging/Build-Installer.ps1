@@ -25,7 +25,7 @@ $taskFiles = @(
     'prepare_audio.py', 'merge_audio.py', 'audio_sources.py', 'mp3_audio.py',
     'download_models.py', 'download_torch.py', 'requirements.txt', 'requirements-api.txt',
     'Install.ps1', 'RecommendedModel.ps1', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
-    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'MeetingSettings.cs', 'DesktopServices.cs',
+    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'NativeAudioExport.cs', 'Restore-Encoder.ps1', 'MeetingSettings.cs', 'DesktopServices.cs',
     'QuickNoteStore.cs', 'QuickNoteWindow.cs', 'NativeNoteDocument.cs', 'app.manifest',
     'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png',
     'documentation\changelog.md',
@@ -40,7 +40,7 @@ $taskFiles = @(
     'documentation\architecture.md', 'documentation\flows.md', 'documentation\permissions.md',
     'documentation\variables.md', 'documentation\tests.md', 'documentation\cron.md', 'documentation\automation.md',
     'assets\screenshots\recording.png', 'assets\screenshots\quick-note.png', 'assets\screenshots\settings.png',
-    'packaging\licenses\NAudio.txt', 'packaging\quick-start.html', 'packaging\Check-InstallSafety.ps1'
+    'packaging\licenses\NAudio.txt', 'packaging\licenses\LAME.txt', 'packaging\licenses\LAME-SOURCE.md', 'packaging\quick-start.html', 'packaging\Check-InstallSafety.ps1'
 )
 function Get-PackageInput([string]$Relative) {
     if ($Relative -notmatch '[\\/]' -and $Relative -notin @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'SECURITY.md', 'CONTRIBUTING.md')) {
@@ -69,8 +69,9 @@ $taskReadmeText = [IO.File]::ReadAllText($taskReadme).Replace('](src/', '](')
 Copy-Item -LiteralPath $taskLibrary -Destination (Join-Path $taskPayload 'lib\NAudio.dll')
 & (Join-Path $taskPayload 'Build.ps1') -OutputPath (Join-Path $taskPayload 'ObsidianMeeting.exe') -Version $Version
 if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
+& (Join-Path $taskPayload 'Restore-Encoder.ps1') -Destination $taskPayload -IncludeSource
 $taskActual = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | ForEach-Object { $_.FullName.Substring($taskPayload.Length + 1) } | Sort-Object)
-$taskExpected = @($taskFiles + @('ObsidianMeeting.exe', 'NAudio.dll', 'lib\NAudio.dll') | Sort-Object)
+$taskExpected = @($taskFiles + @('ObsidianMeeting.exe', 'NAudio.dll', 'lib\NAudio.dll', 'libmp3lame.32.dll', 'libmp3lame.64.dll', 'packaging\licenses\LAME-3.100-source.tar.gz') | Sort-Object)
 if (@(Compare-Object $taskExpected $taskActual).Count) { throw 'Staged payload differs from the reviewed allowlist.' }
 $taskManifestFiles = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | Sort-Object FullName | ForEach-Object { [ordered]@{ path = $_.FullName.Substring($taskPayload.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } })
 $taskUtf8 = New-Object Text.UTF8Encoding($false)

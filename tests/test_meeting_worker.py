@@ -1209,5 +1209,96 @@ class Mp3PublicationTests(unittest.TestCase):
         self.assertTrue((self.output / "meeting.mp3").is_file())
 
 
+class NativeExportPipelineTests(unittest.TestCase):
+    stage = MinimalStorageTests.stage
+    process = MinimalStorageTests.process
+
+    def setUp(self):
+        MinimalStorageTests.setUp(self)
+        self.metadata.update(audio_format="mp3", mp3_bitrate_kbps=192, audio_export_version=1)
+        worker.atomic_json(self.session / "session.json", self.metadata)
+
+    def export_fixture(self):
+        mixed = worker.publish_audio(self.session, self.config, self.metadata,
+                                     worker.merge_session(self.session, self.metadata))
+        mixed["encoder"] = "native_lame_3.100_v1"
+        paths = [self.session / "mic.wav", self.session / "system.wav"]
+        worker.atomic_json(self.session / "native_audio.json", {
+            "schema_version": 1, "metadata_sha256": worker.file_sha256(self.session / "session.json"),
+            "inputs": [{"name": p.name, "size": p.stat().st_size, "sha256": worker.file_sha256(p)} for p in paths],
+            "merged_audio": mixed})
+        (self.session / "meeting.wav").unlink()
+        (self.session / "merged_audio.json").unlink()
+        return self.output / "meeting.mp3"
+
+    def test_initial_asr_uses_lossless_and_never_reencodes_published_mp3(self):
+        audio = self.export_fixture()
+        digest = worker.file_sha256(audio)
+        stamp = audio.stat().st_mtime_ns
+        def stage(session, command, name):
+            if name == "prepare":
+                self.assertTrue((session / "mic.wav").is_file())
+                self.assertTrue((session / "system.wav").is_file())
+                self.assertFalse((session / "meeting.wav").exists())
+            self.stage(session, command, name)
+        with patch.object(worker, "merge_session", side_effect=AssertionError("must reuse MP3")), \
+                patch.object(worker, "encode_mp3", side_effect=AssertionError("must not re-encode")):
+            self.assertEqual(self.process(stage), 0)
+        self.assertEqual(worker.file_sha256(audio), digest)
+        self.assertEqual(audio.stat().st_mtime_ns, stamp)
+        self.assertEqual(sorted(p.name for p in self.session.iterdir()), ["session.json", "status.json"])
+        self.assertEqual(sorted(p.suffix for p in self.vault.rglob("*") if p.is_file()), [".md", ".mp3"])
+        self.assertEqual(self.process(), 0)
+
+    def test_failed_asr_keeps_public_mp3_and_lossless_then_retry_cleans_up(self):
+        audio = self.export_fixture()
+        digest = worker.file_sha256(audio)
+        def fail(session, command, name):
+            if name == "asr":
+                raise RuntimeError("fixture recognizer failed")
+            self.stage(session, command, name)
+        self.assertEqual(self.process(fail), 1)
+        state = worker.read_json(self.session / "status.json")
+        self.assertIn("fixture recognizer failed", state["error"])
+        for name in ("mic.wav", "system.wav", "native_audio.json", "segments.json"):
+            self.assertTrue((self.session / name).exists(), name)
+        self.assertEqual(worker.file_sha256(audio), digest)
+        self.assertEqual(self.process(), 0)
+        self.assertTrue(worker.read_json(self.session / "status.json")["artifacts_compacted"])
+        self.assertEqual(worker.file_sha256(audio), digest)
+
+    def test_export_failure_blocks_asr_and_keeps_raw(self):
+        def unexpected(*args):
+            self.fail("ASR must not run before verified MP3 export")
+        self.assertEqual(self.process(unexpected), 1)
+        self.assertTrue((self.session / "mic.wav").exists())
+        self.assertFalse((self.session / "segments.json").exists())
+
+    def test_changed_mp3_blocks_asr_and_is_never_overwritten(self):
+        audio = self.export_fixture()
+        audio.write_bytes(b"user replacement")
+        self.assertEqual(self.process(lambda *args: self.fail("ASR must not run")), 1)
+        self.assertEqual(audio.read_bytes(), b"user replacement")
+        self.assertTrue((self.session / "mic.wav").exists())
+
+    def test_changed_raw_blocks_asr_and_preserves_export(self):
+        audio = self.export_fixture()
+        digest = worker.file_sha256(audio)
+        (self.session / "mic.wav").write_bytes(b"changed recording")
+        self.assertEqual(self.process(lambda *args: self.fail("ASR must not run")), 1)
+        self.assertEqual(worker.file_sha256(audio), digest)
+
+    def test_capture_warning_retains_recovery_even_when_asr_completes(self):
+        self.metadata["capture_error"] = "fixture endpoint discontinuity"
+        worker.atomic_json(self.session / "session.json", self.metadata)
+        self.export_fixture()
+        self.assertEqual(self.process(), 0)
+        state = worker.read_json(self.session / "status.json")
+        self.assertTrue(state["capture_needs_review"])
+        self.assertFalse(state["artifacts_compacted"])
+        self.assertTrue((self.session / "native_audio.json").exists())
+        self.assertTrue((self.session / "mic.wav").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

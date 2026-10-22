@@ -81,11 +81,12 @@ internal sealed class SessionCatalog {
         catch (Exception error) { return InvalidRecord(path, error); }
     }
 
-    public void SaveWorker(string session, Process process, DateTime launchUtc = default(DateTime), DateTime previousStatusUtc = default(DateTime)) {
+    public void SaveWorker(string session, Process process, DateTime launchUtc = default(DateTime), DateTime previousStatusUtc = default(DateTime), bool audioExport = false) {
         session = CheckSession(session);
         string controllerPath = Path.Combine(session, "controller.json");
         var controller = ReadJson(controllerPath, true);
         controller["schema_version"] = 1;
+        controller["audio_export_only"] = audioExport;
         controller["worker_pid"] = process == null ? 0 : process.Id;
         string started = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o");
         controller["worker_start_time_utc"] = started;
@@ -162,8 +163,17 @@ internal sealed class SessionCatalog {
             status = new Dictionary<string, object>();
         }
         record.Message = Text(status, "message", "");
+        string failureDetail = Text(status, "error", Text(status, "cleanup_error", ""));
+        if (failureDetail.Length != 0 && !record.Message.Contains(failureDetail)) record.Message += "：" + failureDetail;
         string metadataState = Text(metadata, "state", "");
         string statusState = Text(status, "state", Text(status, "status", ""));
+        if (Text(metadata, "audio_export_version", "") == "1") {
+            object published;
+            if (status.TryGetValue("published_audio", out published) && published is Dictionary<string, object>)
+                record.AudioPath = ArtifactPath(Text((Dictionary<string, object>)published, "path", ""), session, ".mp3");
+            if (Text(status, "note_path", "").Length != 0)
+                record.NotePath = ArtifactPath(Text(status, "note_path", ""), session, ".md");
+        }
         DateTime statusWrite = File.GetLastWriteTimeUtc(statusPath);
         // A pre-launch boundary avoids process/file clock precision mismatch.
         // Requiring a changed status still excludes the previous attempt.

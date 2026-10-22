@@ -36,6 +36,7 @@ COMPACT_FILES = frozenset({
     "speaker_turns.json", "transcription-settings.json",
     "result.json", "result.json.tmp", "asr_status.json", "asr_status.json.tmp",
     "prepare.log", "asr.log", "merge.log", "worker.log",
+    "native_audio.json", "native_audio.json.tmp", "audio-export.lock",
 })
 CLIP_NAME = re.compile(r"(?:mic|system)(?:_\d{2,})?(?:_speech)?_\d{5,}\.wav\Z")
 SPEAKER_REASONS = {
@@ -549,6 +550,25 @@ def publish_audio(session: Path, config: dict, metadata: dict, merged: dict):
     return {**merged, "published_path": str(output), "output_sha256": published_sha256}
 
 
+def native_published_audio(session: Path, config: dict, metadata: dict):
+    """Reuse model-free export; ASR still consumes the unchanged lossless sources."""
+    saved = read_json(session / "native_audio.json", {})
+    mixed = saved.get("merged_audio")
+    vault, _ = note_location(session, config, metadata)
+    output = audio_output_path(session, vault, metadata, config)
+    if (saved.get("schema_version") != 1 or not isinstance(mixed, dict)
+            or saved.get("metadata_sha256") != file_sha256(session / "session.json")
+            or mixed.get("encoder") != "native_lame_3.100_v1"
+            or mixed.get("published_path") != str(output)):
+        raise ValueError("MP3 导出凭据缺失或已改变，已保留原始录音；请从最近会议重试导出")
+    inputs = [{"name": path.name, "size": path.stat().st_size, "sha256": file_sha256(path)}
+              for row in capture_sources(session, metadata) for path in capture_paths(session, row)]
+    if inputs != saved.get("inputs"):
+        raise ValueError("原始分轨与已导出 MP3 不一致，不覆盖已有录音或转写")
+    validate_published_audio(output, metadata, mixed)
+    return mixed
+
+
 def validate_published_audio(path: Path, metadata: dict, merged: dict):
     if metadata.get("audio_format") != "mp3":
         return validate_wave(path, merged)
@@ -900,9 +920,14 @@ def process_session(session: Path):
     try:
         status(session, "正在生成单条会议录音", stage="merge", note_path=str(note))
         try:
-            mixed_audio = merge_session(session, metadata)
-            mixed_audio = publish_audio(session, config, metadata, mixed_audio)
+            if metadata.get("audio_export_version") == 1:
+                mixed_audio = native_published_audio(session, config, metadata)
+            else:
+                mixed_audio = merge_session(session, metadata)
+                mixed_audio = publish_audio(session, config, metadata, mixed_audio)
         except Exception as error:
+            if metadata.get("audio_export_version") == 1:
+                raise
             mixed_audio = None
             merge_error = str(error)
         with (session / "merge.log").open("a", encoding="utf-8") as log:

@@ -151,6 +151,10 @@ internal static class TestSessionCatalog {
         True(catalog.Get(mp3Meeting).CanRetry && catalog.Get(mp3Meeting).State == "failed",
             "complete transcript with failed MP3 encoding offers retained-lossless retry");
         File.WriteAllText(mp3, "MP3 existence only");
+        var pendingMetadata=MeetingFiles.ReadJson(Path.Combine(mp3Meeting,"session.json"));pendingMetadata["audio_export_version"]=1;
+        MeetingFiles.WriteJson(Path.Combine(mp3Meeting,"session.json"),pendingMetadata);
+        Write(Path.Combine(mp3Meeting,"status.json"),new {state="error",stage="configuration",message="待配置转写",error="缺少本地模型",published_audio=new {path=mp3}});
+        True(catalog.Get(mp3Meeting).AudioPath==mp3&&catalog.Get(mp3Meeting).Message.Contains("缺少本地模型"),"Pending transcription exposes MP3 and actual failure reason");
         Write(Path.Combine(mp3Meeting, "status.json"), new { state = "completed", note_path = note, audio_path = mp3 + ".exe" });
         Equal(catalog.Get(mp3Meeting).State, "invalid", "MP3-like executable extension remains rejected");
         string segmented = Session("20261015-130100", "recorded");

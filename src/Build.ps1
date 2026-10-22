@@ -13,6 +13,7 @@ if ($taskCheckout) { $taskAssets = Join-Path $taskRepo 'assets' }
 $taskSource = Join-Path $taskRoot 'ObsidianMeeting.cs'
 $taskCatalog = Join-Path $taskRoot 'SessionCatalog.cs'
 $taskActions = Join-Path $taskRoot 'MeetingActions.cs'
+$taskExport = Join-Path $taskRoot 'NativeAudioExport.cs'
 $taskSettings = Join-Path $taskRoot 'MeetingSettings.cs'
 $taskDesktopServices = Join-Path $taskRoot 'DesktopServices.cs'
 $taskNoteStore = Join-Path $taskRoot 'QuickNoteStore.cs'
@@ -31,7 +32,7 @@ if (-not $taskCompiler) { throw '.NET Framework 4.x C# compiler was not found.' 
 if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf)) {
     throw 'NAudio 1.10.0 is missing. Download the official NAudio 1.10.0 NuGet package and extract lib/net35/NAudio.dll to this project''s lib/NAudio.dll; see README.md.'
 }
-foreach ($taskInput in @($taskSource, $taskCatalog, $taskActions, $taskSettings, $taskDesktopServices, $taskNoteStore, $taskNoteWindow, $taskNoteDocument, $taskManifest, $taskApplicationConfig, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
+foreach ($taskInput in @($taskSource, $taskCatalog, $taskActions, $taskExport, $taskSettings, $taskDesktopServices, $taskNoteStore, $taskNoteWindow, $taskNoteDocument, $taskManifest, $taskApplicationConfig, $taskLibrary, $taskIdleIcon, $taskRecordingIcon)) {
     if (-not (Test-Path -LiteralPath $taskInput -PathType Leaf)) { throw "Required build input is missing: $taskInput" }
 }
 if (-not [IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $taskRoot $OutputPath }
@@ -49,7 +50,7 @@ $taskArguments = @(
     "/resource:$taskIdleIcon,Tingji.Idle.ico",
     "/resource:$taskRecordingIcon,Tingji.Recording.ico",
     ('/resource:' + (Join-Path $taskAssets 'github-mark.png') + ',Verbit.GitHub.png'),
-    $taskSource, $taskCatalog, $taskActions, $taskSettings, $taskDesktopServices, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
+    $taskSource, $taskCatalog, $taskActions, $taskExport, $taskSettings, $taskDesktopServices, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
 )
 $taskVersionSource = Join-Path ([IO.Path]::GetTempPath()) ('verbit-version-' + [Guid]::NewGuid().ToString('N') + '.cs')
 try {
@@ -67,6 +68,7 @@ if ($taskRuntimeLibrary -ine [IO.Path]::GetFullPath($taskLibrary)) {
     if (-not $taskLibraryMatches) { Copy-Item -LiteralPath $taskLibrary -Destination $taskRuntimeLibrary -Force }
 }
 Write-Output "Built: $taskOutput"
+& (Join-Path $taskRoot 'Restore-Encoder.ps1') -Destination $taskOutputFolder
 if ($taskCheckout -and $taskOutputFolder -ieq $taskRoot) {
     # Source installs provide the same offline setup guide as the installer.
     Copy-Item -LiteralPath (Join-Path $taskRepo 'documentation') -Destination $taskRoot -Recurse -Force

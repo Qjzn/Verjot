@@ -182,7 +182,7 @@ class VerbitFirstUse {
             var config = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(home, "config.json"), Encoding.UTF8));
             var assembly = Assembly.LoadFrom(Path.Combine(home, "ObsidianMeeting.exe"));
             var settings = assembly.GetType("MeetingConfig", true);
-            config = (Dictionary<string, object>)settings.GetMethod("Validate").Invoke(null, new object[] {config});
+            config = (Dictionary<string, object>)settings.GetMethod("Validate").Invoke(null, new object[] {config, false});
             var type = assembly.GetType("RecordingSession", true);
             string sample = Convert.ToString(spec["play_test"]);
             if (sample.Length != 0) { player = new SoundPlayer(sample); player.Load(); }

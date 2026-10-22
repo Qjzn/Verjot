@@ -1025,7 +1025,7 @@ internal sealed class RecordingSession : IDisposable {
             { "schema_version", 2 }, { "start_time", started.ToString("o") }, { "state", "recording" },
             { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
-            { "transcription_deferred", true },
+            { "transcription_deferred", true }, { "audio_export_version", 1 },
             { "transcription_mode", config["transcription_mode"] }, { "asr_denoise", config["asr_denoise"] },
             { "asr_context", MeetingFiles.Text(config, "asr_context", "") },
             { "asr_terms", MeetingFiles.Text(config, "asr_terms", "") },
@@ -2162,6 +2162,7 @@ internal sealed class TranscriptionJob {
     public Process Process;
     public string LastMessage;
     public bool Reported;
+    public bool AudioExport;
     public DateTime PreviousStatusWriteUtc = DateTime.MinValue;
     public DateTime WorkerStartedUtc = DateTime.MinValue;
 }
@@ -2508,6 +2509,7 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (record.WorkerAlive) {
                     Process process = record.TryOpenWorker();
                     if (process != null) jobs.Add(new TranscriptionJob { Session = record.DirectoryPath, Process = process, LastMessage = record.Message,
+                        AudioExport = MeetingFiles.Text(MeetingFiles.ReadJson(Path.Combine(record.DirectoryPath, "controller.json")), "audio_export_only", "").Equals("True", StringComparison.OrdinalIgnoreCase),
                         WorkerStartedUtc = record.WorkerLaunchUtc, PreviousStatusWriteUtc = record.PreviousStatusWriteUtc });
                 }
                 if (record.NeedsAttention) {
@@ -2563,13 +2565,44 @@ internal sealed class MeetingContext : ApplicationContext {
             catalog.SaveWorker(session, null);
             var status = MeetingFiles.ReadJson(Path.Combine(session, "status.json"));
             status["state"] = "error"; status["stage"] = configuration ? "configuration" : "launch";
-            status["message"] = configuration ? "录音已保存 · 待配置转写。" + detail : "转写未启动，原始资料已保留"; status["error"] = detail;
+            status["message"] = configuration ? "录音已保存 · 待配置转写。" + detail : "处理未完成，恢复资料已保留：" + detail; status["error"] = detail;
             status["updated_at"] = DateTimeOffset.Now.ToString("o");
             MeetingFiles.WriteJson(Path.Combine(session, "status.json"), status);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
         } catch (Exception error) { MeetingFiles.Log(error); }
     }
     void LaunchWorker(string session) {
+        try {
+            var record = catalog.Get(session);
+            if (record == null || !record.CanRetry || ActiveJob(session)) return;
+            var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+            if (MeetingFiles.Text(metadata, "audio_export_version", "") == "1" && !File.Exists(Path.Combine(session, "result.json"))) {
+                LaunchAudioExport(session); return;
+            }
+            LaunchTranscriptionWorker(session);
+        } catch (Exception error) { RecordLaunchFailure(session, error.Message); Notice("录音处理未启动", error.Message, ToolTipIcon.Warning); }
+    }
+    void LaunchAudioExport(string session) {
+        Process process = null;
+        try {
+            DateTime previous = File.GetLastWriteTimeUtc(Path.Combine(session, "status.json"));
+            catalog.SaveWorker(session, null);
+            DateTime started = DateTime.UtcNow;
+            process = Process.Start(new ProcessStartInfo {
+                FileName = Application.ExecutablePath, Arguments = "--export-audio " + Quote(session),
+                WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true
+            });
+            if (process == null) throw new IOException("未能启动 MP3 导出进程，原始分轨已保留。");
+            jobs.Add(new TranscriptionJob { Session = session, Process = process, AudioExport = true,
+                PreviousStatusWriteUtc = previous, WorkerStartedUtc = started });
+            catalog.SaveWorker(session, process, started, previous, true);
+            SaveLastSessionWithAttempt(session, process, started, previous);
+        } catch (Exception error) {
+            if (process == null) RecordLaunchFailure(session, error.Message);
+            MeetingFiles.Log(error); Notice("MP3 导出需要检查", error.Message + " 原始分轨已保留。", ToolTipIcon.Warning);
+        }
+    }
+    void LaunchTranscriptionWorker(string session) {
         Process startedProcess = null;
         IDisposable setupGate = null;
         bool checkingConfiguration = true;
@@ -2687,6 +2720,19 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (fresh) job.LastMessage = SessionCatalog.DisplayTitle(status);
                 if (!workerExited) continue;
                 var record = catalog.Get(job.Session);
+                if (job.AudioExport) {
+                    job.Reported = true;
+                    if (fresh && job.Process.ExitCode == 0 && File.Exists(Path.Combine(job.Session, "native_audio.json"))) {
+                        catalog.SaveWorker(job.Session, null);
+                        LaunchTranscriptionWorker(job.Session);
+                    } else {
+                        string exportError = MeetingFiles.Text(status, "error", "MP3 导出中断，原始分轨已保留，可重试。");
+                        RecordLaunchFailure(job.Session, exportError);
+                        Notice("MP3 导出失败", exportError, ToolTipIcon.Warning);
+                    }
+                    jobs.Remove(job); job.Process.Dispose();
+                    continue;
+                }
                 if (fresh && job.Process.ExitCode == 0 && record != null &&
                     (record.State == "completed" || record.State == "capture_warning" || record.State == "transcript_only" || record.State == "audio_only" || record.State == "removed")) {
                     job.Reported = true;
@@ -2809,18 +2855,25 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (record.State == "completed" && !record.WorkerAlive && recording == null)
                     item.DropDownItems.Add("命名这场会议…", null, delegate { PromptRename(session); });
                 if (!current && record.CanRetry) item.DropDownItems.Add("重试这场转写", null, delegate { RetrySession(session); });
-                item.DropDownItems.Add("查看录音资料", null, delegate { OpenSessionFolder(session); });
+                item.DropDownItems.Add("打开成品位置", null, delegate { OpenSessionFolder(session); });
+                if (record.CanRetry || record.State == "capture_warning" || record.State == "missing" || record.Message.Contains("清理未完成"))
+                    item.DropDownItems.Add("检查恢复资料…", null, delegate { OpenFolder(session); });
                 recent.DropDownItems.Add(item);
             }
             if (displayed.Count == 0) recent.DropDownItems.Add(new ToolStripMenuItem("尚无会议") { Enabled = false });
-            if (records.Count > displayed.Count) recent.DropDownItems.Add("其余会话资料", null, delegate { OpenFolder(Path.Combine(MeetingFiles.Home, "work")); });
+            if (records.Count > displayed.Count) recent.DropDownItems.Add("打开会议文件夹", null, delegate {
+                string folder = Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"));
+                MeetingConfig.CheckOrdinaryPath(folder); Directory.CreateDirectory(folder); OpenFolder(folder);
+            });
         } catch (Exception error) { MeetingFiles.Log(error); recent.DropDownItems.Add(new ToolStripMenuItem("资料读取异常，请检查 work") { Enabled = false }); }
     }
     void OpenSessionFolder(string session) {
         try {
             var record = catalog.Get(session);
             if (record == null) throw new IOException("会议资料不存在。");
-            string folder = !string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath) ? Path.GetDirectoryName(record.AudioPath) : record.DirectoryPath;
+            string folder = !string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath) ? Path.GetDirectoryName(record.AudioPath) :
+                Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"));
+            MeetingConfig.CheckOrdinaryPath(folder); Directory.CreateDirectory(folder);
             OpenFolder(folder);
         } catch (Exception error) { Notice("无法打开这场资料", error.Message, ToolTipIcon.Warning); }
     }
@@ -3094,6 +3147,7 @@ internal static class Program {
     [STAThread]
     static int Main(string[] args) {
         try {
+            if (args.Length == 2 && args[0] == "--export-audio") return NativeAudioExport.Run(args[1]);
             if (args.Length == 2 && args[0] == "--play-uri") {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);

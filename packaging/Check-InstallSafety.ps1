@@ -64,7 +64,7 @@ try {
             }
             if (Test-Path -LiteralPath $taskStatus -PathType Leaf) {
                 $taskState = Read-State $taskStatus
-                if ($taskState -notin @('completed', 'done', 'success', 'error', 'failed')) { throw 'Transcription remains active, queued or unconfirmed.' }
+                if ($taskState -notin @('completed', 'done', 'success', 'error', 'failed', 'audio_ready')) { throw 'Transcription remains active, queued or unconfirmed.' }
             }
         }
     }

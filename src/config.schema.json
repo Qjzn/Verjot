@@ -20,7 +20,7 @@
     "system_capture_mode": {"type": "string", "default": "all_active", "enum": ["all_active", "default"], "description": "all_active 收录所有活动输出端点，覆盖应用分流与默认设备切换；default 只跟随 Windows 默认播放设备。system_device_id 非空时固定该设备。新启用设备仍需初始化；受保护或独占音频可能不可录。"},
     "recording_protection_seconds": {"type": "integer", "default": 5, "minimum": 0, "maximum": 300, "description": "误触保护秒数；结束时有效录音时长不足此值则清理本场临时录音，不生成 MP3/Markdown、不转录。暂停麦克风仍计时；旧版整场暂停资料兼容原规则；等于此值保留，0关闭。仅对新会议生效。"},
     "recording_segment_seconds": {"type": "integer", "default": 300, "minimum": 10, "maximum": 600, "description": "原设备格式无损 WAV 分段时长，单位秒；达到安全字节边界会提前切分。保持同一会议时间轴，段仅为处理中间文件，成功后清理。"},
-    "mp3_bitrate_kbps": {"type": "integer", "default": 192, "minimum": 128, "maximum": 320, "enum": [128, 192, 256, 320], "description": "新会议最终 MP3 固定码率，单位 kbps；默认192。识别仍使用无损原轨；旧 WAV 成品不转换。"},
+    "mp3_bitrate_kbps": {"type": "integer", "default": 192, "minimum": 128, "maximum": 320, "enum": [128, 192, 256, 320], "description": "新会议结束后先导出 MP3 的固定码率，单位 kbps；默认192。导出不依赖模型，首次转写仍使用无损原轨；成品与转写完整校验后才清理临时文件，失败保留恢复资料；旧录音不转换。"},
     "asr_context": {"type": "string", "default": "", "maxLength": 2000, "description": "人名、术语等转写提示；不是会议正文或指令。"},
     "asr_terms": {"type": "string", "default": "", "maxLength": 1000, "description": "已知姓名、产品名和术语，逗号、分号或换行分隔；最多64项、每项64字符，与asr_context合计最多2000字符。随新会议冻结，不保证必然识别正确。"},
     "speaker_anchor_mode": {"type": "string", "default": "legacy", "enum": ["legacy", "clean"], "description": "legacy保持旧声纹锚点；clean从讲话中扣除同轨异人重叠区，使用最长1.5至6秒干净区间。候选需真实身份标注验收，不固定人数、不放宽聚类阈值。"},
