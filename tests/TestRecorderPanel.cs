@@ -45,9 +45,9 @@ internal static class TestRecorderPanel {
                 Check(panel.BrandMark.Right < panel.BrandTitle.Left, "The logo and name must remain independent, non-overlapping elements");
                 Check(Math.Abs((panel.BrandMark.Left + panel.BrandTitle.Right) - panel.ClientSize.Width) <= 2, "The logo and name group must remain centered");
                 Check(panel.BrandMark.Image.Width >= panel.BrandMark.Width - 1 && panel.BrandMark.Image.Height >= panel.BrandMark.Height - 1, "The header must not upscale a smaller icon frame");
-                Check(panel.BackButton.Left < panel.BrandMark.Left && panel.CollapseButton.Left > panel.BrandTitle.Right, "Back, brand and close must follow the header navigation order");
-                Check(panel.CollapseButton.AccessibleName == "关闭浮窗" && !panel.BackButton.Enabled, "Close must hide only the float; recording has no previous page");
-                foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle, panel.BackButton, panel.CollapseButton }) {
+                Check(typeof(RecorderPanel).GetField("BackButton") == null, "The unused return action must be removed");
+                Check(panel.CollapseButton.AccessibleName == "关闭浮窗" && panel.CollapseButton.Left > panel.BrandTitle.Right, "Close must hide only the float");
+                foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle, panel.CollapseButton }) {
                     Check(panel.ClientRectangle.Contains(control.Bounds), "Header control must fit the 186 x 68 panel");
                     Check(control.Bottom <= panel.MicrophoneButton.Top, "Header must not overlap recording actions");
                 }
@@ -96,12 +96,37 @@ internal static class TestRecorderPanel {
                 Check(panel.Heading.Visible && panel.Detail.Visible, "Processing title and detail must both be visible");
                 Check(!panel.MicrophoneButton.Visible && !panel.StopButton.Visible && !panel.AudioLevel.Visible, "Processing must hide obsolete recording controls");
                 Check(panel.CollapseButton.Visible, "Processing must retain collapse");
-                int backRequests = 0;
-                panel.BackRequested += delegate { backRequests++; };
-                panel.BackButton.PerformClick();
-                Check(backRequests == 1 && panel.Visible, "Return must route to the parent without closing the float");
+                Check(!panel.QuickNoteButton.Visible && !panel.StartButton.Visible && !panel.SettingsButton.Visible, "Progress must not be obscured by home actions");
                 Check(panel.ClientRectangle.Contains(panel.Heading.Bounds) && panel.ClientRectangle.Contains(panel.Detail.Bounds), "Processing labels must fit the compact panel");
                 Snapshot(panel, Path.Combine(output, "panel-processing.png"));
+                panel.SetQuickActionHotkeys("Ctrl+Shift+J", "Ctrl+Shift+L");
+                panel.ShowStatus("verbit已就绪", "ready");
+                Check(panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "Idle must expose the three requested actions");
+                Check(!panel.Heading.Visible && !panel.Detail.Visible && !panel.StopButton.Visible, "Idle must show icons without redundant ready text");
+                Check(panel.DevicesTip.GetToolTip(panel.QuickNoteButton).Contains("Ctrl+Shift+J") && panel.DevicesTip.GetToolTip(panel.StartButton).Contains("Ctrl+Shift+L"), "Tooltips must follow configured hotkeys");
+                Check(!panel.DevicesTip.GetToolTip(panel.SettingsButton).Contains("Ctrl") && panel.DevicesTip.GetToolTip(panel.SettingsButton).Contains("设置"), "Settings must have an explanation without an invented hotkey");
+                int noteClicks = 0, startClicks = 0, settingsClicks = 0;
+                panel.QuickNoteButton.Click += delegate { noteClicks++; };
+                panel.StartButton.Click += delegate { startClicks++; };
+                panel.SettingsButton.Click += delegate { settingsClicks++; };
+                panel.QuickNoteButton.PerformClick(); panel.StartButton.PerformClick(); panel.SettingsButton.PerformClick();
+                Check(noteClicks == 1 && startClicks == 1 && settingsClicks == 1, "All home actions must dispatch independently");
+                Check(Math.Abs((panel.StartButton.Left - panel.QuickNoteButton.Left) - (panel.SettingsButton.Left - panel.StartButton.Left)) <= 1, "Home icons must be evenly spaced within monitor DPI rounding");
+                foreach (Control control in new Control[] { panel.QuickNoteButton, panel.StartButton, panel.SettingsButton })
+                    Check(panel.ClientRectangle.Contains(control.Bounds) && control.Top > panel.BrandTitle.Bottom, "Home actions must fit below the header");
+                Snapshot(panel, Path.Combine(output, "panel-home.png"));
+                int homeVisibilityChanges = 0;
+                panel.QuickNoteButton.VisibleChanged += delegate { homeVisibilityChanges++; };
+                panel.SettingsButton.VisibleChanged += delegate { homeVisibilityChanges++; };
+                for (int i = 0; i < 4; i++) panel.ShowStatus("verbit已就绪", "ready");
+                Check(homeVisibilityChanges == 0, "Repeated idle polling must preserve native hover tracking without hiding icons");
+                panel.ShowAttention("录音已保存 · 待配置转写", "请在设置中配置本地模型；原始录音已保留");
+                Check(panel.SettingsButton.Visible && panel.StartButton.Visible && panel.QuickNoteButton.Visible && panel.Heading.Visible && !panel.Detail.Visible, "Untranscribed results must retain the quick actions and an explicit status");
+                Check(panel.Heading.Bottom <= panel.StartButton.Top && panel.DevicesTip.GetToolTip(panel.Heading).Contains("原始录音已保留"), "Attention state must not cover its actions or hide the full explanation");
+                Snapshot(panel, Path.Combine(output, "panel-attention.png"));
+                int previousChanges = homeVisibilityChanges;
+                for (int i = 0; i < 4; i++) panel.ShowAttention("录音已保存 · 待配置转写", "请在设置中配置本地模型；原始录音已保留");
+                Check(previousChanges == homeVisibilityChanges, "Attention polling must preserve icon tooltips too");
                 string longDetail = new string('会', 100) + "识别失败，请从托盘重试对应会议";
                 Call(panel, "ShowProcessing", "转写失败", longDetail);
                 Check(panel.Detail.AutoEllipsis && panel.DevicesTip.GetToolTip(panel.Detail).Contains(longDetail), "Long processing detail must truncate visually and remain complete in its tooltip");
@@ -112,6 +137,7 @@ internal static class TestRecorderPanel {
                 panel.Show();
                 Application.DoEvents();
                 Check(panel.MicrophoneButton.Visible && panel.StopButton.Visible && panel.AudioLevel.Visible && !panel.Detail.Visible, "A new recording must restore its controls");
+                Check(!panel.StartButton.Visible && !panel.SettingsButton.Visible && !panel.QuickNoteButton.Visible, "Recording must hide home actions");
                 Check(panel.DevicesTip.GetToolTip(panel.AudioLevel).IndexOf("默认设备已变化", StringComparison.Ordinal) < 0, "A new recording must clear prior device warnings");
                 Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Processing must not resize the panel");
                 panel.AllowClose = true;

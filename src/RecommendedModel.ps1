@@ -31,7 +31,7 @@ function Assert-ModelIdle([string]$Root) {
             if (Test-Path -LiteralPath $taskPath -PathType Leaf) {
                 if ((Get-Item -LiteralPath $taskPath).Length -gt 1MB) { throw '会议状态过大，请先检查恢复资料。' }
                 $taskState = ([IO.File]::ReadAllText($taskPath) | ConvertFrom-Json).state
-                $taskAllowed = if ($taskStateFile -eq 'session.json') { @('recorded', 'recorded_with_error') } else { @('completed', 'done', 'success', 'error', 'failed') }
+                $taskAllowed = if ($taskStateFile -eq 'session.json') { @('recorded', 'recorded_with_error') } else { @('completed', 'done', 'success', 'error', 'failed', 'audio_ready') }
                 if ($taskState -notin $taskAllowed) { throw '请先结束录音并等待转写完成，再下载模型；速记仍可使用。' }
             }
         }
@@ -115,7 +115,7 @@ if ($Worker) {
         $taskPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
         & $taskPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskInstallScript -RuntimeOnly -Backend $taskBackend -PythonExe $taskPrivatePython *> $taskInstallLog
         if ($LASTEXITCODE -ne 0) { throw '准备未完成。可重试并复用已下载文件；请查看 installation\recommended-install.log。若缺少 VC++ 运行库，按日志中的 Microsoft 官方入口安装。' }
-        Set-ModelStatus 'completed' '推荐模型与依赖已准备。真实设备与转写效果尚未验收；API 模式不会自动切换为本地。'
+        Set-ModelStatus 'completed' '本地模型与运行依赖检查通过，可以关闭此窗口开始本地转写。已下载文件会复用；API 模式不会自动切换为本地。'
         exit 0
     } catch {
         if ($taskLock) { Set-ModelStatus 'error' $_.Exception.Message }
@@ -161,10 +161,11 @@ $taskLogs.Text = '查看日志'; $taskLogs.AutoSize = $true
 $taskButtons.Controls.AddRange(@($taskClose, $taskDownload, $taskLogs))
 $taskLayout.Controls.Add($taskInfo,0,0); $taskLayout.Controls.Add($taskMessage,0,1); $taskLayout.Controls.Add($taskProgress,0,2); $taskLayout.Controls.Add($taskButtons,0,3)
 $taskWindow.Controls.Add($taskLayout)
-$taskState = @{ child=$null; began=$null }
+$taskState = @{ child=$null; began=$null; actionError=$null }
 $taskClose.Add_Click({ $taskWindow.Close() })
 $taskLogs.Add_Click({ Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $taskModelDirectory + '"') })
 $taskDownload.Add_Click({
+    $taskState.actionError = $null
     try {
         Assert-ModelIdle $taskModelRoot
         $taskLockPath = Join-Path $taskModelRoot 'recommended-model.lock'; Assert-ModelPath $taskLockPath
@@ -172,9 +173,12 @@ $taskDownload.Add_Click({
         $taskExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $taskState.began = [DateTimeOffset]::Now
         $taskState.child = Start-Process -FilePath $taskExe -ArgumentList ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Worker') -WindowStyle Hidden -PassThru
-        $taskDownload.Enabled = $false; $taskClose.Text = '后台继续'; $taskProgress.Visible = $true
-        $taskMessage.Text = '正在准备下载。关闭此窗口后任务继续，可从设置重新打开查看。'
-    } catch { $taskMessage.Text = $_.Exception.Message }
+        $taskDownload.Enabled = $false; $taskDownload.Text = '检查中…'; $taskClose.Text = '后台继续'; $taskProgress.Visible = $true
+        $taskMessage.Text = '正在检查环境与模型，已下载的完整文件会复用。关闭窗口后任务继续，可从设置重新打开查看。'
+    } catch {
+        $taskState.actionError = $_.Exception.Message
+        $taskMessage.Text = $taskState.actionError
+    }
 })
 $taskTimer = New-Object Windows.Forms.Timer
 $taskTimer.Interval = 1000
@@ -182,8 +186,18 @@ $taskTimer.Add_Tick({
     try {
         if (Test-Path -LiteralPath $taskModelStatus -PathType Leaf) {
             $taskValue = [IO.File]::ReadAllText($taskModelStatus) | ConvertFrom-Json
-            if ($taskState.began -and [DateTimeOffset]::Parse($taskValue.updated_at) -lt $taskState.began) { return }
-            $taskMessage.Text = [string]$taskValue.message
+            if ($taskState.began -and [DateTimeOffset]::Parse($taskValue.updated_at) -lt $taskState.began) {
+                if ($taskState.child -and $taskState.child.HasExited) {
+                    $taskState.actionError = '检查进程未能启动或没有更新状态，请查看日志后重试；已下载模型与会议文件未改动。'
+                    $taskMessage.Text = $taskState.actionError
+                    $taskDownload.Enabled = $true; $taskDownload.Text = '重试检查'; $taskProgress.Visible = $false; $taskClose.Text = '关闭'
+                }
+                return
+            }
+            # A rejected click must remain visible instead of being replaced
+            # by last week's successful download on the next timer tick.
+            if ($taskState.actionError) { $taskMessage.Text = $taskState.actionError; return }
+            $taskMessage.Text = if ($taskValue.state -eq 'completed') { '本地模型与运行依赖已准备好，可关闭此窗口。需要重新校验时点击“重新检查”；已下载的完整文件会复用。' } else { [string]$taskValue.message }
             $taskActive = $taskValue.state -in @('preparing','installing')
             # The lock, not a stale JSON flag/PID, determines a live installation.
             $taskProbe = $null
@@ -192,7 +206,7 @@ $taskTimer.Add_Tick({
             finally { if ($taskProbe) { $taskProbe.Dispose() } }
             $taskDownload.Enabled = -not $taskActive; $taskProgress.Visible = $taskActive
             $taskClose.Text = if ($taskActive) { '后台继续' } else { '关闭' }
-            $taskDownload.Text = if ($taskValue.state -eq 'completed') { '检查并修复' } else { '重试下载' }
+            $taskDownload.Text = if ($taskActive) { '检查中…' } elseif ($taskValue.state -eq 'completed') { '重新检查' } else { '重试下载' }
             if ($taskActive -and $taskValue.state -eq 'installing') {
                 $taskStep = Join-Path $taskModelDirectory 'status.json'
                 if (Test-Path -LiteralPath $taskStep) { $taskMessage.Text = ([IO.File]::ReadAllText($taskStep) | ConvertFrom-Json).message }

@@ -364,11 +364,11 @@ internal static class TestMeetingExperience {
             int opensBeforeWarning = autoOpens;
             children[children.Count - 1].WaitForExit(10000); Call(context, "Tick");
             Check(((List<TranscriptionJob>)Field(context, "jobs")).Count == 0, "Capture warning must finish the job without restarting ASR");
-            Check(panel.Heading.Text == "采集异常 · 检查录音", "Completed transcription must retain an explicit capture warning" +
-                (panel.Heading.Text == "采集异常 · 检查录音" ? "" : CompletionDiagnostic(context, panel, warned, warningJob)));
+            Check(panel.Heading.Text == "转写完成 · 录音需检查" && panel.DevicesTip.GetToolTip(panel.Heading).Contains("Synthetic device discontinuity"), "Completed transcription must retain the precise capture warning without implying ASR failure" +
+                (panel.Heading.Text == "转写完成 · 录音需检查" ? "" : CompletionDiagnostic(context, panel, warned, warningJob)));
             Check(autoOpens == opensBeforeWarning, "Capture warning must not automatically open the note as a normal success");
             var warningItem = OpenRecent(menu, recent, "Native capture-warning fixture");
-            Check(warningItem != null && warningItem.Text.Contains("采集异常") && !warningItem.Text.Contains("成品缺失"), "Capture errors with existing files must not become a missing-artifact alarm");
+            Check(warningItem != null && warningItem.Text.Contains("录音需检查") && !warningItem.Text.Contains("成品缺失") && !warningItem.Text.Contains("失败"), "Capture errors with completed ASR must not become a failed-ASR or missing-artifact alarm");
             Check(MenuAction(warningItem, "打开转录笔记") != null && MenuAction(warningItem, "定位录音文件") != null, "Warning results must keep both published files reachable");
             Check(MenuAction(warningItem, "重试这场转写") == null, "A completed warning must not offer an ineffective ASR retry");
             menu.Close();

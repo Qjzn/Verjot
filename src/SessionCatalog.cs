@@ -231,7 +231,12 @@ internal sealed class SessionCatalog {
                 (Within(record.AudioPath, session) || Directory.Exists(artifactRoot));
             record.State = captureNeedsReview ? "capture_warning" : hasArtifacts ? "completed" : !removableArtifacts ? "missing" :
                 noteExists ? "transcript_only" : audioExists ? "audio_only" : "removed";
-            if (record.State == "capture_warning") record.Message = "采集异常，请检查录音与转录；不能保证录音完整";
+            if (record.State == "capture_warning") {
+                string reason = Text(status, "capture_error", "");
+                if (string.IsNullOrWhiteSpace(reason)) reason = Text(metadata, "capture_error", "");
+                record.Message = hasArtifacts ? "转写已完成；采集异常，不能保证录音完整" : "采集异常，录音与转录文件需要检查";
+                if (!string.IsNullOrWhiteSpace(reason)) record.Message += "：" + reason;
+            }
             else if (record.State == "removed") record.Message = "会议成品已移除";
             else if (record.State == "transcript_only") record.Message = "仅保留转录，录音文件已移除";
             else if (record.State == "audio_only") record.Message = "仅保留录音，转录文件已移除";

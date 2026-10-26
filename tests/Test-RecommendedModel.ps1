@@ -27,6 +27,10 @@ Reject { Assert-ModelIdle $taskFixture } 'Active recording blocks runtime mutati
 Reject { Assert-ModelIdle $taskFixture } 'Active transcription blocks runtime mutation'
 [IO.File]::WriteAllText((Join-Path $taskMeeting 'status.json'), '{"state":"completed"}', $taskUtf8Test)
 Assert-ModelIdle $taskFixture
+[IO.File]::WriteAllText((Join-Path $taskMeeting 'status.json'), '{"state":"audio_ready"}', $taskUtf8Test)
+Assert-ModelIdle $taskFixture
+Check $true 'Saved MP3 awaiting configuration does not block model preparation'
+[IO.File]::WriteAllText((Join-Path $taskMeeting 'status.json'), '{"state":"completed"}', $taskUtf8Test)
 [IO.File]::WriteAllText($taskSessionFile, '{broken', $taskUtf8Test)
 Reject { Assert-ModelIdle $taskFixture } 'Malformed state is not treated as idle'
 [IO.File]::WriteAllText($taskSessionFile, '{"state":"recorded"}', $taskUtf8Test)
@@ -85,6 +89,28 @@ try {
     Check ($LASTEXITCODE -ne 0 -and (Get-FileHash -LiteralPath (Join-Path $taskFixture 'installation\recommended-model.json')).Hash -eq $taskBeforeStatus) 'Second worker refuses without overwriting active status'
 } finally { $taskSetupLock.Dispose() }
 Check ($env:PATH -ceq $taskBeforePath) 'System/current process PATH unchanged'
+
+# Exercise the actual UI click, including the timer after a rejected action.
+# All child work stays in this fake fixture; the user's desktop is never used.
+$taskDesktop = Join-Path $taskFixture 'TestDesktopRunner.exe'
+& $taskCompiler /nologo /target:exe ('/out:' + $taskDesktop) (Join-Path (Split-Path $SourceRoot -Parent) 'tests\TestDesktopRunner.cs')
+Check ($LASTEXITCODE -eq 0) 'Isolated UI launcher builds'
+$taskUiTest = Join-Path (Split-Path $SourceRoot -Parent) 'tests\Test-RecommendedModelUi.ps1'
+[IO.File]::WriteAllText($taskFakeInstaller, 'param([switch]$RuntimeOnly,[string]$Backend,[string]$PythonExe); [IO.File]::WriteAllText((Join-Path $PSScriptRoot "installation\clicked-worker.txt"),"started"); exit 0', $taskUtf8Test)
+& $taskDesktop $taskPowerShell -NoProfile -ExecutionPolicy Bypass -File $taskUiTest -Helper $taskHelper -Output (Join-Path $taskFixture 'clicked.png') -Action start
+Check ($LASTEXITCODE -eq 0) 'Actual UI click launches a worker and reaches completion'
+[IO.File]::WriteAllText($taskSessionFile, '{"state":"recording"}', $taskUtf8Test)
+[IO.File]::WriteAllText((Join-Path $taskMeeting 'status.json'), '{"state":"recording"}', $taskUtf8Test)
+& $taskDesktop $taskPowerShell -NoProfile -ExecutionPolicy Bypass -File $taskUiTest -Helper $taskHelper -Output (Join-Path $taskFixture 'blocked.png') -Action blocked
+Check ($LASTEXITCODE -eq 0) 'Rejected action remains visible after subsequent status polls'
+[IO.File]::WriteAllText($taskSessionFile, '{"state":"recorded"}', $taskUtf8Test)
+[IO.File]::WriteAllText((Join-Path $taskMeeting 'status.json'), '{"state":"completed"}', $taskUtf8Test)
+$taskLaunchFailure = Join-Path $taskFixture 'LaunchFailure.ps1'
+$taskUiSource = [IO.File]::ReadAllText($taskHelper)
+Check ($taskUiSource.Split(@('if ($Worker) {'), [StringSplitOptions]::None).Count -eq 2) 'Worker startup failure fixture has one exact injection point'
+[IO.File]::WriteAllText($taskLaunchFailure, $taskUiSource.Replace('if ($Worker) {', 'if ($Worker) { exit 9 }; if ($Worker) {'), (New-Object Text.UTF8Encoding($true)))
+& $taskDesktop $taskPowerShell -NoProfile -ExecutionPolicy Bypass -File $taskUiTest -Helper $taskLaunchFailure -Output (Join-Path $taskFixture 'launch-failure.png') -Action launch-error
+Check ($LASTEXITCODE -eq 0) 'A worker exiting before a fresh status gives an actionable retry'
 
 # Exercise the real RuntimeOnly branch with harmless process probes. In
 # particular a missing first-run config must remain missing, and API settings

@@ -192,6 +192,8 @@ internal static class TestSessionCatalog {
             "completed ASR does not conceal a capture error or offer ineffective retranscription");
         True(warning.NotePath == warningNote && warning.AudioPath == warningAudio && warning.Message.Contains("采集异常"),
             "capture warning retains both output routes and explains the capture problem");
+        True(warning.Message.Contains("转写已完成") && warning.Message.Contains("fixture capture discontinuity"),
+            "successful transcription must be distinguished from the precise capture warning");
         catalog.MarkNotified(warning);
         True(!new SessionCatalog(home, vault).Get(captureWarning).NeedsAttention,
             "acknowledged capture warning does not alert again after restart");

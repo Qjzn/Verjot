@@ -1378,7 +1378,7 @@ internal sealed class RecorderActionButton : Button {
     readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer { Interval = 33 };
     readonly Stopwatch transitionClock = new Stopwatch();
     bool endsRecording, microphoneDisabled, recordingPaused, collapsesWindow;
-    public bool ReturnsHome;
+    public string QuickAction;
     public bool EndsRecording { get { return endsRecording; } set { if (endsRecording == value) return; endsRecording = value; UpdateVisualState(); } }
     public bool MicrophoneDisabled { get { return microphoneDisabled; } set { if (microphoneDisabled == value) return; microphoneDisabled = value; if (value) { inputLevel = 0; InputActive = false; } UpdateVisualState(); } }
     public bool RecordingPaused { get { return recordingPaused; } set { if (recordingPaused == value) return; recordingPaused = value; if (value) { inputLevel = 0; InputActive = false; } UpdateVisualState(); } }
@@ -1429,7 +1429,7 @@ internal sealed class RecorderActionButton : Button {
             : MicrophoneDisabled ? (pressed ? Color.FromArgb(240, 224, 200) : hovering ? Color.FromArgb(247, 235, 215) : Color.FromArgb(250, 243, 232))
             : pressed ? Color.FromArgb(205, 226, 253) : (hovering || InputActive ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
         Color ink = unavailable ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : InputActive ? Color.FromArgb(31, 126, 220) : Color.FromArgb(40, 104, 168);
-        if (CollapsesWindow || ReturnsHome) ink = !Enabled ? SystemColors.GrayText : pressed ? Color.FromArgb(31, 78, 126) : hovering ? Color.FromArgb(40, 104, 168) : Color.FromArgb(100, 116, 135);
+        if (CollapsesWindow || QuickAction != null) ink = !Enabled ? SystemColors.GrayText : pressed ? Color.FromArgb(31, 78, 126) : hovering ? Color.FromArgb(40, 104, 168) : Color.FromArgb(72, 103, 135);
         Color border = unavailable ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : InputActive ? Color.FromArgb(78, 159, 235) : Color.FromArgb(188, 215, 243);
         float nextInput = InputActive && !unavailable && !MicrophoneDisabled ? (float)Math.Max(0, Math.Min(1, (Math.Log10(inputLevel) + 2.7) / 2.2)) : 0;
         float nextScale = pressed && Enabled ? .95f : 1;
@@ -1471,18 +1471,40 @@ internal sealed class RecorderActionButton : Button {
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.Clear(BackColor);
-        if (CollapsesWindow || ReturnsHome) {
+        if (QuickAction != null) {
+            float quickUnit = Math.Min(Width, Height) / 32f;
+            g.TranslateTransform((Width - 32 * quickUnit) / 2, (Height - 32 * quickUnit) / 2);
+            g.ScaleTransform(quickUnit, quickUnit);
+            if (hovering || pressed) using (var brush = new SolidBrush(visualFill)) g.FillEllipse(brush, 1, 1, 30, 30);
+            using (var pen = new Pen(visualInk, 1.65f)) {
+                pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                pen.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
+                if (QuickAction == "note") {
+                    g.DrawLines(pen, new[] { new PointF(9, 6), new PointF(19, 6), new PointF(24, 11), new PointF(24, 26), new PointF(9, 26), new PointF(9, 6) });
+                    g.DrawLines(pen, new[] { new PointF(19, 6), new PointF(19, 11), new PointF(24, 11) });
+                    g.DrawLine(pen, 13, 16, 20, 16); g.DrawLine(pen, 13, 21, 18, 21);
+                } else if (QuickAction == "record") {
+                    g.DrawEllipse(pen, 6, 6, 20, 20);
+                    using (var brush = new SolidBrush(Color.FromArgb(216, 57, 69))) g.FillEllipse(brush, 12, 12, 8, 8);
+                } else {
+                    g.DrawEllipse(pen, 10, 10, 12, 12); g.DrawEllipse(pen, 14, 14, 4, 4);
+                    for (int i = 0; i < 8; i++) {
+                        double angle = i * Math.PI / 4;
+                        g.DrawLine(pen, 16 + (float)Math.Cos(angle) * 7, 16 + (float)Math.Sin(angle) * 7,
+                            16 + (float)Math.Cos(angle) * 10, 16 + (float)Math.Sin(angle) * 10);
+                    }
+                }
+            }
+            if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(g, new Rectangle(2, 2, 28, 28));
+            return;
+        }
+        if (CollapsesWindow) {
             float scale = Height / 20f * visualScale;
             float x = Width / 2f, y = Height / 2f;
             using (var pen = new Pen(visualInk, 1.6f * scale)) {
                 pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-                if (ReturnsHome) {
-                    g.DrawLines(pen, new PointF[] { new PointF(x, y - 4 * scale), new PointF(x - 4 * scale, y), new PointF(x, y + 4 * scale) });
-                    g.DrawLine(pen, x - 4 * scale, y, x + 4 * scale, y);
-                } else {
-                    g.DrawLine(pen, x - 3 * scale, y - 3 * scale, x + 3 * scale, y + 3 * scale);
-                    g.DrawLine(pen, x - 3 * scale, y + 3 * scale, x + 3 * scale, y - 3 * scale);
-                }
+                g.DrawLine(pen, x - 3 * scale, y - 3 * scale, x + 3 * scale, y + 3 * scale);
+                g.DrawLine(pen, x - 3 * scale, y + 3 * scale, x + 3 * scale, y - 3 * scale);
             }
             if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(g, new Rectangle(1, 1, Width - 2, Height - 2));
             return;
@@ -1607,10 +1629,11 @@ internal sealed class RecorderPanel : Form {
     public readonly RecorderActionButton MicrophoneButton = new RecorderActionButton();
     public readonly RecorderActionButton StopButton = new RecorderActionButton { EndsRecording = true };
     public readonly RecorderActionButton CollapseButton = new RecorderActionButton { CollapsesWindow = true };
-    public readonly RecorderActionButton BackButton = new RecorderActionButton { ReturnsHome = true };
+    public readonly RecorderActionButton QuickNoteButton = new RecorderActionButton { QuickAction = "note", Visible = false };
+    public readonly RecorderActionButton StartButton = new RecorderActionButton { QuickAction = "record", Visible = false };
+    public readonly RecorderActionButton SettingsButton = new RecorderActionButton { QuickAction = "settings", Visible = false };
     public readonly PictureBox BrandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom };
     public readonly Label BrandTitle = new Label();
-    public event Action BackRequested;
     public readonly RecordingLevelIndicator AudioLevel = new RecordingLevelIndicator();
     public readonly ToolTip DevicesTip = new ToolTip();
     Font timeNormal = DpiFont("Segoe UI Semibold", 11, 96);
@@ -1627,6 +1650,7 @@ internal sealed class RecorderPanel : Form {
     string resultSession;
     public bool AllowClose;
     bool showingRecording;
+    bool showingAttention;
     bool microphonePaused;
     bool recordingPaused;
     DateTime bookmarkFeedbackUntil;
@@ -1696,7 +1720,9 @@ internal sealed class RecorderPanel : Form {
         AudioLevel.SetBounds(66, 32, 18, 18);
         MicrophoneButton.SetBounds(91, 27, 32, 32);
         StopButton.SetBounds(148, 29, 28, 28);
-        BackButton.SetBounds(4, 2, 22, 20);
+        QuickNoteButton.SetBounds(18, 28, 32, 32);
+        StartButton.SetBounds(77, 28, 32, 32);
+        SettingsButton.SetBounds(136, 28, 32, 32);
         CollapseButton.SetBounds(160, 2, 22, 20);
         BrandMark.SetBounds(63, 4, 16, 16);
         RefreshBrandBitmap();
@@ -1711,15 +1737,17 @@ internal sealed class RecorderPanel : Form {
         MicrophoneButton.AccessibleName = MicrophoneButton.Text = "关闭麦克风";
         StopButton.AccessibleName = StopButton.Text = "结束整个记录";
         CollapseButton.AccessibleName = CollapseButton.Text = "关闭浮窗";
-        BackButton.AccessibleName = BackButton.Text = "返回首页";
+        QuickNoteButton.AccessibleName = QuickNoteButton.Text = "速记便签";
+        StartButton.AccessibleName = StartButton.Text = "开始录制";
+        SettingsButton.AccessibleName = SettingsButton.Text = "设置";
+        DevicesTip.InitialDelay = 400; DevicesTip.ReshowDelay = 100; DevicesTip.AutoPopDelay = 15000;
+        SetQuickActionHotkeys("Ctrl+Alt+J", "Ctrl+Alt+L");
         DevicesTip.SetToolTip(StopButton, "结束整个记录 · Ctrl+Alt+L");
         DevicesTip.SetToolTip(Time, "本场会议时长；拖动可移动浮窗");
         DevicesTip.SetToolTip(AudioLevel, "麦克风或电脑声音的实际输入音量");
         DevicesTip.SetToolTip(CollapseButton, "关闭浮窗，录音和转写继续；从托盘可恢复");
-        DevicesTip.SetToolTip(BackButton, "返回首页，后台转写继续");
-        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton, BackButton, BrandMark, BrandTitle });
+        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton, QuickNoteButton, StartButton, SettingsButton, BrandMark, BrandTitle });
         CollapseButton.Click += delegate { Hide(); };
-        BackButton.Click += delegate { if (BackRequested != null) BackRequested(); };
         MouseDown += Drag;
         Time.MouseDown += Drag;
         Heading.MouseDown += Drag;
@@ -1769,11 +1797,12 @@ internal sealed class RecorderPanel : Form {
         }
         // Pixel fonts avoid reusing a system-DPI GDI font at another monitor DPI.
         Time.Font = Time.Text.Length > 5 ? timeLong : timeNormal;
-        Heading.Font = showingRecording ? recordingHeadingFont : processingHeadingFont;
+        Heading.Font = showingRecording ? recordingHeadingFont : showingAttention ? detailFont : processingHeadingFont;
         Detail.Font = detailFont;
         AudioFile.Font = TranscriptFile.Font = artifactFont;
         BrandTitle.Font = brandFont;
         LayoutBrandHeader();
+        if (QuickNoteButton.Visible) LayoutQuickActions(showingAttention);
         if (previous != null) foreach (Font font in previous) font.Dispose();
     }
     void Drag(object sender, MouseEventArgs e) {
@@ -1785,7 +1814,7 @@ internal sealed class RecorderPanel : Form {
         SetProcessingBusy(false);
         HideArtifacts();
         showingRecording = true;
-        BackButton.Enabled = false;
+        SetQuickActionsVisible(false);
         bookmarkFeedbackUntil = DateTime.MinValue;
         recordingPaused = false;
         micName = microphone;
@@ -1866,20 +1895,46 @@ internal sealed class RecorderPanel : Form {
         Heading.ForeColor = recordingPaused ? Color.FromArgb(139, 90, 31) : Color.FromArgb(42, 94, 150);
     }
     public void ShowStatus(string title, string detail) {
-        ShowProcessing(title, detail);
+        ShowTextState(title, detail, true, false);
+        AccessibleDescription = title + "；" + detail;
+    }
+    public void ShowAttention(string title, string detail) {
+        ShowTextState(title, detail, true, true);
+    }
+    void LayoutQuickActions(bool compact) {
+        var actions = new[] { QuickNoteButton, StartButton, SettingsButton };
+        int size = compact ? 24 : 32, top = compact ? 39 : 28;
+        for (int i = 0; i < actions.Length; i++)
+            actions[i].SetBounds((int)Math.Round((18 + (compact ? 4 : 0) + i * 59) * ClientSize.Width / 186f),
+                (int)Math.Round(top * ClientSize.Height / 68f), (int)Math.Round(size * ClientSize.Width / 186f), (int)Math.Round(size * ClientSize.Height / 68f));
+    }
+    public void SetQuickActionHotkeys(string quickNote, string start) {
+        DevicesTip.SetToolTip(QuickNoteButton, "速记便签 · " + quickNote + "\n置顶输入、粘贴图片，自动保存");
+        DevicesTip.SetToolTip(StartButton, "开始会议录音 · " + start + "\n录制麦克风与电脑声音，结束后转写");
+        DevicesTip.SetToolTip(SettingsButton, "设置\n保存位置、转写模型与快捷键");
+    }
+    void SetQuickActionsVisible(bool visible) {
+        QuickNoteButton.Visible = StartButton.Visible = SettingsButton.Visible = visible;
     }
     public void ShowProcessing(string title, string detail) {
+        ShowTextState(title, detail, false, false);
+    }
+    void ShowTextState(string title, string detail, bool quickActions, bool attention) {
         SetProcessingBusy(false);
         HideArtifacts();
         showingRecording = false;
-        BackButton.Enabled = true;
+        showingAttention = attention;
+        // Polling the same state must not hide/show icons: doing so cancels
+        // native hover tracking and makes the tooltip flash every 500 ms.
+        SetQuickActionsVisible(quickActions);
+        if (quickActions) LayoutQuickActions(attention);
         AudioLevel.SetRecording(false);
         MicrophoneButton.SetInputLevel(0);
         Time.Visible = AudioLevel.Visible = MicrophoneButton.Visible = StopButton.Visible = false;
-        Heading.Visible = true;
-        Detail.Visible = true;
-        Heading.Font = processingHeadingFont;
-        Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(25 * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(18 * ClientSize.Height / 68f));
+        Heading.Visible = !quickActions || attention;
+        Detail.Visible = !quickActions;
+        Heading.Font = attention ? detailFont : processingHeadingFont;
+        Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)((attention ? 23 : 25) * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)((attention ? 14 : 18) * ClientSize.Height / 68f));
         Detail.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(45 * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(16 * ClientSize.Height / 68f));
         Heading.ForeColor = Color.FromArgb(38, 49, 68);
         Heading.Text = title;
@@ -1887,8 +1942,9 @@ internal sealed class RecorderPanel : Form {
         Heading.AccessibleName = title;
         Detail.AccessibleName = detail;
         MicrophoneButton.Enabled = StopButton.Enabled = false;
-        DevicesTip.SetToolTip(Heading, title + "\n" + detail);
-        DevicesTip.SetToolTip(Detail, title + "\n" + detail);
+        string tip = title + "\n" + detail;
+        if (DevicesTip.GetToolTip(Heading) != tip) DevicesTip.SetToolTip(Heading, tip);
+        if (DevicesTip.GetToolTip(Detail) != tip) DevicesTip.SetToolTip(Detail, tip);
         Invalidate();
     }
     public void ShowWorking(string title, string detail) {
@@ -2269,7 +2325,10 @@ internal sealed class MeetingContext : ApplicationContext {
         panel.StopButton.Click += delegate { Stop(); };
         panel.MicrophoneButton.Click += delegate { ToggleMicrophone(); };
         panel.ArtifactRequested += LocateArtifactForSession;
-        panel.BackRequested += delegate { focusedSession = null; focusedRecord = null; RefreshFeedback(); };
+        panel.QuickNoteButton.Click += delegate { ToggleQuickNote(); };
+        panel.StartButton.Click += delegate { Toggle(); };
+        panel.SettingsButton.Click += delegate { OpenSettings(); };
+        panel.SetQuickActionHotkeys(QuickNoteHotkey, StartHotkey);
         panel.Time.Text = "00:00";
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
         panel.ShowStatus("verbit已就绪", StartHotkey + " 开始录制");
@@ -2331,6 +2390,7 @@ internal sealed class MeetingContext : ApplicationContext {
         bookmark.Text = "标记重点 · " + BookmarkHotkey;
         var quickItem = tray.ContextMenuStrip.Items["quickNote"];
         if (quickItem != null) quickItem.Text = "速记便签 · " + QuickNoteHotkey;
+        panel.SetQuickActionHotkeys(QuickNoteHotkey, StartHotkey);
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
         RefreshFeedback();
         Notice("设置已生效", "尚未开始转写的新录音重试时使用当前模型设置。旧文件保留在原位置。", ToolTipIcon.Info);
@@ -2439,7 +2499,7 @@ internal sealed class MeetingContext : ApplicationContext {
         pauseMicrophone.Enabled = false;
         bookmark.Enabled = false;
         silence.Reset();
-        panel.ShowStatus("正在结束录音", "正在关闭两路录音文件");
+        panel.ShowWorking("正在结束录音", "正在关闭两路录音文件");
         int protectionSeconds = config.ContainsKey("recording_protection_seconds") ? Convert.ToInt32(config["recording_protection_seconds"]) : 5;
         bool preserveShort = preserveShortRecording;
         ended.StopAsync(delegate(Exception error) {
@@ -2746,7 +2806,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     if (record.State == "completed")
                         Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
                     else if (record.State == "capture_warning")
-                        Notice("采集异常 · " + record.Label, record.Message + "\n录音：" + record.AudioPath + "\n转录：" + record.NotePath, ToolTipIcon.Warning);
+                        Notice("转写完成 · 录音需检查 · " + record.Label, record.Message + "\n录音：" + record.AudioPath + "\n转录：" + record.NotePath, ToolTipIcon.Warning);
                     // Completing A must never take focus away from meeting B.
                     if (record.State != "capture_warning" && recording == null && File.Exists(record.NotePath) && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
                         try { OpenNote(record.NotePath, true); }
@@ -2789,7 +2849,7 @@ internal sealed class MeetingContext : ApplicationContext {
                 try { focusedRecord = catalog.Get(focusedSession); }
                 catch (Exception error) {
                     MeetingFiles.Log(error);
-                    panel.ShowProcessing("会议资料需要检查", "资料未修改，请检查 work 中对应场次");
+                    panel.ShowAttention("会议资料需要检查", "资料未修改，请检查 work 中对应场次");
                     summary.Text = "会议资料需要检查" + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
                     SetTrayText("verbit · " + summary.Text); return;
                 }
@@ -2804,13 +2864,12 @@ internal sealed class MeetingContext : ApplicationContext {
                     panel.ShowResult(focusedRecord.DirectoryPath, focusedRecord.State == "transcript_only" ? "" : focusedRecord.AudioPath,
                         focusedRecord.State == "audio_only" ? "" : focusedRecord.NotePath, MeetingFiles.VaultRoot(config));
                 else if (focusedRecord.WorkerAlive) panel.ShowWorking(title, focusedRecord.Label + " · " + focusedRecord.Message);
-                else panel.ShowProcessing(title, focusedRecord.Label + " · " + focusedRecord.Message);
+                else panel.ShowAttention(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
                 SetTrayText("verbit · " + summary.Text); return;
             }
         }
         panel.ShowStatus(jobs.Count > 0 ? "后台转写中" : "verbit已就绪", jobs.Count > 0 ? jobs.Count + " 场 · 可开始新会议" : StartHotkey + " 开始录制");
-        panel.BackButton.Enabled = false;
         summary.Text = "verbit已就绪"; SetTrayText("verbit · " + StartHotkey);
     }
     static string StateLabel(string state) {
@@ -2818,7 +2877,7 @@ internal sealed class MeetingContext : ApplicationContext {
             case "completed": return "录音与转录已完成";
             case "transcript_only": return "仅保留转录";
             case "audio_only": return "仅保留录音";
-            case "capture_warning": return "采集异常 · 检查录音";
+            case "capture_warning": return "转写完成 · 录音需检查";
             case "interrupted": return "录音中断 · 检查资料";
             case "failed": return "转写失败 · 可重试";
             case "retry": return "录音已保留 · 可重试";
