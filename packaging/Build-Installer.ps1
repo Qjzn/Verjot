@@ -33,6 +33,7 @@ $taskFiles = @(
     'documentation\configuration.md', 'documentation\ai-install.md',
     'documentation\brand.md', 'documentation\product-scope.md',
     'documentation\quality.md', 'documentation\release-readiness.md',
+    'documentation\recording-export-acceptance.md', 'documentation\device-revalidation.md',
     'documentation\local-model-evaluation.md', 'documentation\private-beta-acceptance.md',
     'documentation\risk-review.md', 'documentation\open-source-readiness.md',
     'documentation\new-user-validation.md',

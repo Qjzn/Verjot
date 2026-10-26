@@ -1,5 +1,7 @@
 # 验证映射
 
+2026-10-26：新增[集中设备复验](device-revalidation.md)及[本轮候选验收报告](recording-export-acceptance.md)。准备与取消的实际入口检查不启动音频；分析器的静音误匹配、重复样本选段和逐包缺口测试接入 Python CI。安装客体现在核对原生 MP3 在真实转写前后哈希一致；实际窗口验收不再依赖旧标题，也不再断言缺模型应禁止录音。真实设备可靠性与干净 CPU 模型安装仍以各自报告为准。
+
 2026-10-19 私有候选补充：新增 `ValidateLongTimeline.py` 的显式长音频离线压力检查，以及 `EvaluateSpeakers.py` / `test_speaker_evaluation.py` 的人工核验与开发集/留出集评分。前者不证明真实设备长录，后者不接受竞品输出替代人工标注。安装前置条件回归补齐缺失 pip 的离线恢复、已有损坏 pip 不覆盖，以及干净客体入口拒绝物理宿主。执行状态和未测门槛见 [私有测试版验收](private-beta-acceptance.md)。
 
 ## 已有覆盖

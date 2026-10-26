@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 import re
 import sys
@@ -15,6 +16,9 @@ status = json.loads((session/'status.json').read_text(encoding='utf-8-sig'))
 metadata = json.loads((session/'session.json').read_text(encoding='utf-8-sig'))
 audio = Path(status['published_audio']['path'])
 note = Path(status['note_path'])
+export = json.loads((home/'new-user-export-report.json').read_text(encoding='utf-8-sig'))
+assert metadata['audio_export_version'] == export['audio_export_version'] == 1
+assert hashlib.sha256(audio.read_bytes()).hexdigest() == export['mp3_sha256'], 'ASR must reuse the original native MP3'
 a, rate = sf.read(home/'known-a.wav', dtype='float32')
 b, _ = sf.read(home/'known-b.wav', dtype='float32')
 expected_frames = rate*3 + len(a)+len(b)
@@ -48,7 +52,7 @@ report = {'mode':metadata['transcription_mode'], 'synthetic_seconds':expected_fr
           'mp3':mp3, 'timeline_positions':positions, 'reference_characters':len(ref),
           'character_edits':previous[-1], 'character_error_rate':previous[-1]/len(ref),
           'transcript_rows':len(rows),'uncertain_speaker_rows':text.count('说话人待确认'),
-          'output_pair_present':True,'raw_tracks_compacted':True,
+          'output_pair_present':True,'raw_tracks_compacted':True, 'native_mp3_reused':True,
           'scope':'synthetic audio through real models; no microphone or hardware timeline claim'}
 (home/'new-user-transcription-report.json').write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf-8')
 print(json.dumps(report,indent=2,ensure_ascii=False))

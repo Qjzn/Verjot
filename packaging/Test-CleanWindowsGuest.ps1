@@ -20,13 +20,18 @@ $taskHome = 'C:\verbit-validation'
 if (Test-Path -LiteralPath $taskHome) { throw 'Guest directory already exists; start a new Sandbox for a clean baseline.' }
 [IO.Directory]::CreateDirectory($taskHome) | Out-Null
 $taskResult = [ordered]@{ passed=$false; stage='baseline'; environment=$Environment; machine_model=$taskGuestModel; clean_windows_guest=$true; clean_baseline_verified=$false; audio_recorded=$false; cloud_api_called=$false; clipboard_access=$false }
+function Set-GuestStage([string]$Stage) {
+    $taskResult.stage = $Stage
+    [ordered]@{ stage=$Stage; updated_at=[DateTimeOffset]::Now.ToString('o'); passed=$false } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskReports 'progress.json') -Encoding UTF8
+}
 function Invoke-GuestChecked([string]$File, [string[]]$Arguments) {
     & $File @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Guest stage $($taskResult.stage) failed: $LASTEXITCODE" }
 }
 function Get-SignedInstaller([string]$Uri,[string]$Name,[string]$Publisher) {
     $taskDownload = Join-Path $taskHome $Name
-    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $taskDownload
+    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $taskDownload -TimeoutSec 300
     $taskSignature = Get-AuthenticodeSignature -LiteralPath $taskDownload
     if ($taskSignature.Status -ne 'Valid' -or $taskSignature.SignerCertificate.Subject -notmatch $Publisher) { throw "Invalid installer signature: $Name" }
     $taskResult[$Name] = @{ sha256=(Get-FileHash -LiteralPath $taskDownload).Hash; publisher=$taskSignature.SignerCertificate.Subject; uri=$Uri }
@@ -34,6 +39,7 @@ function Get-SignedInstaller([string]$Uri,[string]$Name,[string]$Publisher) {
 }
 Start-Transcript -LiteralPath (Join-Path $taskReports 'guest.log') | Out-Null
 try {
+    Set-GuestStage 'baseline'
     $taskHashes = Get-Content -LiteralPath (Join-Path $taskInput 'SHA256.json') -Raw | ConvertFrom-Json
     foreach ($taskEntry in $taskHashes.PSObject.Properties) {
         if ($taskEntry.Name -ne [IO.Path]::GetFileName($taskEntry.Name) -or
@@ -46,12 +52,12 @@ try {
     $taskResult.clean_baseline_verified = $true
     $taskApp = Join-Path $taskHome 'app'
     $taskNotes = Join-Path $taskHome 'notes'
-    $taskResult.stage = 'desktop-without-python'
+    Set-GuestStage 'desktop-without-python'
     $taskInstall = Start-Process -FilePath (Join-Path $taskInput 'setup.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/TASKS=""',('/DIR="' + $taskApp + '"')) -WindowStyle Hidden -Wait -PassThru
     if ($taskInstall.ExitCode -ne 0) { throw "EXE install failed: $($taskInstall.ExitCode)" }
     Invoke-GuestChecked (Join-Path $taskInput 'TestDesktopRunner.exe') @((Join-Path $taskInput 'TestInstalledJourney.exe'),$taskApp,$taskNotes)
     Copy-Item -LiteralPath (Join-Path $taskApp 'new-user-journey.json') -Destination $taskReports
-    $taskResult.stage = 'python-and-native-runtime'
+    Set-GuestStage 'python-and-native-runtime'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $taskPythonInstaller = Get-SignedInstaller 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe' 'python-installer.exe' 'Python Software Foundation'
     $taskPythonFolder = Join-Path $taskHome 'Python312'
@@ -61,16 +67,17 @@ try {
     $taskVcInstall = Start-Process -FilePath $taskVcInstaller -ArgumentList @('/install','/quiet','/norestart') -WindowStyle Hidden -Wait -PassThru
     if ($taskVcInstall.ExitCode -eq 3010) { throw 'VC++ requires a guest restart. This run is incomplete; restart guest and follow the manual clean-VM checklist.' }
     if ($taskVcInstall.ExitCode -notin @(0,1638)) { throw "VC++ install failed: $($taskVcInstall.ExitCode)" }
-    $taskResult.stage = 'fresh-local-runtime-and-model-download'
+    Set-GuestStage 'fresh-local-runtime-and-model-download'
     $env:PIP_NO_CACHE_DIR = '1'
     $env:HF_HOME = Join-Path $taskHome 'hf-cache'
     $env:PYTHONIOENCODING = 'utf-8'
     Invoke-GuestChecked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $taskApp 'Install.ps1'),'-PythonExe',(Join-Path $taskPythonFolder 'python.exe'),'-Mode','local','-Backend','cpu','-SkipDeviceCheck')
     Copy-Item -LiteralPath (Join-Path $taskApp 'installation\doctor.json') -Destination $taskReports
     foreach ($taskSample in @('known-a.wav','known-b.wav')) { Copy-Item -LiteralPath (Join-Path $taskInput $taskSample) -Destination $taskApp }
-    $taskResult.stage = 'actual-offline-chinese-transcription'
+    Set-GuestStage 'actual-offline-chinese-transcription'
     $taskVenvPython = Join-Path $taskApp '.venv\Scripts\python.exe'
     Invoke-GuestChecked $taskVenvPython @('-B',(Join-Path $taskInput 'PrepareOfflineInstall.py'),$taskApp)
+    Copy-Item -LiteralPath (Join-Path $taskApp 'new-user-export-report.json') -Destination $taskReports
     $taskSession = Get-Content -LiteralPath (Join-Path $taskApp 'validation-session.txt') -Raw -Encoding UTF8
     $taskClock = [Diagnostics.Stopwatch]::StartNew()
     Invoke-GuestChecked $taskVenvPython @('-B',(Join-Path $taskApp 'meeting_worker.py'),'--session',$taskSession)
@@ -78,12 +85,19 @@ try {
     Copy-Item -LiteralPath (Join-Path $taskApp 'new-user-transcription-report.json') -Destination $taskReports
     $taskResult.elapsed_transcription_seconds = $taskClock.Elapsed.TotalSeconds
     $taskResult.passed = $true
-    $taskResult.stage = 'completed'
+    Set-GuestStage 'completed'
     $taskResult.scope = 'Clean Sandbox desktop and synthetic local transcription; no live devices, listening or real IME claim.'
 } catch {
     $taskResult.error = $_.Exception.Message
     Write-Host $_.Exception.Message
 } finally {
+    # Preserve the actual GUI assertion even when it fails before a stage copy.
+    foreach ($taskDiagnostic in @('new-user-journey.json','new-user-export-report.json','new-user-transcription-report.json')) {
+        $taskDiagnosticPath = Join-Path (Join-Path $taskHome 'app') $taskDiagnostic
+        if (Test-Path -LiteralPath $taskDiagnosticPath -PathType Leaf) {
+            Copy-Item -LiteralPath $taskDiagnosticPath -Destination $taskReports
+        }
+    }
     $taskResult | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $taskReports 'result.json') -Encoding UTF8
     Stop-Transcript | Out-Null
 }

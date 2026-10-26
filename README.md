@@ -217,3 +217,5 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
 显示名称统一为小写 **verbit**；保留 `ObsidianMeeting.exe`、`tingji.py`、`TINGJI_API_KEY`、`pianyan://` 和既有状态格式以兼容原安装。英文名与现有同领域产品重名，当前仍为用户指定的项目名，公开发布前需另行确认名称，不以本项目的 MIT 许可说明名称可自由商用。
 
 产品边界与后续小功能候选见 [产品范围](documentation/product-scope.md)。
+
+维护者的本轮通过、失败与未测项见[录音先导出候选验收](documentation/recording-export-acceptance.md)；[集中设备复验](documentation/device-revalidation.md)只在参与者确认后运行，不进入日常安装流程。

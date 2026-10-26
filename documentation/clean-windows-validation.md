@@ -26,9 +26,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-Clea
 2. 安装真实 EXE，在没有 Python/模型时运行实际进程的首次设置、取消重开、目录错误修正、速记中文/英文自动保存与重启检查。测试窗口处于独立桌面，不读取系统剪贴板或注入全局按键。
 3. 从 Python 官方下载 3.12.10 x64、从 Microsoft 下载 VC++ x64，验证签名并记录 SHA256。仅在一次性客体安装，不修改宿主；需要重启或安装失败则本轮不能通过。
 4. 在实际安装目录运行 `Install.ps1 -Mode local -Backend cpu -PythonExe <客体解释器> -SkipDeviceCheck`，从官方源新下载依赖和模型，禁用 pip 缓存。`-SkipDeviceCheck` 只针对无声卡的测试客体；报告必须保留 `devices_checked: false`，不代表能真实采集。
-5. 两路合成音分成 8 个无损段，调用真实本地模型与完整 worker；验证唯一 MP3 和 Markdown、192 kbps、完整帧数、两路位置误差 ≤1 ms、固定中文样本字错率 ≤8%，以及成功后临时音轨清理。
+5. 两路合成音保存无损段，显式标记新版导出流程，先由已安装的原生程序生成 MP3，再调用真实本地模型与完整 worker；验证唯一 MP3 和 Markdown、192 kbps、完整帧数、转写前后 MP3 哈希一致、两路位置误差 ≤1 ms、固定中文样本字错率 ≤8%，以及成功后临时音轨清理。段数根据样本时长计算，不以固定段数替代帧检查。
 
-主机专用 `reports/` 中需要同时有 `result.json` 的 `passed: true`、28 项实际窗口断言、doctor 和转写报告。只生成 .wsb、静态检查、空 venv、缺失报告或中途失败都不是干净 Windows 通过。保留客体直至检查证据；关掉沙箱会删除其 Python、模型和音频。
+主机专用 `reports/` 中需要同时有 `result.json` 的 `passed: true`、实际窗口断言报告、原生导出报告、doctor 和转写报告。断言数量随真实验收步骤记录，不沿用旧版固定数字；当前窗口测试不启动硬件采集，不能验证“没有模型时真实声卡能录音”。只生成 .wsb、静态检查、空 venv、缺失报告或中途失败都不是干净 Windows 通过。保留客体直至检查证据；关掉沙箱会删除其 Python、模型和音频。
 
 仍需在 Windows 10 和 Windows 11 的实际目标机器分别完成真实中文输入法、图片粘贴、快捷键、麦克风/电脑声、设备切换和回听。沙箱中的目标窗口消息和合成音，不能证明这些设备体验。
 

@@ -28,6 +28,8 @@
 !/documentation/configuration.md
 !/documentation/product-scope.md
 !/documentation/quality.md
+!/documentation/device-revalidation.md
+!/documentation/recording-export-acceptance.md
 !/documentation/local-model-evaluation.md
 !/documentation/private-beta-acceptance.md
 !/documentation/risk-review.md
@@ -137,6 +139,11 @@
 !/tests/
 /tests/*
 !/tests/TestCaptureReliability.cs
+!/tests/DeviceRevalidation.cs
+!/tests/TestDeviceRevalidation.cs
+!/tests/Prepare-DeviceRevalidation.ps1
+!/tests/AnalyzeDeviceRevalidation.py
+!/tests/test_device_revalidation.py
 !/tests/TestCompletionFeedback.cs
 !/tests/TestDesktopRunner.cs
 !/tests/TestJsonReadSharing.cs
