@@ -2116,6 +2116,7 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
     bool pauseRegistered;
     bool bookmarkRegistered;
     bool quickNoteRegistered;
+    bool captureSuspended, captureQuickRequired;
     string quickNoteWarning = "";
     string auxiliaryWarning = "";
     public bool PauseRegistered { get { return pauseRegistered; } }
@@ -2170,6 +2171,18 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
         if (quickNoteRegistered) UnregisterHotKey(Handle, QuickNoteId);
         if (startRegistered) UnregisterHotKey(Handle, Id);
         quickNoteRegistered = startRegistered = false;
+    }
+    internal void SetCaptureMode(bool enabled) {
+        if (captureSuspended == enabled) return;
+        if (enabled) {
+            if (pauseRegistered || bookmarkRegistered) throw new InvalidOperationException("请结束录音后再录入快捷键。");
+            captureQuickRequired = quickNoteRegistered; ReleaseBindings(); captureSuspended = true;
+        } else {
+            // Rebind the unchanged active configuration, never the unsaved fields.
+            captureSuspended = false;
+            try { BindIdle(startText, pauseText, bookmarkText, quickNoteText, captureQuickRequired, false); }
+            catch (Exception failure) { ReleaseBindings(); throw new InvalidOperationException("原快捷键恢复失败，请更换快捷键并保存，或从托盘退出后重启：" + failure.Message); }
+        }
     }
     void BindIdle(string start, string pause, string bookmark, string quick, bool requireQuick, bool probe) {
         string warning;
@@ -2234,6 +2247,7 @@ internal sealed class MeetingHotkey : NativeWindow, IDisposable {
         auxiliaryWarning = string.Join("；", warnings);
     }
     protected override void WndProc(ref Message message) {
+        if (message.Msg == 0x0312 && captureSuspended) return;
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == Id && Pressed != null) Pressed();
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == PauseId && PausePressed != null) PausePressed();
         if (message.Msg == 0x0312 && message.WParam.ToInt32() == BookmarkId && BookmarkPressed != null) BookmarkPressed();
@@ -2397,7 +2411,11 @@ internal sealed class MeetingContext : ApplicationContext {
         try {
             var snapshot = MeetingSettingsSnapshot.Open(Path.Combine(MeetingFiles.Home, "config.json"));
             settingsDialog = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { return ApplySettings(snapshot, next); });
-            settingsDialog.FormClosed += delegate { settingsDialog = null; };
+            settingsDialog.HotkeyCaptureChanged += delegate(bool capturing) {
+                if (capturing && (recording != null || jobs.Count > 0)) throw new InvalidOperationException("请结束录音并等待转写完成后，再录入快捷键。");
+                hotkey.SetCaptureMode(capturing);
+            };
+            settingsDialog.FormClosed += delegate { settingsDialog = null; try { hotkey.SetCaptureMode(false); } catch (Exception failure) { Notice("快捷键恢复失败", failure.Message + " 请从托盘退出后重新启动。", ToolTipIcon.Warning); } };
             if (about) settingsDialog.ShowAbout();
             settingsDialog.Show();
         } catch (Exception error) { Notice("无法打开设置", error.Message, ToolTipIcon.Warning); }

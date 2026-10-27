@@ -180,6 +180,62 @@ internal sealed class SettingsTabControl : TabControl {
     }
 }
 
+// A native edit retains accessibility and DPI behavior, but records keys rather
+// than accepting text, paste or IME input. No keyboard hook or clipboard access.
+internal sealed class HotkeyInput : TextBox {
+    public event Action<bool> CaptureChanged;
+    public event Action Recorded;
+    public event Action<string> CaptureError;
+    public bool Capturing { get; private set; }
+    string previous, candidate;
+    Keys candidateKey;
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern short GetKeyState(int key);
+    public HotkeyInput() { ReadOnly = true; ShortcutsEnabled = false; Cursor = Cursors.Hand; ImeMode = ImeMode.Disable; }
+    internal void BeginCapture() {
+        if (Capturing) return;
+        try { if (CaptureChanged != null) CaptureChanged(true); }
+        catch (Exception failure) { if (CaptureError != null) CaptureError(failure.Message); return; }
+        previous = Text; candidate = null; Capturing = true;
+        Text = "请按快捷键…"; BackColor = Color.FromArgb(238, 245, 253); SelectAll();
+    }
+    internal void FinishCapture(bool accept) {
+        if (!Capturing) return;
+        Text = accept && candidate != null ? candidate : previous;
+        Capturing = false; candidate = null; BackColor = Color.FromArgb(252, 253, 255); SelectionLength = 0;
+        try { if (CaptureChanged != null) CaptureChanged(false); }
+        catch (Exception failure) { if (CaptureError != null) CaptureError(failure.Message); }
+        finally { if (Recorded != null) Recorded(); }
+    }
+    internal bool CaptureKey(Keys keys, bool windows = false) {
+        if (!Capturing) return false;
+        Keys key = keys & Keys.KeyCode;
+        if (key == Keys.Escape || key == Keys.Tab) { FinishCapture(false); return key != Keys.Tab; }
+        bool allowed = key >= Keys.A && key <= Keys.Z || key >= Keys.F1 && key <= Keys.F24 || key == Keys.Space;
+        if (!allowed || (keys & Keys.Modifiers) == Keys.None && !windows || keys == (Keys.Alt | Keys.F4)) return true;
+        string value = ((keys & Keys.Control) != 0 ? "Ctrl+" : "") + ((keys & Keys.Alt) != 0 ? "Alt+" : "") +
+            ((keys & Keys.Shift) != 0 ? "Shift+" : "") + (windows ? "Win+" : "") + (key == Keys.Space ? "Space" : key.ToString());
+        uint modifiers, code; MeetingConfig.ParseHotkey(value, out modifiers, out code);
+        candidate = value; candidateKey = key; Text = value; SelectAll(); return true;
+    }
+    protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button == MouseButtons.Left) BeginCapture(); }
+    protected override bool ProcessCmdKey(ref Message message, Keys keys) {
+        if (!Capturing && (keys == Keys.Enter || keys == Keys.Space)) { BeginCapture(); return true; }
+        if (CaptureKey(keys, GetKeyState(0x5b) < 0 || GetKeyState(0x5c) < 0)) return true;
+        return base.ProcessCmdKey(ref message, keys);
+    }
+    protected override void OnKeyDown(KeyEventArgs e) {
+        if (CaptureKey(e.KeyData, GetKeyState(0x5b) < 0 || GetKeyState(0x5c) < 0)) e.Handled = true;
+        else base.OnKeyDown(e);
+    }
+    protected override void OnKeyPress(KeyPressEventArgs e) { e.Handled = true; }
+    protected override void OnKeyUp(KeyEventArgs e) {
+        if (Capturing && candidate != null && e.KeyCode == candidateKey) { FinishCapture(true); e.Handled = true; }
+        base.OnKeyUp(e);
+    }
+    protected override void OnLostFocus(EventArgs e) { FinishCapture(false); base.OnLostFocus(e); }
+    protected override void Dispose(bool disposing) { if (disposing) FinishCapture(false); base.Dispose(disposing); }
+}
+
 internal sealed class MeetingSettingsDialog : Form {
     readonly MeetingSettingsSnapshot snapshot;
     readonly Func<Dictionary<string, object>, string> apply;
@@ -191,9 +247,8 @@ internal sealed class MeetingSettingsDialog : Form {
     readonly Button save = new Button { Text = "保存", AutoSize = true, MinimumSize = new Size(76, 28) };
     Font dpiFont;
     Image githubImage;
-    Image brandImage;
-    PictureBox brandMark;
-    readonly List<Font> displayFonts = new List<Font>();
+    Label shortcutHint;
+    public event Action<bool> HotkeyCaptureChanged;
     readonly System.Windows.Forms.Timer engineTimer = new System.Windows.Forms.Timer { Interval = 1000 };
     Label engineTitle, engineDetail;
     public void ShowAbout() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 2; }
@@ -204,44 +259,44 @@ internal sealed class MeetingSettingsDialog : Form {
         SuspendLayout();
         Text = firstRun ? "verbit · 首次设置" : "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
-        dpiFont = new Font("Microsoft YaHei UI", 13, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
-        ClientSize = new Size(600, 660); Padding = new Padding(20, 12, 20, 16);
+        dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
+        ClientSize = new Size(560, 552); Padding = new Padding(12, 10, 12, 12);
         BackColor = Color.White; ForeColor = Color.FromArgb(34, 46, 63);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.CenterScreen;
-        var tabs = new SettingsTabControl { Name = "settingsTabs", Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed, ItemSize = new Size(170, 38) };
+        var tabs = new SettingsTabControl { Name = "settingsTabs", Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed, ItemSize = new Size(170, 34) };
         tabs.DrawItem += delegate(object sender, DrawItemEventArgs e) {
             bool selected = e.Index == tabs.SelectedIndex;
             using (var background = new SolidBrush(selected ? Color.FromArgb(238, 245, 253) : Color.FromArgb(248, 250, 252))) e.Graphics.FillRectangle(background, e.Bounds);
             TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, selected ? Color.FromArgb(30, 91, 156) : Color.FromArgb(77, 91, 111), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             if (selected) using (var pen = new Pen(Color.FromArgb(40, 104, 168), Math.Max(2, DeviceDpi / 48f))) e.Graphics.DrawLine(pen, e.Bounds.Left + 18, e.Bounds.Bottom - 2, e.Bounds.Right - 18, e.Bounds.Bottom - 2);
         };
-        var general = new TabPage("常规") { Padding = new Padding(18, 16, 18, 12), AutoScroll = true, BackColor = Color.White };
-        var models = new TabPage("转写") { Padding = new Padding(18, 16, 18, 12), AutoScroll = true, BackColor = Color.White };
-        var about = new TabPage("关于与更新") { Padding = new Padding(18, 16, 18, 12), AutoScroll = true, BackColor = Color.White };
+        var general = new TabPage("常规") { Padding = new Padding(12), AutoScroll = true, BackColor = Color.White };
+        var models = new TabPage("转写") { Padding = new Padding(12), AutoScroll = true, BackColor = Color.White };
+        var about = new TabPage("关于与更新") { Padding = new Padding(12), AutoScroll = true, BackColor = Color.White };
         tabs.TabPages.AddRange(new[] { general, models, about });
         var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 14 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-        for (int row = 0; row < 14; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 ? 48 : row == 10 ? 42 : row == 11 || row == 12 ? 34 : row == 13 ? 0 : 36));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
+        for (int row = 0; row < 14; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 || row == 10 ? 36 : row == 11 || row == 12 ? 28 : row == 13 ? 0 : 32));
         var current = snapshot.Values;
         AddField(layout, 0, "保存目录", "vault_root", current);
         var browse = new Button { Text = "选择…", Dock = DockStyle.Fill, Margin = new Padding(4, 1, 0, 4) };
         browse.Click += delegate { Browse(); }; layout.Controls.Add(browse, 2, 0);
         AddField(layout, 1, "会议子文件夹", "meeting_folder", current);
         AddField(layout, 2, "速记子文件夹", "quick_note_folder", current);
-        var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
+        var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 0) };
         layout.Controls.Add(folders, 0, 3); layout.SetColumnSpan(folders, 3);
         AddField(layout, 4, "开始 / 结束", "hotkey", current);
         AddField(layout, 5, "麦克风暂停", "pause_hotkey", current);
         AddField(layout, 6, "标记重点", "bookmark_hotkey", current);
         AddField(layout, 7, "打开速记", "quick_note_hotkey", current);
-        var shortcuts = new Label { Text = "麦克风暂停键再按恢复，电脑声音持续录制。示例：Alt+Space。保存后生效。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
-        layout.Controls.Add(shortcuts, 0, 8); layout.SetColumnSpan(shortcuts, 3);
+        shortcutHint = new Label { Text = "点击快捷键后按组合键，Esc 取消，保存后生效。\n麦克风暂停不影响电脑声音。", Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 0) };
+        layout.Controls.Add(shortcutHint, 0, 8); layout.SetColumnSpan(shortcutHint, 3);
         AddField(layout, 9, "录音保护（秒）", "recording_protection_seconds", current);
-        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 4, 0, 0) };
+        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 0) };
         layout.Controls.Add(protection, 0, 10); layout.SetColumnSpan(protection, 3);
         originalStartup = DesktopServices.StartsWithWindows;
         startup = new CheckBox { Name = "start_with_windows", Text = "登录 Windows 后启动 verbit", Checked = originalStartup, Dock = DockStyle.Fill, AccessibleName = "开机自启" };
@@ -254,25 +309,25 @@ internal sealed class MeetingSettingsDialog : Form {
         actions.Controls.Add(save); actions.Controls.Add(cancel);
         general.Controls.Add(layout);
         BuildModels(models, current); BuildAbout(about);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 76, Padding = new Padding(0, 8, 0, 0), RowCount = 2, ColumnCount = 1 };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(0, 4, 0, 0), RowCount = 2, ColumnCount = 1 };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         footer.Controls.Add(error, 0, 0); footer.Controls.Add(actions, 0, 1);
-        var header = new Panel { Dock = DockStyle.Top, Height = 64 };
-        brandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(2, 9, 30, 30) };
-        var title = new Label { Text = "设置", AutoSize = false, Bounds = new Rectangle(44, 2, 220, 30), Font = DisplayFont(20, FontStyle.Bold), Tag = 20f };
-        var subtitle = new Label { Text = "速记、录音与可选 API 转写", AutoSize = false, Bounds = new Rectangle(45, 34, 400, 22), ForeColor = Color.FromArgb(85, 101, 123) };
-        header.Controls.AddRange(new Control[] { brandMark, title, subtitle });
-        Controls.Add(tabs); Controls.Add(footer); Controls.Add(header); AcceptButton = save; CancelButton = cancel;
+        error.TextChanged += delegate {
+            int height = error.Text.Length == 0 ? 0 : TextRenderer.MeasureText(error.Text, Font, new Size(Math.Max(100, footer.Width), int.MaxValue), TextFormatFlags.WordBreak).Height + 8 * DeviceDpi / 96;
+            footer.RowStyles[0].Height = height; footer.Height = 44 * DeviceDpi / 96 + height;
+        };
+        Controls.Add(tabs); Controls.Add(footer); AcceptButton = save; CancelButton = cancel;
         if (firstRun) {
             save.Text = "保存并启动";
-            subtitle.Text = "先开始速记和录音，第三方转写可以稍后配置";
         }
         StyleControls(this); StyleButton(save, true);
+        Deactivate += delegate { CancelKeyCapture(); };
         engineTimer.Tick += delegate { RefreshEngine(); }; engineTimer.Start();
         ResumeLayout(false);
     }
-    Font DisplayFont(float pixels, FontStyle style) { var font = new Font("Microsoft YaHei UI", pixels, style, GraphicsUnit.Pixel); displayFonts.Add(font); return font; }
+    void CancelKeyCapture() { foreach (var input in inputs.Values) { var recorder = input as HotkeyInput; if (recorder != null) recorder.FinishCapture(false); } }
+    protected override void OnFormClosing(FormClosingEventArgs e) { CancelKeyCapture(); base.OnFormClosing(e); }
     static void StyleButton(Button button, bool primary) {
         // FlatAppearance setters invalidate even when their values are unchanged.
         // Readiness polling must not repaint the page (including under an open popup).
@@ -292,7 +347,7 @@ internal sealed class MeetingSettingsDialog : Form {
     static void StyleControls(Control root) {
         foreach (Control control in root.Controls) {
             var button = control as Button; if (button != null) StyleButton(button, false);
-            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = Color.FromArgb(252, 253, 255); VerbitMenu.AttachTextMenu(field); }
+            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = Color.FromArgb(252, 253, 255); if (!(field is HotkeyInput)) VerbitMenu.AttachTextMenu(field); }
             StyleControls(control);
         }
     }
@@ -307,27 +362,26 @@ internal sealed class MeetingSettingsDialog : Form {
         var container = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
         container.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         autoTranscribe = new CheckBox { Name = "auto_transcribe", Text = "录音 + 转写", AccessibleName = "结束录音后自动转写", Checked = Convert.ToBoolean(current["auto_transcribe"]), Dock = DockStyle.Top, Height = 36 };
-        var modeHint = new Label { Name = "recording_mode_hint", Dock = DockStyle.Top, Height = 58, ForeColor = Color.FromArgb(76, 92, 114) };
+        var modeHint = new Label { Name = "recording_mode_hint", Dock = DockStyle.Top, Height = 44, ForeColor = Color.FromArgb(76, 92, 114) };
         container.Controls.Add(autoTranscribe, 0, 0); container.Controls.Add(modeHint, 0, 1);
         var stack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 7 };
         stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int row = 0; row < 7; row++) stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var local = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0, 0, 0, 12) };
         local.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        engineTitle = new Label { Name = "transcription_readiness", Dock = DockStyle.Top, Height = 32 };
-        engineDetail = new Label { Name = "engine_detail", Dock = DockStyle.Top, Height = 64, ForeColor = Color.FromArgb(76, 92, 114) };
+        engineTitle = new Label { Name = "transcription_readiness", Dock = DockStyle.Top, Height = 28 };
+        engineDetail = new Label { Name = "engine_detail", Dock = DockStyle.Top, Height = 48, ForeColor = Color.FromArgb(76, 92, 114) };
         local.Controls.Add(engineTitle, 0, 0); local.Controls.Add(engineDetail, 0, 1);
         stack.Controls.Add(local, 0, 0);
-        var localInfo = new Label { Text = "已有本地模式仅保留兼容，不推荐或下载模型。\n模型、配置和录音均保留；也可选择第三方 API。", Dock = DockStyle.Top, Height = 48, ForeColor = Color.FromArgb(76, 92, 114) }; stack.Controls.Add(localInfo, 0, 1);
         var disclosure = new Button { Text = "展开高级选项", Name = "transcription_advanced", Dock = DockStyle.Top, Height = 32, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 8, 0, 8) };
         stack.Controls.Add(disclosure, 0, 4);
         var advanced = new TableLayoutPanel { Name = "transcription_advanced_fields", Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Visible = false, Margin = Padding.Empty };
         advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var modeGrid = SettingsGrid(); modeGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        var modeGrid = SettingsGrid(); modeGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         bool keepLocal = (string)current["transcription_mode"] == "local" || LocalEngineState.Read(MeetingFiles.Home).Ready;
         AddChoice(modeGrid, 0, "转写方式", "transcription_mode", current, keepLocal ? new[] { "local", "api" } : new[] { "api" }, keepLocal ? new[] { "已有本地环境（兼容）", "自定义第三方 API" } : new[] { "自定义第三方 API" }); stack.Controls.Add(modeGrid, 0, 2);
         var apiFields = SettingsGrid();
-        for (int row = 0; row < 5; row++) apiFields.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 4 ? 72 : 36));
+        for (int row = 0; row < 5; row++) apiFields.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 4 ? 44 : 32));
         AddField(apiFields, 0, "API 地址", "api_base_url", current); AddField(apiFields, 1, "API 模型 ID", "api_model", current);
         AddField(apiFields, 2, "密钥变量名", "api_key_env", current); AddField(apiFields, 3, "超时（秒）", "api_timeout_seconds", current);
         var secret = new Label { Text = "只支持音频转写接口。密钥通过 Windows 用户环境变量配置，不写入配置文件；提交音频前还会询问。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114), Padding = new Padding(0, 4, 0, 0) };
@@ -352,7 +406,7 @@ internal sealed class MeetingSettingsDialog : Form {
             bool api = Choice("transcription_mode") == "api";
             page.SuspendLayout(); stack.SuspendLayout(); advanced.SuspendLayout();
             try {
-                apiFields.Visible = api; local.Visible = localInfo.Visible = !api;
+                apiFields.Visible = api; local.Visible = !api;
                 choices["asr_denoise"].Enabled = echoFilter.Enabled = !api;
                 echoFilter.Text = api ? "降噪与回声处理由第三方服务负责" : "去除有高置信证据的重复回声（不修改原录音）";
                 foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api;
@@ -374,7 +428,7 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     static TableLayoutPanel SettingsGrid() {
         var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Margin = Padding.Empty };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0)); return grid;
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0)); return grid;
     }
     void RefreshEngine() {
         if (IsDisposed || engineTitle == null || Choice("transcription_mode") != "local") return;
@@ -387,7 +441,7 @@ internal sealed class MeetingSettingsDialog : Form {
     void OpenLink(string url) { try { DesktopServices.Open(url); } catch (Exception failure) { error.Text = "无法打开：" + failure.Message; } }
     void BuildAbout(TabPage page) {
         var stack = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
-        stack.Controls.Add(new Label { Text = "verbit  " + DesktopServices.Version, AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
+        stack.Controls.Add(new Label { Text = "版本 " + DesktopServices.Version, AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
         stack.Controls.Add(new Label { Text = "Windows 速记与本地会议记录\n许可：MIT · 本地模式下音频不上传", AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
         var github = new LinkLabel { Text = "GitHub · Qjzn/verbit", AutoSize = true, AccessibleName = "GitHub 项目地址" };
         using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Verbit.GitHub.png"))
@@ -413,9 +467,35 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     void AddField(TableLayoutPanel layout, int row, string label, string key, Dictionary<string, object> current) {
         layout.Controls.Add(new Label { Text = label, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoSize = false }, 0, row);
-        var input = new TextBox { Name = key, Text = MeetingFiles.Text(current, key, ""), Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4), MaxLength = key == "vault_root" ? 32767 : 260 };
+        var recorder = key == "hotkey" || key.EndsWith("_hotkey") ? new HotkeyInput() : null;
+        TextBox input = recorder == null ? new TextBox() : recorder;
+        input.Name = key; input.Text = MeetingFiles.Text(current, key, ""); input.Dock = DockStyle.Fill;
+        input.Margin = new Padding(0, 2, 0, 4); input.MaxLength = key == "vault_root" ? 32767 : 260;
+        if (recorder != null) {
+            recorder.CaptureChanged += delegate(bool capturing) {
+                if (HotkeyCaptureChanged != null) HotkeyCaptureChanged(capturing);
+                save.Enabled = !capturing;
+                if (shortcutHint != null) shortcutHint.Text = capturing ? "按下组合键，松开后完成；Esc 或点击别处取消。" : "点击快捷键后按组合键，Esc 取消，保存后生效。\n麦克风暂停不影响电脑声音。";
+            };
+            recorder.Recorded += ValidateShortcutChoices;
+            recorder.CaptureError += delegate(string message) { error.Text = message; save.Enabled = true; };
+        }
         input.AccessibleName = label; inputs.Add(key, input); layout.Controls.Add(input, 1, row);
         if (key != "vault_root") layout.SetColumnSpan(input, 2);
+    }
+    void ValidateShortcutChoices() {
+        var used = new Dictionary<string, string>();
+        foreach (string key in new[] { "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey" }) {
+            uint modifiers, code;
+            try { MeetingConfig.ParseHotkey(inputs[key].Text, out modifiers, out code); } catch (InvalidOperationException) { return; }
+            string identity = modifiers + ":" + code;
+            if (used.ContainsKey(identity)) {
+                shortcutHint.Text = inputs[used[identity]].AccessibleName + "与" + inputs[key].AccessibleName + "不能使用同一快捷键。";
+                shortcutHint.ForeColor = Color.FromArgb(171, 37, 37); return;
+            }
+            used.Add(identity, key);
+        }
+        shortcutHint.ForeColor = Color.FromArgb(85, 101, 123);
     }
     void Browse() {
         using (var dialog = new FolderBrowserDialog { Description = MeetingBrand.Name + " · 选择会议与速记的保存目录", ShowNewFolderButton = true }) {
@@ -450,16 +530,8 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     void RestoreDpiFont() {
         var previous = dpiFont;
-        dpiFont = new Font("Microsoft YaHei UI", 13 * DeviceDpi / 96f, FontStyle.Regular, GraphicsUnit.Pixel);
+        dpiFont = new Font("Microsoft YaHei UI", 12 * DeviceDpi / 96f, FontStyle.Regular, GraphicsUnit.Pixel);
         Font = dpiFont; previous.Dispose();
-        ScaleHeadings(this);
-        if (brandMark != null) {
-            int pixels = Math.Max(16, (int)Math.Round(30 * DeviceDpi / 96f));
-            Image next;
-            using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Tingji.Idle.ico"))
-            using (var icon = new Icon(stream, new Size(pixels, pixels))) next = icon.ToBitmap();
-            brandMark.Image = next; if (brandImage != null) brandImage.Dispose(); brandImage = next;
-        }
         PerformLayout();
         FitToWorkArea(Screen.FromControl(this).WorkingArea);
         var tabs = (TabControl)Controls.Find("settingsTabs", true)[0];
@@ -475,16 +547,10 @@ internal sealed class MeetingSettingsDialog : Form {
         Control[] found = Controls.Find("settingsTabs", true);
         if (found.Length == 0) return;
         var tabs = (TabControl)found[0];
-        var size = new Size(Math.Max(1, Math.Min((int)Math.Round(170 * DeviceDpi / 96f), (tabs.ClientSize.Width - 8) / 3)), (int)Math.Round(38 * DeviceDpi / 96f));
+        var size = new Size(Math.Max(1, Math.Min((int)Math.Round(170 * DeviceDpi / 96f), (tabs.ClientSize.Width - 8) / 3)), (int)Math.Round(34 * DeviceDpi / 96f));
         if (tabs.ItemSize != size) tabs.ItemSize = size;
     }
     protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutTabHeaders(); }
-    void ScaleHeadings(Control root) {
-        foreach (Control child in root.Controls) {
-            if (child is Label && child.Tag is float) child.Font = DisplayFont((float)child.Tag * DeviceDpi / 96f, FontStyle.Bold);
-            ScaleHeadings(child);
-        }
-    }
     protected override void OnShown(EventArgs e) { base.OnShown(e); RestoreDpiFont(); }
     protected override void OnDpiChanged(DpiChangedEventArgs e) {
         base.OnDpiChanged(e); RestoreDpiFont();
@@ -494,6 +560,6 @@ internal sealed class MeetingSettingsDialog : Form {
         base.Dispose(disposing);
         if (disposing && dpiFont != null) { dpiFont.Dispose(); dpiFont = null; }
         if (disposing && githubImage != null) { githubImage.Dispose(); githubImage = null; }
-        if (disposing) { engineTimer.Dispose(); foreach (var font in displayFonts) font.Dispose(); if (brandImage != null) brandImage.Dispose(); }
+        if (disposing) engineTimer.Dispose();
     }
 }

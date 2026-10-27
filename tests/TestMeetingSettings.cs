@@ -110,6 +110,14 @@ internal static class TestMeetingSettings {
                 reader.Close();
             }
             var hotkey = (MeetingHotkey)Field(context, "hotkey");
+            Call(context, "OpenSettings", false); Application.DoEvents();
+            var keyDialog = (MeetingSettingsDialog)Field(context, "settingsDialog");
+            var liveKey = (HotkeyInput)Input(keyDialog, "hotkey"); liveKey.Focus(); liveKey.BeginCapture();
+            Check(!hotkey.QuickNoteRegistered && Field(context, "recording") == null, "Real settings capture suspends owned shortcuts without starting audio");
+            using (var released = new ReservedKey((string)config["hotkey"])) Check(true, "The actual settings callback releases the currently assigned combination");
+            liveKey.CaptureKey(Keys.Control | Keys.Alt | Keys.Shift | Keys.F21); Call(liveKey, "OnKeyUp", new KeyEventArgs(Keys.F21));
+            Check(hotkey.QuickNoteRegistered && liveKey.Text == (string)config["hotkey"], "Real key release restores the active configuration before settings is saved");
+            ((Button)keyDialog.CancelButton).PerformClick();
             var previous = new Dictionary<string, object>((Dictionary<string, object>)Field(context, "config"));
             var snapshot = MeetingSettingsSnapshot.Open(path);
             var candidate = snapshot.CreateCandidate(nextRoot, "会议", "便笺", "Ctrl+Alt+Shift+F13", "Ctrl+Alt+Shift+F14", "Ctrl+Alt+Shift+F15", "Ctrl+Alt+Shift+F16");
@@ -368,7 +376,7 @@ internal static class TestMeetingSettings {
                 Check(parent.ClientRectangle.Contains(input.Bounds), "Visible control fits its container at " + dpi + " DPI: " + input.GetType().Name + " " + input.Text + "; " + input.Bounds + " inside " + parent.ClientRectangle);
             if (input is Label && !string.IsNullOrEmpty(input.Text)) {
                 Size needed = TextRenderer.MeasureText(input.Text, input.Font, new Size(input.Width - input.Padding.Horizontal, int.MaxValue), TextFormatFlags.WordBreak);
-                Check(needed.Height + input.Padding.Vertical <= input.Height, "Settings label is not vertically clipped at " + dpi + " DPI: " + input.Text);
+                Check(needed.Height + input.Padding.Vertical <= input.Height, "Settings label is not vertically clipped at " + dpi + " DPI: " + input.Text + "; needed=" + (needed.Height + input.Padding.Vertical) + "; actual=" + input.Height);
             }
             CheckChildren(input, dpi);
         }
@@ -562,6 +570,65 @@ internal static class TestMeetingSettings {
             form.Close();
         }
     }
+    static void ShortcutCapture(string directory, string root) {
+        string path = Path.Combine(directory, "key-capture.json"); Write(path, Config(root));
+        byte[] original = File.ReadAllBytes(path); int applyCount = 0, begin = 0, end = 0;
+        using (var form = new MeetingSettingsDialog(MeetingSettingsSnapshot.Open(path), delegate(Dictionary<string, object> next) { applyCount++; MeetingSettingsSnapshot.Open(path).Commit(next); return null; })) {
+            form.HotkeyCaptureChanged += delegate(bool capture) { if (capture) begin++; else end++; };
+            form.Show(); Application.DoEvents();
+            Check(!form.Controls.OfType<Panel>().Any(p => p.Controls.OfType<PictureBox>().Any()), "Settings has no second logo/header beneath the native title bar");
+            var field = Input(form, "hotkey") as HotkeyInput;
+            Check(field != null && field.ReadOnly && !field.ShortcutsEnabled && field.ContextMenuStrip == null, "Shortcuts record presses instead of text or clipboard operations");
+            field.Focus(); Call(field, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, 8, 8, 0));
+            Check(field.Capturing && !((Button)form.AcceptButton).Enabled, "Save cannot persist an incomplete capture prompt");
+            field.CaptureKey(Keys.Enter); field.CaptureKey(Keys.A);
+            Check(field.Capturing && field.Text == "请按快捷键…" && applyCount == 0, "Enter and bare letters cannot save or become malformed shortcuts");
+            field.CaptureKey(Keys.Control | Keys.Shift | Keys.F18);
+            Check(field.Capturing && field.Text == "Ctrl+Shift+F18", "Modifier combination appears immediately");
+            Call(field, "OnKeyUp", new KeyEventArgs(Keys.F18));
+            Check(!field.Capturing && field.Text == "Ctrl+Shift+F18" && ((Button)form.AcceptButton).Enabled, "Release of the captured key finishes capture");
+            Check(original.SequenceEqual(File.ReadAllBytes(path)), "Recording a shortcut changes no file until Save");
+            field.BeginCapture(); field.CaptureKey(Keys.Alt | Keys.F19); field.CaptureKey(Keys.Escape);
+            Check(!field.Capturing && field.Text == "Ctrl+Shift+F18" && form.Visible, "Escape rolls back capture rather than closing settings");
+            field.BeginCapture(); field.CaptureKey(Keys.Alt | Keys.F19); Input(form, "meeting_folder").Focus(); Application.DoEvents();
+            Check(!field.Capturing && field.Text == "Ctrl+Shift+F18", "Focus loss restores the previous value, without a half-recorded shortcut");
+            field.Focus(); field.BeginCapture(); field.CaptureKey(Keys.Alt | Keys.Space); Call(field, "OnKeyUp", new KeyEventArgs(Keys.Space));
+            Check(((Label)Field(form, "shortcutHint")).Text.Contains("不能使用同一"), "Duplicate identities are explained immediately, without lowering validation");
+            ((Button)form.AcceptButton).PerformClick();
+            Check(form.Visible && applyCount == 0 && original.SequenceEqual(File.ReadAllBytes(path)), "Duplicate shortcuts cannot reach apply or change the file");
+            field.Focus(); field.BeginCapture(); field.CaptureKey(Keys.Control | Keys.Shift | Keys.F18); Call(field, "OnKeyUp", new KeyEventArgs(Keys.F18));
+            ((Button)form.AcceptButton).PerformClick();
+            Check(!form.Visible && applyCount == 1 && (string)MeetingSettingsSnapshot.Open(path).Values["hotkey"] == "Ctrl+Shift+F18", "Captured shortcut persists through the existing validated Save flow");
+            Check(begin == end, "Every capture releases its temporary state");
+        }
+        using (var form = new MeetingSettingsDialog(MeetingSettingsSnapshot.Open(path), delegate { throw new Exception("Closing must not apply"); })) {
+            form.Show(); Application.DoEvents();
+            var field = (HotkeyInput)Input(form, "quick_note_hotkey"); int restored = 0;
+            form.HotkeyCaptureChanged += delegate(bool capturing) { if (!capturing) restored++; };
+            field.Focus(); field.BeginCapture(); form.Close();
+            Check(restored == 1 && !field.Capturing, "Closing mid-capture restores bindings once");
+        }
+        using (var hotkey = new MeetingHotkey("Ctrl+Alt+Shift+F21", "Ctrl+Alt+Shift+F22", "Ctrl+Alt+Shift+F23", "Ctrl+Alt+Shift+F24")) {
+            int invoked = 0; hotkey.Pressed += delegate { invoked++; };
+            hotkey.SetCaptureMode(true);
+            using (var released = new ReservedKey("Ctrl+Alt+Shift+F21")) Check(true, "The currently assigned key is released so it can itself be captured");
+            PostMessage(hotkey.Handle, 0x312, new IntPtr(7411), IntPtr.Zero); Application.DoEvents();
+            Check(invoked == 0, "A queued old WM_HOTKEY cannot start recording during capture");
+            hotkey.SetCaptureMode(false);
+            Check(Reject(delegate { using (var reserved = new ReservedKey("Ctrl+Alt+Shift+F21")) { } }), "Active shortcut is restored after capture, without using unsaved fields");
+            hotkey.EnablePause(true);
+            Check(Reject(delegate { hotkey.SetCaptureMode(true); }) && hotkey.PauseRegistered, "Capturing cannot interrupt recording-time bindings");
+            hotkey.EnablePause(false);
+            hotkey.SetCaptureMode(true);
+            using (var occupied = new ReservedKey("Ctrl+Alt+Shift+F21")) {
+                bool explained = false;
+                try { hotkey.SetCaptureMode(false); } catch (InvalidOperationException failure) { explained = failure.Message.Contains("恢复失败"); }
+                Check(explained && !hotkey.QuickNoteRegistered, "A restore race is actionable and releases partial bindings rather than pretending to succeed");
+            }
+            hotkey.Reconfigure("Ctrl+Alt+Shift+F21", "Ctrl+Alt+Shift+F22", "Ctrl+Alt+Shift+F23", "Ctrl+Alt+Shift+F24");
+            Check(hotkey.QuickNoteRegistered, "An explicit later reconfiguration can recover after the competing program releases the old shortcut");
+        }
+    }
     [STAThread]
     static int Main() {
         try {
@@ -570,7 +637,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
-            RenderingResponsiveness(directory, root);
+            ShortcutCapture(directory, root); RenderingResponsiveness(directory, root);
             RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); ExtendedInterface(directory, root); ApiCredentialRecovery(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
