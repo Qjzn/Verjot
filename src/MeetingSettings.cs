@@ -292,7 +292,7 @@ internal sealed class MeetingSettingsDialog : Form {
     static void StyleControls(Control root) {
         foreach (Control control in root.Controls) {
             var button = control as Button; if (button != null) StyleButton(button, false);
-            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = Color.FromArgb(252, 253, 255); }
+            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = Color.FromArgb(252, 253, 255); VerbitMenu.AttachTextMenu(field); }
             StyleControls(control);
         }
     }

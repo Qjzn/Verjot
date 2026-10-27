@@ -315,6 +315,7 @@ internal sealed class QuickNoteRecentPicker : UserControl {
     internal QuickNoteRecentPicker(string[] names, string selected, Font font, int dpi, Size maximum) {
         files = names; current = selected; Font = font; BackColor = Results.BackColor = Search.BackColor = Color.FromArgb(250, 250, 248);
         Search.HandleCreated += delegate { SendMessage(Search.Handle, 0x1501, new IntPtr(1), "搜索便签名称…"); };
+        VerbitMenu.AttachTextMenu(Search);
         ForeColor = Results.ForeColor = Color.FromArgb(36, 59, 83);
         int unit = Math.Max(1, dpi), pad = 12 * unit / 96, row = 40 * unit / 96;
         Size = new Size(Math.Min(310 * unit / 96, maximum.Width), Math.Min((92 + 40 * Math.Min(6, Math.Max(1, files.Length))) * unit / 96, maximum.Height));
@@ -950,7 +951,7 @@ internal sealed class QuickNoteWindow : Form {
     }
     ContextMenuStrip CreateTransientMenu() {
         SetChromeVisible(true); leaveTimer.Stop();
-        var menu = new ContextMenuStrip(transientMenus) { Font = Font, RenderMode = ToolStripRenderMode.System };
+        var menu = new VerbitMenu(transientMenus);
         menu.Closed += delegate {
             // WinForms still uses the menu handle after Closed returns.
             // The container owns cleanup if the host closes before this runs.
@@ -1637,7 +1638,7 @@ internal sealed class QuickNoteWindow : Form {
     void ShowTabMenu(string file, Point position) {
         CancelPreview();
         var menu = CreateTransientMenu();
-        var remove = new ToolStripMenuItem("删除便签…");
+        var remove = new ToolStripMenuItem("删除便签…") { Name = "deleteNote" };
         remove.Click += delegate { DeleteNote(file); };
         menu.Items.Add(remove); menu.Show(position);
     }

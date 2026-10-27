@@ -138,6 +138,7 @@ internal sealed class MeetingPlaybackWindow : Form {
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, WrapContents = false };
             var go = new Button { Text = "定位", AutoSize = true };
             actions.Controls.Add(toggle); actions.Controls.Add(seek); actions.Controls.Add(go);
+            VerbitMenu.AttachTextMenu(seek);
             Controls.Add(timeline); Controls.Add(position); Controls.Add(actions);
             toggle.Click += delegate {
                 try {
@@ -287,6 +288,7 @@ internal sealed class MeetingNameDialog : Form {
         StartPosition = FormStartPosition.CenterScreen;
         var label = new Label { Text = "会议名称（转录文件名）", Dock = DockStyle.Top, Height = 25 };
         name.Text = current;
+        VerbitMenu.AttachTextMenu(name);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, FlowDirection = FlowDirection.RightToLeft };
         var save = new Button { Text = "保存", DialogResult = DialogResult.OK, AutoSize = true };
         var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, AutoSize = true };

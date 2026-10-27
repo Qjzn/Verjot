@@ -199,4 +199,5 @@
 !/src/DesktopServices.cs
 !/tests/TestDesktopServices.cs
 !/tests/TestNativeApiTranscription.cs
+!/tests/TestVerbitMenus.cs
 !/documentation/changelog.md

@@ -1711,7 +1711,7 @@ internal sealed class RecorderPanel : Form {
             link.LinkBehavior = LinkBehavior.HoverUnderline;
             link.LinkColor = Color.FromArgb(42, 94, 150);
             link.ActiveLinkColor = Color.FromArgb(25, 63, 110);
-            var copyMenu = new ContextMenuStrip();
+            var copyMenu = new VerbitMenu();
             LinkLabel captured = link;
             copyMenu.Items.Add("复制完整路径", null, delegate {
                 string path = captured.Tag as string;
@@ -2314,7 +2314,7 @@ internal sealed class MeetingContext : ApplicationContext {
         hotkey.QuickNotePressed += ToggleQuickNote;
         hotkey.ExitRequested += RequestExit;
         hotkey.ShowRequested += ShowPanel;
-        var menu = new ContextMenuStrip { Font = new Font("Microsoft YaHei UI", 9), RenderMode = ToolStripRenderMode.System };
+        var menu = new VerbitMenu();
         panel.ContextMenuStrip = menu;
         menu.Items.Add(summary);
         menu.Items.Add(new ToolStripSeparator());
@@ -3089,7 +3089,10 @@ internal sealed class MeetingContext : ApplicationContext {
         preparationPrompts.Clear(); resumeAfterPreparation.Clear();
         timer.Stop(); timer.Dispose();
         hotkey.Dispose();
+        var sharedMenu = tray.ContextMenuStrip;
+        tray.ContextMenuStrip = null; panel.ContextMenuStrip = null;
         tray.Visible = false; tray.Dispose();
+        if (sharedMenu != null) sharedMenu.Dispose();
         panel.AllowClose = true; panel.Close(); panel.Dispose();
         dispatch.Dispose();
         foreach (var job in jobs) job.Process.Dispose();

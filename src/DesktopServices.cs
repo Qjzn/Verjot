@@ -7,6 +7,177 @@ using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Windows.Forms;
+
+// One renderer for app-owned menus. Native menu navigation, focus and dismissal
+// stay with WinForms; no animation timer or editor repaint is involved.
+internal sealed class VerbitMenu : ContextMenuStrip {
+    Font menuFont;
+    int menuDpi;
+    public VerbitMenu() { ApplyStyle(96); }
+    public VerbitMenu(System.ComponentModel.IContainer owner) : base(owner) { ApplyStyle(96); }
+    [StructLayout(LayoutKind.Sequential)] struct PointValue { public int X, Y; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(PointValue point, uint flags);
+    [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
+    protected override void OnOpening(System.ComponentModel.CancelEventArgs e) {
+        base.OnOpening(e); // Callers populate dynamic recent-meeting items here.
+        int dpi = SourceControl == null ? 96 : SourceControl.DeviceDpi;
+        if (SourceControl == null) try {
+            Point point = Cursor.Position; uint x, y;
+            if (GetDpiForMonitor(MonitorFromPoint(new PointValue { X = point.X, Y = point.Y }, 2), 0, out x, out y) == 0) dpi = (int)x;
+        } catch (DllNotFoundException) { } catch (EntryPointNotFoundException) { }
+        ApplyStyle(dpi);
+    }
+    internal void ApplyStyle(int dpi) {
+        dpi = Math.Max(96, Math.Min(480, dpi));
+        Font previous = null;
+        if (menuFont == null || menuDpi != dpi) {
+            previous = menuFont; menuDpi = dpi;
+            menuFont = new Font("Microsoft YaHei UI", 13f * dpi / 96f, FontStyle.Regular, GraphicsUnit.Pixel);
+        }
+        StyleDropDown(this);
+        if (previous != null) previous.Dispose();
+    }
+    void StyleDropDown(ToolStripDropDown menu) {
+        bool first = !(menu.Renderer is VerbitMenuRenderer);
+        menu.Renderer = VerbitMenuRenderer.Shared; menu.Font = menuFont;
+        menu.BackColor = VerbitMenuRenderer.Surface; menu.ForeColor = VerbitMenuRenderer.Ink;
+        int pad = Math.Max(1, 4 * menuDpi / 96);
+        // A hosted search/list popup owns its inner layout and must not be resized.
+        bool hosted = menu.Items.Count == 1 && menu.Items[0] is ToolStripControlHost;
+        if (!hosted) {
+            menu.Padding = new Padding(pad);
+            int width = 184 * menuDpi / 96;
+            foreach (ToolStripItem item in menu.Items) if (item is ToolStripMenuItem) {
+                var command = (ToolStripMenuItem)item;
+                string keys = command.ShortcutKeyDisplayString ?? "";
+                width = Math.Max(width, TextRenderer.MeasureText(item.Text + keys, menuFont).Width + (keys.Length == 0 ? 62 : 82) * menuDpi / 96);
+            }
+            int available = Screen.FromPoint(Cursor.Position).WorkingArea.Width - pad * 2;
+            width = Math.Max(80, Math.Min(width, Math.Min(520 * menuDpi / 96, available)));
+            menu.MaximumSize = new Size(width + pad * 2, 0);
+            foreach (ToolStripItem item in menu.Items) {
+                if (!(item is ToolStripMenuItem) && !(item is ToolStripSeparator)) continue;
+                item.AutoSize = false; item.Margin = Padding.Empty;
+                item.Size = new Size(width, item is ToolStripSeparator ? 9 * menuDpi / 96 : Math.Max(30 * menuDpi / 96, menuFont.Height + 10 * menuDpi / 96));
+            }
+        }
+        if (first && menu != this) menu.Opening += delegate { if (!IsDisposed) StyleDropDown(menu); };
+        foreach (ToolStripItem item in menu.Items) {
+            var parent = item as ToolStripMenuItem;
+            if (parent != null && parent.HasDropDownItems) StyleDropDown(parent.DropDown);
+        }
+        menu.PerformLayout();
+    }
+    internal static void AttachTextMenu(TextBoxBase field) {
+        if (field.ContextMenuStrip != null) return;
+        var menu = new VerbitMenu();
+        var undo = menu.Items.Add("撤销", null, delegate { field.Undo(); });
+        menu.Items.Add(new ToolStripSeparator());
+        var cut = menu.Items.Add("剪切", null, delegate { field.Cut(); });
+        var copy = menu.Items.Add("复制", null, delegate { field.Copy(); });
+        var paste = menu.Items.Add("粘贴", null, delegate { field.Paste(); });
+        var delete = menu.Items.Add("删除", null, delegate { field.SelectedText = ""; });
+        menu.Items.Add(new ToolStripSeparator());
+        var all = menu.Items.Add("全选", null, delegate { field.SelectAll(); });
+        ((ToolStripMenuItem)undo).ShortcutKeyDisplayString = "Ctrl+Z";
+        ((ToolStripMenuItem)cut).ShortcutKeyDisplayString = "Ctrl+X";
+        ((ToolStripMenuItem)copy).ShortcutKeyDisplayString = "Ctrl+C";
+        ((ToolStripMenuItem)paste).ShortcutKeyDisplayString = "Ctrl+V";
+        ((ToolStripMenuItem)all).ShortcutKeyDisplayString = "Ctrl+A";
+        menu.Opening += delegate {
+            bool editable = !field.ReadOnly && field.Enabled;
+            var text = field as TextBox;
+            bool secret = text != null && (text.UseSystemPasswordChar || text.PasswordChar != '\0');
+            undo.Enabled = editable && field.CanUndo;
+            cut.Enabled = editable && !secret && field.SelectionLength > 0;
+            copy.Enabled = !secret && field.SelectionLength > 0;
+            paste.Enabled = editable; // Never inspect the user's clipboard on hover/open.
+            delete.Enabled = editable && field.SelectionLength > 0;
+            all.Enabled = field.TextLength > 0;
+        };
+        field.ContextMenuStrip = menu;
+        field.Disposed += delegate { menu.Dispose(); };
+    }
+    protected override void Dispose(bool disposing) {
+        base.Dispose(disposing);
+        if (disposing && menuFont != null) { menuFont.Dispose(); menuFont = null; }
+    }
+}
+
+internal sealed class VerbitMenuRenderer : ToolStripProfessionalRenderer {
+    internal static readonly VerbitMenuRenderer Shared = new VerbitMenuRenderer();
+    internal static Color Surface { get { return SystemInformation.HighContrast ? SystemColors.Menu : Color.White; } }
+    internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.MenuText : Color.FromArgb(34, 46, 63); } }
+    internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : Color.FromArgb(98, 112, 130); } }
+    internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.MenuText : Color.FromArgb(40, 104, 168); } }
+    internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(238, 245, 253); } }
+    internal static readonly Color Danger = Color.FromArgb(174, 47, 47);
+    VerbitMenuRenderer() { RoundedEdges = false; }
+    static float Scale(ToolStrip strip) { return strip.Font.Height / 18f; }
+    static bool Destructive(ToolStripItem item) { return item.Name == "deleteNote"; }
+    static Color Foreground(ToolStripItem item) {
+        if (!item.Enabled) return Muted;
+        if (SystemInformation.HighContrast && item.Selected) return SystemColors.HighlightText;
+        return Destructive(item) && !SystemInformation.HighContrast ? Danger : Ink;
+    }
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) { e.Graphics.Clear(Surface); }
+    protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+    protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) {
+        using (var pen = new Pen(SystemInformation.HighContrast ? SystemColors.WindowFrame : Color.FromArgb(218, 226, 235)))
+            e.Graphics.DrawRectangle(pen, 0, 0, Math.Max(0, e.ToolStrip.Width - 1), Math.Max(0, e.ToolStrip.Height - 1));
+    }
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
+        if (!e.Item.Enabled || !e.Item.Selected) return;
+        int inset = Math.Max(1, (int)Math.Round(Scale(e.ToolStrip) * 2));
+        Rectangle bounds = new Rectangle(inset, 1, Math.Max(1, e.Item.Width - inset * 2), e.Item.Height - 2);
+        using (var brush = new SolidBrush(Destructive(e.Item) && !SystemInformation.HighContrast ? Color.FromArgb(253, 239, 239) : Hover))
+            e.Graphics.FillRectangle(brush, bounds);
+    }
+    protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e) {
+        int inset = Math.Max(4, (int)Math.Round(10 * Scale(e.ToolStrip)));
+        using (var pen = new Pen(SystemInformation.HighContrast ? SystemColors.GrayText : Color.FromArgb(232, 237, 243)))
+            e.Graphics.DrawLine(pen, inset, e.Item.Height / 2, e.Item.Width - inset, e.Item.Height / 2);
+    }
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
+        Rectangle bounds = Rectangle.Intersect(e.TextRectangle, new Rectangle(0, 0, e.Item.Width - (int)(16 * Scale(e.ToolStrip)), e.Item.Height));
+        string text = e.Text ?? ""; string shortcut = null;
+        int split = text.LastIndexOf(" · ", StringComparison.Ordinal);
+        if (split >= 0 && Regex.IsMatch(text.Substring(split + 3), @"^(?:(?:Ctrl|Alt|Shift)\+)+[A-Za-z0-9]+$")) {
+            shortcut = text.Substring(split + 3); text = text.Substring(0, split);
+        }
+        var flags = TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding;
+        flags |= e.TextFormat & (TextFormatFlags.Right | TextFormatFlags.RightToLeft);
+        if ((e.TextFormat & TextFormatFlags.HidePrefix) != 0) flags |= TextFormatFlags.HidePrefix;
+        if (shortcut != null) {
+            int width = TextRenderer.MeasureText(e.Graphics, shortcut, e.TextFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+            Rectangle key = new Rectangle(Math.Max(bounds.Left, bounds.Right - width), bounds.Top, Math.Min(width, bounds.Width), bounds.Height);
+            TextRenderer.DrawText(e.Graphics, shortcut, e.TextFont, key, SystemInformation.HighContrast && e.Item.Selected ? Foreground(e.Item) : Muted, flags | TextFormatFlags.Right);
+            bounds.Width = Math.Max(0, key.Left - bounds.Left - (int)(20 * Scale(e.ToolStrip)));
+        }
+        TextRenderer.DrawText(e.Graphics, text, e.TextFont, bounds, Foreground(e.Item), flags);
+    }
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e) {
+        float scale = Scale(e.Item.Owner);
+        // WinForms may retain a preferred-width arrow rectangle after a very
+        // long label is constrained. Anchor to the actual visible item instead.
+        float cx = e.Item.Width - 12 * scale, cy = e.Item.Height / 2f;
+        float direction = e.Direction == ArrowDirection.Left ? -1 : 1;
+        var old = e.Graphics.SmoothingMode; e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var pen = new Pen(Foreground(e.Item), Math.Max(1, 1.4f * scale)))
+            e.Graphics.DrawLines(pen, new[] { new PointF(cx - direction * 2 * scale, cy - 3 * scale), new PointF(cx + direction * 1.5f * scale, cy), new PointF(cx - direction * 2 * scale, cy + 3 * scale) });
+        e.Graphics.SmoothingMode = old;
+    }
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) {
+        float scale = Scale(e.ToolStrip), cx = e.ImageRectangle.Left + e.ImageRectangle.Width / 2f, cy = e.Item.Height / 2f;
+        var old = e.Graphics.SmoothingMode; e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var pen = new Pen(SystemInformation.HighContrast ? Foreground(e.Item) : Accent, Math.Max(1, 1.7f * scale)))
+            e.Graphics.DrawLines(pen, new[] { new PointF(cx - 4 * scale, cy), new PointF(cx - 1 * scale, cy + 3 * scale), new PointF(cx + 5 * scale, cy - 4 * scale) });
+        e.Graphics.SmoothingMode = old;
+    }
+}
 
 internal static class DesktopServices {
     internal static System.Drawing.Rectangle FitWindowBounds(System.Drawing.Rectangle bounds, System.Drawing.Rectangle work) {
@@ -51,7 +222,7 @@ internal static class DesktopServices {
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.11-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.12-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {
@@ -110,6 +281,7 @@ internal static class DesktopServices {
             Font = System.Drawing.SystemFonts.MessageBoxFont, MinimizeBox = false, TopMost = true };
         var reader = new System.Windows.Forms.TextBox { Name = "document_text", Text = text, ReadOnly = true, Multiline = true,
             Dock = System.Windows.Forms.DockStyle.Fill, ScrollBars = System.Windows.Forms.ScrollBars.Vertical, WordWrap = true };
+        VerbitMenu.AttachTextMenu(reader);
         window.Controls.Add(reader);
         KeepWindowOnScreen(window);
         return window;
