@@ -5,7 +5,7 @@
   #error OutputDir is required. Run Build-Installer.ps1.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-beta.10"
+  #define ReleaseVersion "0.1.0-beta.11"
 #endif
 #ifndef NumericVersion
   #define NumericVersion "0.1.0.0"
@@ -52,7 +52,7 @@ UninstallAppFullTitle=卸载 %1
 InformationTitle=信息
 ConfirmTitle=确认
 WelcomeLabel1=欢迎安装 verbit
-WelcomeLabel2=verbit 提供全局快捷键速记和会议记录。%n%n速记可以直接使用。安装时可选择下载推荐的千问中文转写模型和所需环境，也可以稍后从设置下载。模型在本机运行，不上传会议音频。%n%n请先从托盘正常退出正在运行的 verbit，再升级或卸载。
+WelcomeLabel2=verbit 提供全局快捷键速记和会议记录。%n%n速记可以直接使用。录音和速记无需 Python 或模型。转写可在设置中选择自定义第三方 API，提交前会确认音频上传。%n%n请先从托盘正常退出正在运行的 verbit，再升级或卸载。
 ButtonBack=< 返回(&B)
 ButtonNext=下一步(&N) >
 ButtonInstall=安装(&I)
@@ -92,8 +92,8 @@ StatusCreateRegistryEntries=正在注册卸载信息…
 StatusSavingUninstall=正在保存卸载信息…
 StatusRunProgram=正在完成安装…
 FinishedHeadingLabel=verbit 安装完成
-FinishedLabelNoIcons=首次启动后，请设置保存目录和快捷键。模型可选下载；右键“设置…”→“转写”→“下载推荐模型…”可随时准备本地转写。
-FinishedLabel=首次启动后，请设置保存目录和快捷键。模型可选下载；右键“设置…”→“转写”→“下载推荐模型…”可随时准备本地转写。
+FinishedLabelNoIcons=首次启动后，请设置保存目录和快捷键。默认仅录音；可在设置中选配第三方音频转写 API。已有模型和配置保留。
+FinishedLabel=首次启动后，请设置保存目录和快捷键。默认仅录音；可在设置中选配第三方音频转写 API。已有模型和配置保留。
 ConfirmUninstall=是否卸载 %1？%n%n卸载仅移除安装包中的程序文件及快捷方式。个人配置、会议环境、工作资料，以及录音和笔记会保留。
 WizardUninstalling=卸载状态
 UninstallStatusLabel=正在移除程序文件，请稍候。个人配置与录音笔记会保留。
@@ -103,7 +103,6 @@ UninstalledAll=%1 已卸载。个人配置、环境与已经保存的记录会�
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: unchecked
 Name: "startup"; Description: "登录 Windows 后启动 verbit"; Flags: unchecked
-Name: "recommendedmodel"; Description: "下载推荐模型：千问中文转写（含必要环境与说话人组件，数 GB）"; Flags: unchecked
 
 [Files]
 ; Payload is assembled from the reviewed explicit list in Build-Installer.ps1.
@@ -119,7 +118,6 @@ Name: "{autodesktop}\verbit"; Filename: "{app}\ObsidianMeeting.exe"; Parameters:
 Name: "{userstartup}\verbit installed"; Filename: "{app}\ObsidianMeeting.exe"; WorkingDir: "{app}"; Tasks: startup
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\RecommendedModel.ps1"" -Start"; Tasks: recommendedmodel; Flags: nowait runhidden skipifsilent
 Filename: "{app}\ObsidianMeeting.exe"; Description: "启动 verbit 并设置保存目录"; Flags: nowait postinstall skipifsilent
 
 [Code]

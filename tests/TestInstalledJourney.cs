@@ -74,6 +74,7 @@ internal static class TestInstalledJourney {
             Click(dialog, "保存并启动"); Until(delegate { return File.Exists(config) && ControlWindow() != IntPtr.Zero; }, "Real EXE saved config and registered controller");
             var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(config));
             Check((string)values["vault_root"] == notes && (string)values["quick_note_hotkey"] == "Ctrl+Alt+J", "Save location and default shortcut persisted"); steps.Add("first-run-save");
+            Check((string)values["meeting_folder"] == "verbit" && (string)values["transcription_mode"] == "api" && !(bool)values["auto_transcribe"], "Fresh EXE starts record-only, with verbit output and unconfigured optional API");
             PostMessage(ControlWindow(), 0x312, new IntPtr(7414), IntPtr.Zero);
             Until(delegate { return NoteWindow() != IntPtr.Zero; }, "Registered quick-note handler opens actual native note");
             var note = NoteWindow(); Check((GetWindowLong(note, -20) & 8) != 0, "Quick note is topmost");

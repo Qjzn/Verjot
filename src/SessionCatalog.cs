@@ -257,7 +257,8 @@ internal sealed class SessionCatalog {
         } else if (fresh && statusState == "audio_ready" && Text(status, "stage", "") == "recording_only" && File.Exists(record.AudioPath)) {
             record.State = metadataState == "recorded_with_error" ? "recorded_warning" : "recorded";
             record.CanRetry = true;
-            record.Message = record.State == "recorded_warning" ? "MP3 已保存；采集存在异常，请检查录音和恢复资料" : "MP3 已保存 · 仅录音；可手动转写，无损资料暂保留";
+            record.Message = record.State == "recorded_warning" ? "MP3 已保存；采集存在异常，请检查录音和恢复资料" : MeetingArtifacts.HasPublishedAudio(session, metadata) ? "MP3 已保存 · 仅录音；可选择 API 转写" : "MP3 已保存 · 仅录音；可手动转写，无损资料暂保留";
+            if(Text(status,"cleanup_error","").Length!=0)record.Message+="；"+Text(status,"cleanup_error","");
         } else if (fresh && (statusState == "failed" || statusState == "error")) {
             record.State = "failed";
             record.CanRetry = true;
@@ -275,7 +276,7 @@ internal sealed class SessionCatalog {
         }
         if (record.CanRetry) {
             record.NotePath = ArtifactPath(Text(status, "note_path", ""), session, ".md");
-            record.CanRetry = HasOriginalAudio(session, metadata);
+            record.CanRetry = HasOriginalAudio(session, metadata) || MeetingArtifacts.HasPublishedAudio(session, metadata);
             if (!record.CanRetry) record.Message = "未发现可重试的原始录音，请检查保留资料；不会自动重新转写";
         }
         record.Fingerprint = Fingerprint(record, status);

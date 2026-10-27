@@ -360,6 +360,26 @@ class NoteTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 worker.note_location(vault.parent / "outside", config, metadata)
 
+    def test_verbit_layout_preserves_legacy_but_places_new_audio_and_note_together(self):
+        with tempfile.TemporaryDirectory() as folder:
+            vault = Path(folder).resolve()
+            session = vault / "old-test-session"
+            metadata = {"start_time": "2026-10-27T14:30:00+08:00", "storage_mode": "minimal",
+                        "audio_format": "mp3", "output_layout": "verbit-v1",
+                        "output_basename": "verbit202610271430-02", "note_link_style": "markdown"}
+            target = vault / "verbit" / metadata["output_basename"]
+            metadata["audio_output_dir"] = str(target)
+            config = {"vault_root": str(vault), "meeting_folder": "verbit"}
+            audio = worker.audio_output_path(session, vault, metadata, config)
+            self.assertEqual(audio, target / "verbit202610271430-02.mp3")
+            self.assertEqual(worker.note_location(session, config, metadata)[1], target / "verbit202610271430-02.md")
+            self.assertEqual(worker.audio_link(audio, vault, metadata), "[会议录音](verbit202610271430-02.mp3)")
+            metadata["note_filename"] = "会后命名.md"
+            self.assertEqual(worker.note_location(session, config, metadata)[1], target / "会后命名.md")
+            metadata["output_basename"] = "../unsafe"
+            with self.assertRaises(ValueError):
+                worker.audio_output_path(session, vault, metadata, config)
+
     def test_named_note_path_is_local_and_completed_retry_uses_it(self):
         with tempfile.TemporaryDirectory() as folder:
             vault = Path(folder).resolve()

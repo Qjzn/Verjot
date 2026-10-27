@@ -107,7 +107,7 @@ def validate_config(config: dict, *, check_directory: bool = True) -> dict:
     shortcuts = [parse_hotkey(result[key]) for key in ("hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey")]
     if len(set(shortcuts)) != len(shortcuts):
         raise ValueError("开始/结束、暂停、标记重点和速记快捷键必须各不相同")
-    if result["transcription_mode"] == "api":
+    if result["transcription_mode"] == "api" and (result["auto_transcribe"] or result["api_base_url"].strip() or result["api_model"].strip()):
         try:
             url = urlsplit(result["api_base_url"])
             url.port

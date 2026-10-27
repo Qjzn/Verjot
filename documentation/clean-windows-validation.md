@@ -1,5 +1,8 @@
 # 干净 Windows 验证
 
+> beta.11 默认验证包已改为无模型首期：`Prepare-CleanWindows.ps1 -InstallerPath <EXE>`，不需要样本 WAV，沙箱默认 4 GiB、关闭网络与剪贴板映射，仅验证安装、首次设置、速记；录音设备与真实 API 分开验收。下文下载 Python / 本地模型的流程仅供显式 `-LegacyLocalTranscription -SpeechA <WAV> -SpeechB <WAV>` 研究验证，不是首期用户步骤。准备包不代表沙箱已实际运行。
+
+
 目标是 Windows 10/11 x64、.NET Framework 4.8 的新系统：起初没有 Python、模型、Git、Node、Visual Studio 或 .NET SDK。系统自带的 .NET Framework 编译器不属于额外开发环境。速记应在装 Python 前即可使用；本地会议转写需要按说明安装 Python、VC++ 运行库、依赖和模型，不承诺几 MB 安装包独立完成转写。
 
 ## 隔离环境与证据

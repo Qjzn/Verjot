@@ -182,7 +182,8 @@ internal static class MeetingConfig {
             ParseHotkey((string)config[field], out modifiers, out key);
             if (!shortcuts.Add(modifiers + ":" + key)) throw new InvalidOperationException("开始/结束、暂停、标记重点和速记快捷键必须各不相同。");
         }
-        if ((string)config["transcription_mode"] == "api") {
+        if ((string)config["transcription_mode"] == "api" && (requireApiKey || Convert.ToBoolean(config["auto_transcribe"]) ||
+                !string.IsNullOrWhiteSpace((string)config["api_base_url"]) || !string.IsNullOrWhiteSpace((string)config["api_model"]))) {
             Uri uri;
             if (Regex.IsMatch((string)config["api_base_url"], @"\s") ||
                 !Uri.TryCreate((string)config["api_base_url"], UriKind.Absolute, out uri) ||
@@ -224,14 +225,15 @@ internal static class MeetingConfig {
     }
     public static void CheckRecordingRuntime(string home) {
         if (!File.Exists(Path.Combine(home, ".venv", "Scripts", "python.exe")) || !File.Exists(Path.Combine(home, "meeting_worker.py")))
-            throw new IOException("缺少独立 Python 转写环境。请打开「设置 → 转写 → 启用本地转写」准备环境，完成后从「最近会议」重试。原始录音已保留。");
+            throw new IOException("缺少独立 Python 转写环境。首期不提供本地组件下载；可在设置中配置第三方音频转写 API，或继续使用已有本地环境，完成后从「最近会议」重试。原始录音已保留。");
     }
     public static string LocalRuntimeStatus(string home) {
         try { CheckTranscriptionRuntime(home, new Dictionary<string, object> { { "transcription_mode", "local" } }); }
-        catch (IOException) { return "本地转写环境未就绪，请点击「下载推荐模型…」。仅选择本地不会下载；不影响录音和速记。"; }
+        catch (IOException) { return "本地转写环境未就绪，首期不提供模型下载；可配置第三方音频转写 API；不影响录音和速记。"; }
         return "本地模型文件已就绪（Qwen3-ASR-1.7B）。实际转写时检查依赖与模型加载；音频留在本机。";
     }
     public static void CheckTranscriptionRuntime(string home, Dictionary<string, object> settings) {
+        if (MeetingFiles.Text(settings, "transcription_mode", "local") == "api") return;
         CheckRecordingRuntime(home);
         string models = Path.Combine(home, "models");
         bool segmentation = false;
@@ -239,7 +241,7 @@ internal static class MeetingConfig {
             Path.Combine(models, "sherpa-onnx-pyannote-segmentation-3-0", "model.onnx"),
             Path.Combine(models, "sherpa-onnx-pyannote-segmentation-3-0", "model.int8.onnx") })
             if (File.Exists(file) && new FileInfo(file).Length > 0) segmentation = true;
-        if (!segmentation) throw new IOException("缺少本地说话人分段模型。请在「设置 → 转写 → 启用本地转写」准备，完成后重试；原始录音已保留。");
+        if (!segmentation) throw new IOException("缺少本地说话人分段模型。请检查已有本地环境，或在设置中配置第三方音频转写 API，完成后重试；原始录音已保留。");
         var required = new List<string> {
             Path.Combine(models, "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
         };
@@ -248,7 +250,7 @@ internal static class MeetingConfig {
             foreach (string file in new[] { "config.json", "model.safetensors", "processor_config.json", "tokenizer_config.json", "tokenizer.json" }) required.Add(Path.Combine(qwen, file));
         }
         foreach (string file in required) if (!File.Exists(file) || new FileInfo(file).Length == 0)
-            throw new IOException("本地转写模型尚未准备完整，请打开「设置 → 转写 → 启用本地转写」；完成后从「最近会议」重试。原始录音已保留。缺少：" + Path.GetFileName(file));
+            throw new IOException("本地转写模型尚未准备完整，请检查已有本地环境，或在设置中配置第三方音频转写 API；完成后从「最近会议」重试。原始录音已保留。缺少：" + Path.GetFileName(file));
     }
 }
 
@@ -1026,9 +1028,11 @@ internal sealed class RecordingSession : IDisposable {
         if (Directory.Exists(DirectoryPath) || Directory.Exists(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))))
             DirectoryPath += "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
         Directory.CreateDirectory(DirectoryPath); MeetingConfig.CheckOrdinaryPath(DirectoryPath);
+        string outputName = MeetingArtifacts.AvailableName(config, started);
         metadata = new Dictionary<string, object> {
+            { "output_basename", outputName }, { "output_layout", "verbit-v1" },
             { "schema_version", 2 }, { "start_time", started.ToString("o") }, { "state", "recording" },
-            { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))) },
+            { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"), outputName)) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
             { "transcription_deferred", true }, { "audio_export_version", 1 },
             { "auto_transcribe", config["auto_transcribe"] },
@@ -2401,13 +2405,12 @@ internal sealed class MeetingContext : ApplicationContext {
         if (preparationPrompts.TryGetValue(session, out existing) && !existing.IsDisposed) { existing.Activate(); return; }
         var prompt = new LocalPreparationPrompt(delegate {
             if (recording != null || jobs.Exists(delegate(TranscriptionJob job) { return !job.Reported; })) {
-                Notice("录音已保留", "请在录音和后台处理结束后，从最近会议选择“启用并转写这场”。", ToolTipIcon.Info); return false;
+                Notice("录音已保留", "请在录音和后台处理结束后，从最近会议选择“配置转写…”。", ToolTipIcon.Info); return false;
             }
             if ((string)config["transcription_mode"] != "local") return false;
             OpenSettings();
             if (settingsDialog == null || settingsDialog.IsDisposed) return false;
-            resumeAfterPreparation.Add(session);
-            settingsDialog.ShowTranscription(); settingsDialog.BeginPreparation(); return true;
+            settingsDialog.ShowTranscription(); return true;
         });
         preparationPrompts[session] = prompt;
         prompt.FormClosed += delegate { preparationPrompts.Remove(session); if (!prompt.PreparationAccepted) resumeAfterPreparation.Remove(session); };
@@ -2699,7 +2702,7 @@ internal sealed class MeetingContext : ApplicationContext {
             if (record == null || !record.CanRetry || ActiveJob(session)) return;
             var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
             bool transcribe = !automatic || MeetingFiles.Text(metadata, "auto_transcribe", MeetingFiles.Text(config, "auto_transcribe", "False")).Equals("True", StringComparison.OrdinalIgnoreCase);
-            if (MeetingFiles.Text(metadata, "audio_export_version", "") == "1" && !File.Exists(Path.Combine(session, "result.json"))) {
+            if (MeetingFiles.Text(metadata, "audio_export_version", "") == "1" && !File.Exists(Path.Combine(session, "result.json")) && !MeetingArtifacts.HasPublishedAudio(session, metadata)) {
                 LaunchAudioExport(session, transcribe); return;
             }
             if (!transcribe) { KeepRecordingOnly(session); return; }
@@ -2732,6 +2735,10 @@ internal sealed class MeetingContext : ApplicationContext {
         status["message"] = "MP3 已保存 · 仅录音；可从最近会议手动转写，无损资料暂保留";
         status["updated_at"] = DateTimeOffset.Now.ToString("o"); status.Remove("error");
         MeetingFiles.WriteJson(Path.Combine(session, "status.json"), status);
+        var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+        if (MeetingArtifacts.IsNew(metadata) && MeetingFiles.Text(metadata, "transcription_mode", "") == "api")
+            status["message"] = "MP3 已保存 · 仅录音；可从最近会议选择 API 转写";
+        MeetingFiles.WriteJson(Path.Combine(session, "status.json"), status);
         catalog.SaveWorker(session, null);
         var record = catalog.Get(session);
         if (recording == null) { focusedSession = session; focusedRecord = record; }
@@ -2757,7 +2764,7 @@ internal sealed class MeetingContext : ApplicationContext {
             if (MeetingFiles.Text(metadata, "transcription_deferred", "").Equals("True", StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(session, "result.json"))) {
                 bool api = (string)config["transcription_mode"] == "api";
                 if (api && MessageBox.Show("这场录音将发送到：" + config["api_base_url"] + "\n模型：" + config["api_model"] + "\n是否允许这次云端转写？取消后录音保留在本机。", MeetingBrand.Name,
-                    MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) throw new IOException("已取消云端提交，录音留在本机。可在设置中选择本地模式后重试。");
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) throw new IOException("已取消 API 提交，录音留在本机。可继续仅录音。");
                 MeetingFiles.WriteJson(Path.Combine(session, "transcription-settings.json"), new {
                     transcription_mode = config["transcription_mode"],
                     transcription_model = api ? config["api_model"] : "Qwen3-ASR-1.7B",
@@ -2773,6 +2780,12 @@ internal sealed class MeetingContext : ApplicationContext {
             DateTime attemptStarted = DateTime.UtcNow;
             Process process;
             if (workerLauncher != null) process = workerLauncher(session);
+            else if ((string)config["transcription_mode"] == "api" && MeetingArtifacts.IsNew(metadata)) {
+                var start = new ProcessStartInfo { FileName = Application.ExecutablePath, Arguments = "--transcribe-api " + Quote(session),
+                    WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true };
+                start.EnvironmentVariables[(string)config["api_key_env"]] = MeetingConfig.ApiKeyValue((string)config["api_key_env"]);
+                process = Process.Start(start);
+            }
             else {
                 string python = Path.Combine(MeetingFiles.Home, ".venv", "Scripts", "python.exe");
                 string worker = Path.Combine(MeetingFiles.Home, "meeting_worker.py");
@@ -2804,7 +2817,7 @@ internal sealed class MeetingContext : ApplicationContext {
             SaveLastSessionWithAttempt(session, process, attemptStarted, previousStatus);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
             RefreshFeedback();
-            Notice("录音已保存 · " + record.Label, ((string)config["transcription_mode"] == "api" ? "讲话片段将提交配置的 API。" : "后台本地转写中。") + "托盘 → 最近会议可查看这场进度。", ToolTipIcon.Info);
+            Notice("录音已保存 · " + record.Label, ((string)config["transcription_mode"] == "api" ? "录音将提交已确认的音频转写 API。" : "后台本地转写中。") + "托盘 → 最近会议可查看这场进度。", ToolTipIcon.Info);
         } catch (Exception error) {
             MeetingFiles.Log(error);
             if (startedProcess != null) {
@@ -2997,7 +3010,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     item.DropDownItems.Add("命名这场会议…", null, delegate { PromptRename(session); });
                 if (!current && record.CanRetry) item.DropDownItems.Add(record.State == "recorded" || record.State == "recorded_warning" ? "转写这场会议…" : "重试这场转写", null, delegate { RetrySession(session); });
                 if (!current && record.CanRetry && (string)config["transcription_mode"] == "local" && record.Message.StartsWith("录音已保存 · 待配置转写"))
-                    item.DropDownItems.Add("启用并转写这场", null, delegate { OfferLocalPreparation(session); });
+                    item.DropDownItems.Add("配置转写…", null, delegate { OfferLocalPreparation(session); });
                 item.DropDownItems.Add("打开成品位置", null, delegate { OpenSessionFolder(session); });
                 if (record.CanRetry || record.State == "capture_warning" || record.State == "missing" || record.Message.Contains("清理未完成"))
                     item.DropDownItems.Add("检查恢复资料…", null, delegate { OpenFolder(session); });
@@ -3293,6 +3306,7 @@ internal static class Program {
     static int Main(string[] args) {
         try {
             if (args.Length == 2 && args[0] == "--export-audio") return NativeAudioExport.Run(args[1]);
+            if (args.Length == 2 && args[0] == "--transcribe-api") return NativeApiTranscription.Run(args[1]);
             if (args.Length == 2 && args[0] == "--play-uri") {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);

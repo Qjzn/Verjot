@@ -29,7 +29,7 @@ internal sealed class MeetingSettingsSnapshot {
         path = Path.GetFullPath(path);
         MeetingConfig.CheckOrdinaryPath(path);
         if (File.Exists(path) || Directory.Exists(path)) throw new IOException("配置已经存在，请重新启动以加载；本次未覆盖配置。");
-        var defaults = MeetingConfig.Validate(new Dictionary<string, object> { { "vault_root", MeetingFiles.Home }, { "open_in_obsidian", false } });
+        var defaults = MeetingConfig.Validate(new Dictionary<string, object> { { "vault_root", MeetingFiles.Home }, { "open_in_obsidian", false }, { "transcription_mode", "api" }, { "meeting_folder", "verbit" } }, false);
         // An unavailable/redirected Documents folder must still let the user
         // choose a valid destination. Validate the selection only when saved.
         defaults["vault_root"] = suggestedRoot ?? "";
@@ -162,10 +162,10 @@ internal sealed class LocalPreparationPrompt : Form {
         ClientSize = new Size(410, 210); Padding = new Padding(22);
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false;
-        var text = new Label { Text = "录音已保存，转写可以稍后进行\n\n转成文字需准备本地组件，约占 5 GB。\n仅首次准备，会议音频不上传。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(42, 65, 92) };
+        var text = new Label { Text = "录音已保存，转写可以稍后进行\n\n转成文字可在设置中配置第三方 API。\n现有本地模型和配置保留；首期不提供模型下载。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(42, 65, 92) };
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         var later = new Button { Text = "仅保留录音", AutoSize = true, Height = 32, DialogResult = DialogResult.Cancel };
-        var start = new Button { Text = "启用并转写这场", AutoSize = true, Height = 32, BackColor = Color.FromArgb(40, 104, 168), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        var start = new Button { Text = "打开转写设置", AutoSize = true, Height = 32, BackColor = Color.FromArgb(40, 104, 168), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         start.Click += delegate { if (prepare()) { PreparationAccepted = true; Close(); } }; later.Click += delegate { Close(); };
         actions.Controls.Add(later); actions.Controls.Add(start); Controls.Add(text); Controls.Add(actions); CancelButton = later;
         DesktopServices.KeepWindowOnScreen(this);
@@ -195,15 +195,7 @@ internal sealed class MeetingSettingsDialog : Form {
     PictureBox brandMark;
     readonly List<Font> displayFonts = new List<Font>();
     readonly System.Windows.Forms.Timer engineTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-    System.Diagnostics.Process engineProcess;
-    DateTime engineBeganUtc;
-    string preparationError;
-    Func<System.Diagnostics.Process> engineLauncher = DesktopServices.PrepareLocalTranscription;
     Label engineTitle, engineDetail;
-    Button engineAction;
-    ProgressBar engineProgress;
-    bool awaitingEngine;
-    public event Action LocalEngineReady;
     public void ShowAbout() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 2; }
     public void ShowTranscription() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 1; }
     public MeetingSettingsDialog(MeetingSettingsSnapshot snapshot, Func<Dictionary<string, object>, string> apply, bool firstRun = false) {
@@ -269,12 +261,12 @@ internal sealed class MeetingSettingsDialog : Form {
         var header = new Panel { Dock = DockStyle.Top, Height = 64 };
         brandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(2, 9, 30, 30) };
         var title = new Label { Text = "设置", AutoSize = false, Bounds = new Rectangle(44, 2, 220, 30), Font = DisplayFont(20, FontStyle.Bold), Tag = 20f };
-        var subtitle = new Label { Text = "记录、保存与本地转写", AutoSize = false, Bounds = new Rectangle(45, 34, 400, 22), ForeColor = Color.FromArgb(85, 101, 123) };
+        var subtitle = new Label { Text = "速记、录音与可选 API 转写", AutoSize = false, Bounds = new Rectangle(45, 34, 400, 22), ForeColor = Color.FromArgb(85, 101, 123) };
         header.Controls.AddRange(new Control[] { brandMark, title, subtitle });
         Controls.Add(tabs); Controls.Add(footer); Controls.Add(header); AcceptButton = save; CancelButton = cancel;
         if (firstRun) {
             save.Text = "保存并启动";
-            subtitle.Text = "先开始速记和录音，转写组件可以稍后准备";
+            subtitle.Text = "先开始速记和录音，第三方转写可以稍后配置";
         }
         StyleControls(this); StyleButton(save, true);
         engineTimer.Tick += delegate { RefreshEngine(); }; engineTimer.Start();
@@ -320,31 +312,26 @@ internal sealed class MeetingSettingsDialog : Form {
         var stack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 7 };
         stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int row = 0; row < 7; row++) stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var local = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5, Margin = new Padding(0, 0, 0, 12) };
+        var local = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0, 0, 0, 12) };
         local.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        local.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); local.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        local.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); local.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); local.RowStyles.Add(new RowStyle(SizeType.Absolute, 12));
-        local.Controls.Add(new Label { Text = "本地转写", Font = DisplayFont(18, FontStyle.Bold), Tag = 18f, Dock = DockStyle.Fill }, 0, 0);
-        engineTitle = new Label { Name = "transcription_readiness", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-        engineDetail = new Label { Name = "engine_detail", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114) };
-        engineAction = new Button { Name = "download_recommended_model", Dock = DockStyle.Left, AutoSize = true, AccessibleName = "启用本地转写", Margin = new Padding(0, 2, 0, 8), MinimumSize = new Size(160, 32) };
-        engineAction.Click += delegate { BeginPreparation(); };
-        engineProgress = new ProgressBar { Dock = DockStyle.Fill, Style = ProgressBarStyle.Marquee, Visible = false, Margin = new Padding(0, 4, 0, 2) };
-        local.Controls.Add(engineTitle, 0, 1); local.Controls.Add(engineDetail, 0, 2); local.Controls.Add(engineAction, 0, 3); local.Controls.Add(engineProgress, 0, 4);
+        engineTitle = new Label { Name = "transcription_readiness", Dock = DockStyle.Top, Height = 32 };
+        engineDetail = new Label { Name = "engine_detail", Dock = DockStyle.Top, Height = 64, ForeColor = Color.FromArgb(76, 92, 114) };
+        local.Controls.Add(engineTitle, 0, 0); local.Controls.Add(engineDetail, 0, 1);
         stack.Controls.Add(local, 0, 0);
-        var localInfo = new Label { Text = "中文 · 千问 1.7B；CPU 长会议处理可能较慢。\n文字与说话人需核对；术语提示可填写姓名和专用词。", Dock = DockStyle.Top, Height = 48, ForeColor = Color.FromArgb(76, 92, 114), Margin = new Padding(0, 0, 0, 12) }; stack.Controls.Add(localInfo, 0, 1);
+        var localInfo = new Label { Text = "已有本地模式仅保留兼容，不推荐或下载模型。\n模型、配置和录音均保留；也可选择第三方 API。", Dock = DockStyle.Top, Height = 48, ForeColor = Color.FromArgb(76, 92, 114) }; stack.Controls.Add(localInfo, 0, 1);
         var disclosure = new Button { Text = "展开高级选项", Name = "transcription_advanced", Dock = DockStyle.Top, Height = 32, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 8, 0, 8) };
-        stack.Controls.Add(disclosure, 0, 2);
+        stack.Controls.Add(disclosure, 0, 4);
         var advanced = new TableLayoutPanel { Name = "transcription_advanced_fields", Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Visible = false, Margin = Padding.Empty };
         advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         var modeGrid = SettingsGrid(); modeGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        AddChoice(modeGrid, 0, "转写方式", "transcription_mode", current, new[] { "local", "api" }, new[] { "本地 · 音频不上传", "API · 音频发送至服务商" }); advanced.Controls.Add(modeGrid, 0, 0);
+        bool keepLocal = (string)current["transcription_mode"] == "local" || LocalEngineState.Read(MeetingFiles.Home).Ready;
+        AddChoice(modeGrid, 0, "转写方式", "transcription_mode", current, keepLocal ? new[] { "local", "api" } : new[] { "api" }, keepLocal ? new[] { "已有本地环境（兼容）", "自定义第三方 API" } : new[] { "自定义第三方 API" }); stack.Controls.Add(modeGrid, 0, 2);
         var apiFields = SettingsGrid();
         for (int row = 0; row < 5; row++) apiFields.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 4 ? 72 : 36));
         AddField(apiFields, 0, "API 地址", "api_base_url", current); AddField(apiFields, 1, "API 模型 ID", "api_model", current);
         AddField(apiFields, 2, "密钥变量名", "api_key_env", current); AddField(apiFields, 3, "超时（秒）", "api_timeout_seconds", current);
         var secret = new Label { Text = "只支持音频转写接口。密钥通过 Windows 用户环境变量配置，不写入配置文件；提交音频前还会询问。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114), Padding = new Padding(0, 4, 0, 0) };
-        apiFields.Controls.Add(secret, 0, 4); apiFields.SetColumnSpan(secret, 3); advanced.Controls.Add(apiFields, 0, 1);
+        apiFields.Controls.Add(secret, 0, 4); apiFields.SetColumnSpan(secret, 3); stack.Controls.Add(apiFields, 0, 3);
         var grid = SettingsGrid();
         for (int row = 0; row < 4; row++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 ? 48 : 36));
         AddField(grid, 0, "术语（可选）", "asr_terms", current); inputs["asr_terms"].MaxLength = 1000;
@@ -352,12 +339,10 @@ internal sealed class MeetingSettingsDialog : Form {
         AddChoice(grid, 2, "轻量降噪", "asr_denoise", current, new[] { "light", "off" }, new[] { "开启 · 降低低频轰鸣", "关闭" });
         echoFilter = new CheckBox { Name = "asr_echo_filter", Text = "去除有高置信证据的重复回声（不修改原录音）", Checked = Convert.ToBoolean(current["asr_echo_filter"]), Dock = DockStyle.Fill };
         grid.Controls.Add(echoFilter, 0, 3); grid.SetColumnSpan(echoFilter, 3); advanced.Controls.Add(grid, 0, 2);
-        stack.Controls.Add(advanced, 0, 3);
-        var guide = new LinkLabel { Text = "安装帮助与诊断", Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 14, 0, 0) };
+        stack.Controls.Add(advanced, 0, 5);
+        var guide = new LinkLabel { Text = "第三方 API 配置说明", Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 14, 0, 0) };
         guide.LinkClicked += delegate { OpenLink(Path.Combine(MeetingFiles.Home, "documentation", "install-windows.md")); };
-        stack.Controls.Add(guide, 0, 4);
-        var logs = new LinkLabel { Text = "查看准备日志", Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
-        logs.LinkClicked += delegate { string directory = Path.Combine(MeetingFiles.Home, "installation"); if (Directory.Exists(directory)) OpenLink(directory); else error.Text = "还没有准备日志。"; }; stack.Controls.Add(logs, 0, 5);
+        stack.Controls.Add(guide, 0, 6);
         disclosure.Click += delegate {
             stack.SuspendLayout();
             try { advanced.Visible = !advanced.Visible; disclosure.Text = advanced.Visible ? "收起高级选项" : "展开高级选项"; }
@@ -367,20 +352,21 @@ internal sealed class MeetingSettingsDialog : Form {
             bool api = Choice("transcription_mode") == "api";
             page.SuspendLayout(); stack.SuspendLayout(); advanced.SuspendLayout();
             try {
-                apiFields.Visible = api; local.Visible = localInfo.Visible = logs.Visible = !api;
+                apiFields.Visible = api; local.Visible = localInfo.Visible = !api;
+                choices["asr_denoise"].Enabled = echoFilter.Enabled = !api;
+                echoFilter.Text = api ? "降噪与回声处理由第三方服务负责" : "去除有高置信证据的重复回声（不修改原录音）";
                 foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api;
                 RefreshEngine();
             } finally { advanced.ResumeLayout(true); stack.ResumeLayout(true); page.ResumeLayout(true); }
         };
         choices["transcription_mode"].SelectedIndexChanged += delegate { refresh(); };
         Activated += delegate { refresh(); }; refresh();
-        if (Choice("transcription_mode") == "api") { advanced.Visible = true; disclosure.Text = "收起高级选项"; }
         container.Controls.Add(stack, 0, 2);
         Action updateRecordingMode = delegate {
             container.SuspendLayout();
             try {
                 stack.Visible = autoTranscribe.Checked;
-                modeHint.Text = autoTranscribe.Checked ? "结束录音先保存 MP3，再后台转写。\n请准备本地模型或配置 API；模型未就绪也能正常录音。" : "仅录音 · 无需模型，结束后保存 MP3。\n也可稍后在最近会议中手动转写；无损资料暂保留。";
+                modeHint.Text = autoTranscribe.Checked ? "结束录音先保存 MP3，再后台转写。\n配置第三方音频转写 API 后使用；录音不依赖转写。" : "仅录音 · 不需要模型或网络，结束后保存 MP3。\n可稍后选配 API；已有本地环境保留兼容。";
             } finally { container.ResumeLayout(true); }
         };
         autoTranscribe.CheckedChanged += delegate { updateRecordingMode(); }; updateRecordingMode();
@@ -390,32 +376,13 @@ internal sealed class MeetingSettingsDialog : Form {
         var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Margin = Padding.Empty };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0)); return grid;
     }
-    public void BeginPreparation() {
-        autoTranscribe.Checked = true;
-        try {
-            preparationError = null; error.Text = "";
-            var state = LocalEngineState.Read(MeetingFiles.Home);
-            if (state.Ready) { if (LocalEngineReady != null) LocalEngineReady(); return; }
-            if (!state.Busy) { engineBeganUtc = DateTime.UtcNow; engineProcess = engineLauncher(); if (engineProcess == null) throw new IOException("未能启动准备进程，请重试。"); }
-            awaitingEngine = true; engineAction.Enabled = false; engineAction.Text = "正在开始…";
-        } catch (Exception failure) { error.Text = "无法准备本地转写：" + failure.Message; }
-    }
     void RefreshEngine() {
-        if (IsDisposed || engineTitle == null) return;
+        if (IsDisposed || engineTitle == null || Choice("transcription_mode") != "local") return;
         var state = LocalEngineState.Read(MeetingFiles.Home);
-        if (state.Ready || state.Busy) preparationError = null;
-        if (engineProcess != null && engineProcess.HasExited && !state.Ready && !state.Busy &&
-            File.GetLastWriteTimeUtc(Path.Combine(MeetingFiles.Home, "installation", "recommended-model.json")) < engineBeganUtc)
-            preparationError = "准备进程未能启动或未更新状态。请重试；已下载组件和录音保留。";
-        bool starting = engineProcess != null && !engineProcess.HasExited && !state.Busy;
-        engineTitle.Text = starting ? "正在开始准备" : state.Title;
-        engineTitle.ForeColor = state.Ready ? Color.FromArgb(27, 108, 76) : Color.FromArgb(42, 65, 92);
-        engineDetail.Text = starting ? "请稍候，已下载组件会复用。" : state.Detail;
-        engineAction.Text = starting ? "准备中…" : state.Action; engineAction.Enabled = !starting && !state.Busy && !state.Ready;
-        engineProgress.Visible = starting || state.Busy; StyleButton(engineAction, !state.Ready);
-        if (!string.IsNullOrEmpty(preparationError)) { engineTitle.Text = "准备未完成"; engineDetail.Text = preparationError; engineAction.Text = "重试准备"; engineAction.Enabled = true; engineProgress.Visible = false; }
-        if (engineProcess != null && engineProcess.HasExited) { engineProcess.Dispose(); engineProcess = null; }
-        if (awaitingEngine && state.Ready) { awaitingEngine = false; if (LocalEngineReady != null) LocalEngineReady(); }
+        string title = state.Ready ? "已有本地环境可用（兼容模式）" : "已有本地环境需要检查";
+        string detail = "首期不提供推荐模型或下载入口。原有模型和配置保留；需要时可改用第三方音频转写 API。";
+        if (engineTitle.Text != title) engineTitle.Text = title;
+        if (engineDetail.Text != detail) engineDetail.Text = detail;
     }
     void OpenLink(string url) { try { DesktopServices.Open(url); } catch (Exception failure) { error.Text = "无法打开：" + failure.Message; } }
     void BuildAbout(TabPage page) {
@@ -527,6 +494,6 @@ internal sealed class MeetingSettingsDialog : Form {
         base.Dispose(disposing);
         if (disposing && dpiFont != null) { dpiFont.Dispose(); dpiFont = null; }
         if (disposing && githubImage != null) { githubImage.Dispose(); githubImage = null; }
-        if (disposing) { engineTimer.Dispose(); if (engineProcess != null) engineProcess.Dispose(); foreach (var font in displayFonts) font.Dispose(); if (brandImage != null) brandImage.Dispose(); }
+        if (disposing) { engineTimer.Dispose(); foreach (var font in displayFonts) font.Dispose(); if (brandImage != null) brandImage.Dispose(); }
     }
 }

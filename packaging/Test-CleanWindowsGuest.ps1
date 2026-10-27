@@ -1,6 +1,6 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([ValidateSet('Sandbox','VM')][string]$Environment = 'Sandbox')
+param([ValidateSet('Sandbox','VM')][string]$Environment = 'Sandbox', [switch]$LegacyLocalTranscription)
 $ErrorActionPreference = 'Stop'
 function Assert-DisposableGuest([string]$Kind,[string]$UserName,[string]$Model,[bool]$HasManifest) {
     if (-not $HasManifest) { throw 'Missing C:\verbit-input\SHA256.json; prepare explicit validation inputs first.' }
@@ -57,6 +57,15 @@ try {
     if ($taskInstall.ExitCode -ne 0) { throw "EXE install failed: $($taskInstall.ExitCode)" }
     Invoke-GuestChecked (Join-Path $taskInput 'TestDesktopRunner.exe') @((Join-Path $taskInput 'TestInstalledJourney.exe'),$taskApp,$taskNotes)
     Copy-Item -LiteralPath (Join-Path $taskApp 'new-user-journey.json') -Destination $taskReports
+    if (-not $LegacyLocalTranscription) {
+        $taskResult.passed = $true
+        $taskResult.scope = 'Clean EXE installation, first settings and quick notes without Python/models. Recording, device switching and real API remain untested.'
+        $taskResult.models_downloaded = $false
+        $taskResult.recording_verified = $false
+        $taskResult.real_api_verified = $false
+        Set-GuestStage 'desktop-completed-without-models'
+        return
+    }
     Set-GuestStage 'python-and-native-runtime'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $taskPythonInstaller = Get-SignedInstaller 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe' 'python-installer.exe' 'Python Software Foundation'

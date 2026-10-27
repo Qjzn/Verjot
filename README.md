@@ -2,13 +2,13 @@
 
 <img src="assets/verbit-logo.png" alt="verbit Logo" width="80">
 
-Windows 上随手记录想法、保存会议声音的小工具。用全局快捷键打开原生置顶便签，或用一个小浮窗控制双路录音；默认仅录音，结束得到 **一条 192 kbps MP3**。开启转写后再生成一份 Markdown。支持普通文件夹和 Obsidian，速记与录音不依赖模型，转写可选本地中文模型或 API。
+Windows 上随手记录想法、保存会议声音的小工具。用全局快捷键打开原生置顶便签，或用一个小浮窗控制双路录音；默认仅录音，结束得到 **一条 192 kbps MP3**。开启转写后再生成一份 Markdown。支持普通文件夹和 Obsidian，速记与录音不依赖模型，首期转写仅选配第三方 API，已有本地环境保留兼容。
 
 [下载 Windows x64 安装版](https://github.com/Qjzn/verbit/releases/tag/v0.1.0-beta.2) · [安装与快速上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [交给 AI 安装](documentation/ai-install.md)
 
 - **随手记**：`Ctrl+Alt+J` 打开置顶便签，中文输入、粘贴图片，停顿后自动保存。
 - **轻量开会**：小浮窗控制麦克风和电脑声音，支持暂停、重点时间标记及默认 5 秒误触保护。
-- **文件自己留**：默认保存 MP3；开启转写并校验成功后，保留 MP3 和 Markdown，清理临时音轨。仅录音或处理失败时保留可恢复资料。
+- **文件自己留**：默认保存 MP3；开启转写并校验成功后，保留 MP3 和 Markdown，清理临时音轨。新 API 模式仅录音校验 MP3 后也会清理临时分轨；处理失败保留恢复资料，已有本地模式保留无损工作流。
 
 准备参与开发或审查？从 [架构与边界](documentation/architecture.md)、[测试覆盖](documentation/tests.md) 和 [开源检查](documentation/open-source-readiness.md) 开始。
 
@@ -22,9 +22,9 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 原生速记支持图片、置顶和自动保存；设置可修改保存目录与快捷键：
 
-本轮 `0.1.0-beta.10` 私有候选只推荐一个本地转写模型：**千问 Qwen3-ASR-1.7B**。安装时可勾选下载，或稍后在「设置 → 转写」勾选“录音 + 转写”，点击“启用本地转写”；必要依赖与说话人组件一起准备，并用内置中文样本验证。无需预装系统 Python，速记和录音可先使用。准备需联网和数 GB 空间，会议音频留本机。CPU 长会议可能较慢，文字与身份需核对；模型和声纹质量未因界面修复而提高。此处不表示候选已替代既有发布版；版本与功能见[版本说明](documentation/changelog.md)。
+本轮 `0.1.0-beta.11` 私有候选聚焦速记和录音，**不提供推荐模型下载或安装选项**。无需 Python、模型、FFmpeg 或开发环境即可录音，192 kbps MP3 在结束后原生生成并完整解码校验。可在设置中主动启用第三方音频转写 API，填写自己的地址、模型 ID 和密钥环境变量名；确认上传后才提交，不调用普通聊天接口。已有模型与配置保留，升级不下载、不删除或自动切换。候选尚未公开发布，详见[版本说明](documentation/changelog.md)。
 
-<img src="assets/screenshots/quick-note.png" alt="verbit 速记：文字和图片的演示内容" width="340"> <img src="assets/screenshots/settings.png" alt="verbit 首次启动设置：保存目录、快捷键和录音保护" width="400">
+<img src="assets/screenshots/quick-note.png" alt="verbit 速记：文字和图片的演示内容" width="340"> <img src="assets/screenshots/settings.png" alt="verbit 可选转写设置：自定义第三方 API、模型 ID 和密钥变量名" width="400">
 
 截图来自当前版本的原生窗口，文字、图片和音量数据为专用演示内容，不包含真实会议或个人路径；录音状态图用于展示界面，不作为硬件或转写质量证据。
 
@@ -33,13 +33,14 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 1. 在 [Releases](https://github.com/Qjzn/verbit/releases/tag/v0.1.0-beta.2) 下载 EXE 并核对随包 SHA256。需要 **Windows 10 1809+ / Windows 11 x64、.NET Framework 4.8**，无需管理员权限。
 2. 安装后首次弹出设置，选择保存目录、确认快捷键，点击「保存并启动」。取消不创建配置，下次仍可设置；已有配置不会被覆盖。
 3. 程序驻留托盘，按 **`Ctrl+Alt+J`** 打开置顶速记，直接输入或粘贴图片，停顿后自动保存。
-4. 需要会议录音与转写时，再按 [安装说明](documentation/install-windows.md#启用会议转写) 配置本地或 API 引擎，并完成自检和一次真实验收。**轻量安装包不附带 Python、模型或 FFmpeg**，默认仅录音，结束后保存 MP3、不加载模型；设置里开启“录音 + 转写”才自动转写。开启后缺少环境时提示「录音已保存 · 待配置转写」。原始无损分段保存在程序目录 `work/会议编号/`，环境准备好后从「最近会议 → 对应会议 → 重试这场转写」继续；结束后先用安装包自带的原生编码器合并并校验 MP3，不等待模型就绪；转写仍读取无损分轨。成功校验 MP3、Markdown 和完整转写后才清理临时资料。失败保留恢复资料和具体原因。
+4. 按 **`Ctrl+Alt+L`** 开始/结束录音；默认只得到一条 MP3。新安装保存到 `<保存目录>/verbit/verbit年月日时分/verbit年月日时分.mp3`，如 `verbit202610271430`；同分钟重录自动加 `-02`、`-03`，不覆盖旧文件。设置了自定义会议子目录时，保留你的子目录。
+5. 需要转写时，打开「设置 → 转写」，勾选“录音 + 转写”，配置支持 `/audio/transcriptions` 的第三方模型。结束时先保存 MP3，再明确确认是否上传；也可仅录音后，从最近会议手动转写。成功后 Markdown 与 MP3 同目录同名；接口错误、超时、空结果、无效时间轴或文件冲突保留恢复资料及原因。完整配置见[安装说明](documentation/install-windows.md#启用会议转写)。
 
-当前版本是 `0.1.0-beta.2` 预发布版，仓库仍私有；下载需要仓库权限。录音质量、设备兼容及干净机器安装的实际覆盖范围见 [质量证据](documentation/quality.md)、[发布验收](documentation/release-readiness.md) 和 [开源准备检查](documentation/open-source-readiness.md)。本地模型会后处理仍可能占用较多内存与显存。
+当前版本是 `0.1.0-beta.2` 预发布版，仓库仍私有；下载需要仓库权限。录音质量、设备兼容及干净机器安装的实际覆盖范围见 [质量证据](documentation/quality.md)、[发布验收](documentation/release-readiness.md) 和 [开源准备检查](documentation/open-source-readiness.md)。首期不推荐本地模型；第三方接口的速度、准确率、文件大小上限与费用由服务商决定。
 
 ## 会议操作
 
-浮窗顶部为中间独立 Logo 与小写名称 **verbit**、右上隐藏；没有返回按钮。待机时提供速记、录制和设置三个图标，悬停显示介绍和当前快捷键。关闭只隐藏浮窗，录音和后台转写继续；结束会议请点击红色方块或使用开始/结束快捷键。录制时使用无损分段，首次转录和说话人分析使用无损音轨。
+浮窗顶部为中间独立 Logo 与小写名称 **verbit**、右上隐藏；没有返回按钮。待机时提供速记、录制和设置三个图标，悬停显示介绍和当前快捷键。关闭只隐藏浮窗，录音和后台转写继续；结束会议请点击红色方块或使用开始/结束快捷键。录制时使用无损分段，结束后合并为一条校验后的 MP3。新 API 流程直接提交该 MP3；已有本地模式继续从无损音轨转写。
 
 浮窗或托盘右键 → **设置…** 可修改保存目录、会议/速记子文件夹及四组快捷键。结束录音并等待转写后修改；保存会先安全关闭已保存的速记，再验证快捷键并写入配置，成功后立即生效。快捷键被占用或配置被外部修改时留在设置窗口显示原因。新地址用于后续内容，已有文件留在原位置。
 
@@ -57,7 +58,7 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 | 展开 / 收起速记便签 | `Ctrl+Alt+J` | 恢复上次便签，收起前保存；左上角「＋」或正文内 `Ctrl+N` 新建，不改变录音状态。 |
 | 关闭 / 开启麦克风 | 点击浮窗麦克风 | 只影响 verbit 的收录，电脑声音继续录制；不改变会议软件的通话。 |
 | 隐藏 / 展开浮窗 | 右上角关闭 / 双击托盘 | 录音持续进行。 |
-| 查看处理结果 / 重试 | 托盘「最近会议」 | 按会议时间选择对应笔记、录音资料或失败重试；复用已完成片段，保留手写区内容。 |
+| 查看处理结果 / 重试 | 托盘「最近会议」 | 按会议时间选择对应笔记、录音资料或失败重试；新 API 流程复用已完成结果；已有笔记发生修改时拒绝覆盖。 |
 | 会后快速命名 | 所选已完成会议的「命名这场会议」 | 在小输入框填写标题，修改 Markdown 文件名及会议标题；不改动录音，重名不覆盖。 |
 
 速记采用单行顶部：左侧新建，中间 Logo 与当前文件名，右侧置顶、最小化和关闭；文字与图标垂直居中。鼠标离开窗口约 300 毫秒后，顶部、底部和左侧标签收起，正文收回上下空间，仅留正常内边距；移入重新显示，窗口尺寸不变，保留选区、焦点及有效滚动位置。右键菜单、图片拖拽及保存异常期间保留必要控件和提示。标签完整名称优先显示在正文外侧；屏幕边缘没有安全空间时不弹遮挡提示，可从「更多」按文件名查找。
@@ -116,25 +117,9 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 ## 交给 AI 安装
 
-把下面这段需求连同源码目录交给你的 AI：
+> 请按 documentation/ai-install.md 安装 verbit beta.11。使用 EXE，首次只设置保存目录和快捷键，默认仅录音，不安装 Python 或模型。保留已有模型、配置和会议；API 可按需填写服务地址、模型 ID 和密钥变量名，提交前单独确认上传。说明实测与未测部分，不默认修改开机启动，不操作用户剪贴板。
 
-> 请按 `documentation/ai-install.md` 安装 verbit。先核对保存目录、local/api 模式与已有环境，运行 `Install.ps1 -Plan`，再执行安装。保留已有配置和会议；密钥仅使用环境变量。完成后运行 doctor，说明实际验证与未验证的部分；不要默认修改开机启动。
-
-完整步骤见 [AI 安装说明](documentation/ai-install.md)。配置字段、默认值、示例与排障见 [配置说明](documentation/configuration.md)；机器可读约束在 [config.schema.json](src/config.schema.json)，首次配置模板为 [config.example.json](src/config.example.json)。
-
-需要 **Windows 10/11 x64、Python 3.12 x64、.NET Framework 4.8**。Git 源码版先进入 `src`，再执行以下命令；EXE 安装版在程序安装目录执行，不追加 `src`。保存位置请换成自己的路径：
-
-```powershell
-# 先看计划；不下载、不创建配置、不修改启动项
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath 'D:\Meetings' -Mode api -Plan
-
-# 确认模式后安装；API 服务参数还需按配置说明补齐
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath 'D:\Meetings' -Mode api
-```
-
-本地 CPU 模式改为 `-Mode local -Backend cpu`；NVIDIA CUDA 环境可选 `-Mode local -Backend cuda128`。首次使用 Obsidian 加 `-UseObsidian`，需要登录自启才加 `-StartWithWindows`。安装器保留现有 `config.json`；已有 Torch 后端与参数不一致时会停止，需按实际环境选择参数。安装过程不启动录音，也不调用 API。
-
-首次 API 安装会留下模板，服务地址和模型名未填写时自检失败并返回非零退出码。补齐配置与密钥环境变量后重跑安装，不能把模板生成当作安装就绪。
+完整步骤见[AI 安装说明](documentation/ai-install.md)，字段见[配置说明](documentation/configuration.md)，首次模板见[config.example.json](src/config.example.json)。源码中的 Install.ps1 / RecommendedModel.ps1 等历史工具用于维护旧实验环境，不属于首期安装步骤。
 
 ## 源码目录
 
@@ -150,65 +135,53 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1 -NotesPath
 
 ## 选择转写方式
 
-| 模式 | 中文转写 | 本机安装与数据流 |
-| --- | --- | --- |
-| `local` | Qwen3-ASR-1.7B | 下载识别与说话人模型及 PyTorch 等依赖，体积为数 GB；会议处理离线完成。GPU 更适合长会议，CPU 速度需要在目标机器实测。 |
-| `api` | 用户配置的语音转写服务 | 不装本地 Qwen、Torch、Transformers；仍安装小型说话人模型及音频处理依赖。讲话片段上传所选服务。 |
+| 模式 | 本机依赖和数据流 |
+| --- | --- |
+| 默认仅录音 | 不加载模型、不访问转写服务。结束后原生合并并校验一条 MP3。 |
+| 可选第三方 API | 无 Python 或本地模型，确认后上传本场 MP3 到自定义 /audio/transcriptions。模型 ID、速度、费用、时长上限和身份能力由服务商决定。 |
+| 已有 local 兼容 | 保留现有 Qwen / 说话人环境和配置，无损分轨转写，不推荐或自动下载模型。 |
 
-API 兼容 **`POST /audio/transcriptions`**，使用 WAV、`model`、`language=zh` 和 JSON 文本返回。普通聊天模型能否用作语音转写，必须以供应方实际支持的这个端点为准。服务地址填写含版本路径的前缀，如 `https://provider.example/v1`；密钥通过 `api_key_env` 指定的环境变量读取，配置里不放密钥值。
+API 需要兼容 multipart `POST /audio/transcriptions`，接受 MP3、`model`、`response_format=json`，可选术语 `prompt`。响应支持非空 `text` 或带 `start/end/text` 的 segments；服务实际返回 speaker/speaker_id 时才显示身份，不推断人名。普通聊天、Omni、URL 异步任务接口不能仅改模型名代替。配置和隐私边界见[安装说明](documentation/install-windows.md#启用会议转写)。
 
-两种模式都在本机用 sherpa-onnx / 3D-Speaker 做说话人分组。目标是**同一人在两路上使用同一编号，不同人分开**：直接比较两路可靠讲话片段的声纹，联合分组，并要求组内片段彼此相符，避免先把局部编号当成不可拆分的身份。短段、重叠或身份区分不足显示「说话人待确认」，不强行分配身份。新会议的回放录音合并为一条 MP3。设备声道差异、噪声和串音可能造成误并或漏并，当前不保证全部编号正确；转录不推断真实姓名，不自动生成会议结论。
-
-`asr_denoise` 默认 `"light"`，只对送入识别的片段副本做轻量低频处理（零相位 70 Hz 高通）；`"off"` 关闭。保存的会议录音不应用这项处理。这不是全频降噪，也没有证据证明它能普遍提高中文准确率；建议使用同一段实际会议对比后选择。
-
-`asr_echo_filter` 默认 `true`：只有麦克风片段与电脑声有高置信延迟波形证据、多个窗口一致、时间覆盖充分，并且最终转写文字完全相同，才在 Markdown 中保留电脑声那一份。短应答、文字不同、独立复述和证据不足的片段继续保留。关闭设为 `false`。这项功能不修改保存的会议录音，不能代替声学回声消除或多人声音分离；说话人归属也不因回声候选而强行统一。
-
-模型在会议结束处理时加载。模型下载、运行库和个人配置保存在安装机器上，**不放进 Git 仓库**。API 模式也并非完全没有本地模型。
+本轮没有真实服务质量背书。整条 MP3 单次提交，超过服务商文件限制会保留文件并说明 HTTP 错误；不会自动切块、换供应方或循环重传。超时可能已被服务商处理及计费，重试前应核对。已有本地模式的降噪、回声和跨轨身份候选不适用于新原生 API；默认均不会修改保存的 MP3。
 
 ## 文件与配置
 
-首次安装默认写普通 Markdown，不要求 Obsidian。开启 `open_in_obsidian` 后采用 Obsidian 音频引用；是否自动打开由 `auto_open_completed_note` 和当前录音状态共同控制。旧配置省略这些字段时保留 Obsidian 输出和空闲时自动打开。更改配置请先结束录音、等待转写并退出托盘，然后重启。
-
 ```text
 保存目录/
-└─ 会议记录/
-   ├─ 2026-10-14 14-30-00.md
-   └─ 附件/20261014-143000/meeting.mp3
+└─ verbit/
+   └─ verbit202610271430/
+      ├─ verbit202610271430.mp3
+      └─ verbit202610271430.md   # 转写成功后才生成
 ```
 
-“附件”是唯一录音的保存目录，MD 引用同一 MP3，不会再复制音频。临时无损分段、识别片段和日志在程序的 `work/`；新版导出直接流式编码，不再生成整场临时混音 WAV。正常成品验证成功后清理，笔记目录只留上述两份文件。采集异常即使转写完成也保留核查资料，显示「采集异常 · 检查录音」，不以转写成功保证声音完整；仍可打开两份成品。失败时保留本机恢复资料，便于重试。`work/` 内的 `controller.json` 仅记录本机进程身份与提示状态，用于接回任务和避免重复提示，不是额外会议附件。
+采用录音开始时的本地年月日时分；同一分钟自动加 -02、-03，待导出的场次也占用名字。已有会议目录配置保留，新地址只影响后续内容，旧文件不迁移、不改名。
 
-新转录去掉「录制时间、时长、转写引擎」模板行、空的「我的笔记」和 HTML 管理标记，保留录音入口、正文、适用的重点时刻和暂停区间。内部状态记录自动生成正文的范围与校验信息；重试保留范围之外的手写内容，检测到范围内被用户改动时停止覆盖。带旧标记的笔记可在安全重试时迁移，不批量重写历史笔记。说话人分组限制提示暂时保留，直到录音与转录质量标准得到确认并有对应验收证据；当前测试范围见 [质量标准与证据](documentation/quality.md)。
+录制时每 300 秒切成原设备格式的无损段，同设备不重启、不重置时间轴。独立进程按共享时间轴混音，流式编码双声道 48 kHz MP3，不生成额外整场 WAV；默认 192 kbps（约 86.4 MB/小时），设置文件支持 128/192/256/320。临时分轨仍需要磁盘空间。
 
-## 自检、验证与更新
+新 API 仅录音时，完整解码、长度和哈希校验 MP3 后清理本场临时音轨，稍后可由 MP3 转写。自动转写时成功校验 MP3 与 Markdown 后清理；采集异常、失败或篡改保留恢复资料。已有 local 模式保持无损输入工作流。程序 work 内的控制 JSON 是恢复元数据，不是重复录音附件，不要在任务进行中删除。
 
-当前源码增加可选的干净声纹锚点、独立于说话人编号的连续语音分段和术语提示，未增加模型或常驻服务；两项识别候选默认关闭，术语默认为空。真实长会议对照尚未通过身份与文字质量验收，不自动重写旧会议。用法见 [配置说明](documentation/configuration.md#识别候选与术语提示)，实测结果与剩余问题见 [质量说明](documentation/quality.md#2026-10-17-识别候选对照)。这些字段不适用于已发布的旧安装包。
+新 API 创建纯 Markdown，不添加录制时间、引擎模板或 HTML 管理标记。转写检查点留本机；已有笔记不同或输出被修改时拒绝覆盖。旧 Python 工作流仍保留手写区保护和原格式兼容。
 
-FireRedASR2-AED 和完整 pyannote Community-1 的独立安装、离线边界与实测状态见 [本地模型评估](documentation/local-model-evaluation.md)。它们尚未替换默认模型，不会自动加入安装包；Community-1 需要用户本人完成官方权重下载授权。
+## 开发验证与更新
 
-```powershell
-.\.venv\Scripts\python.exe -B tingji.py doctor --full --json
-.\.venv\Scripts\python.exe -B tingji.py status --json
-```
-
-`doctor` 检查配置、依赖、模型文件、写入权限与空间；`--full` 进一步导入依赖并检查音频设备，始终不录音、不加载识别模型、不调用 API。健康退出码为 `0`，失败为 `2`。`status` 读取最近一次会议的处理状态。自检通过后，仍需用一段明确授权的音频验证目标机器的真实输入、输出和转写服务。
-
-完整回归用于源码维护者，安装包不附带测试代码。在仓库根目录执行以下命令；已按前文进入 `src` 时直接执行第二行：
+源码位于 src，用户功能不依赖 Python。源码构建需要 .NET Framework 4.8 自带编译器和经过校验的 NAudio 1.10.0；恢复方式与 SHA256 见 [.github/workflows/ci.yml](https://github.com/Qjzn/verbit/blob/main/.github/workflows/ci.yml)，不能使用任意来历的 DLL。
 
 ```powershell
 Set-Location .\src
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1
+# 先按 CI 的 Restore verified NAudio 步骤恢复 lib/NAudio.dll
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Restore-Encoder.ps1
+.\ObsidianMeeting.exe
+# 原生合同与 UI 回归，无真实采集、无外部上传
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test.ps1 -NativeOnly
 ```
 
-自动化回归覆盖配置、API 请求与断点恢复、混音时间轴、原子发布、成品校验和手写区保护。原生回归覆盖按会议重试、进程接回、启动恢复提示、两路输入反馈和轻量处理浮窗。真实硬件切换、API 供应方与全新机器安装需分别验证；模拟接口和界面测试不能证明供应方可用、中文准确率或目标机器的设备行为。
+Restore-Encoder 只准备固定版本 LAME 编码器及许可，不下载语音模型。首次运行仍通过设置选择保存目录；内部文件名 ObsidianMeeting.exe 为兼容旧快捷方式保留。Python 音频/旧转写合同测试是维护者额外依赖，不是用户依赖，见[测试说明](documentation/tests.md)。模型研究、候选声纹和旧 doctor 命令见[本地实验记录](documentation/local-model-evaluation.md)及[历史首次验收](documentation/first-use.md)。
 
-运行 `ObsidianMeeting.exe` 启动 verbit，此文件名为兼容现有快捷方式保留。开发更新可用 `Build.ps1 -OutputPath ObsidianMeeting.next.exe` 生成候选；构建需要同版 `ObsidianMeeting.cs`、`SessionCatalog.cs`、`MeetingActions.cs`、`QuickNoteStore.cs`、`NativeNoteDocument.cs`、`QuickNoteWindow.cs`、`app.manifest`、应用配置与图标资源。构建同时生成候选名对应的 `.exe.config`，安装为正式文件名时也须对应改名为 `ObsidianMeeting.exe.config`。更新前完成会议及转写并正常退出托盘，保留本机 `config.json` 与 `work/`。`assets/Create-Icons.ps1` 可重新生成图标。
+测试使用隔离桌面、合成音频和本机 HTTP 模拟，不能证明真实麦克风/蓝牙切换、长会议、中文和说话人准确率或全新 Windows 安装已通过。真实采集、播放与 API 上传须提前获得同意。源码中的旧附件维护工具默认仅规划，不批量迁移旧会议。
 
-源码版 `src/` 中的旧版附件整理工具默认只规划：`Compact-Completed-Meetings.py`；未合并但完整的旧记录可先用 `Prepare-Legacy-Merged-Meetings.py`。安装包不包含这两个维护工具。实际变更需明确传入 `--apply`，后者还要求 `--only-session` 名单。只清理已验证的生成文件，未知文件与缺少成品的记录保留。
-
-录制时默认每 300 秒按精确帧切为一个原设备格式的无损 WAV 段，另有单段安全字节边界；切段不重启设备、不重置时钟、不删掉暂停时长。同一设备各段仍是一条逻辑音轨，避免交界讲话被拆成不同来源。新版录音结束后在独立进程中连续读取无损分段，按共享时间轴混音并直接流式编码 MP3，无需 Python、模型或 FFmpeg；导出期间浮窗显示进度状态，长会议仍需等待编码和校验。首次转写继续使用原始无损分轨，不解码这份 MP3。`recording_segment_seconds` 可设 10–600 秒；`mp3_bitrate_kbps` 默认 192，可选 128、192、256、320。192 kbps 成品约 86.4 MB/小时，临时无损音轨仍需要空间。
-
-成品清理前核对 MP3 的全部音频帧码率、完整解码长度与内容摘要，并核对 Markdown；已有发布目标须匹配本场记录，避免覆盖其他录音。正常成功后清理无损分段和识别片段，只保留一条 MP3、一份 Markdown，以及工作目录内必要的控制元数据。失败或采集异常时保留恢复资料。旧 WAV 会议不自动转换。分段不解决磁盘写满、驱动丢音或转写全轨内存占用；实际验证与边界见 [质量说明](documentation/quality.md) 和 [隐患审查](documentation/risk-review.md)。
+升级前保存速记、结束会议、等处理完成，从托盘正常退出；安装到原目录。配置、模型、环境与既有录音保留；卸载也不会清除用户资料。设置 → 关于与更新可查看版本、GitHub 与版本说明；自动检查默认关闭，不自动安装更新。
 
 ## 许可与兼容
 

@@ -33,21 +33,6 @@ internal static class DesktopServices {
     }
     public static string StartupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
     public static string Executable { get { return Assembly.GetExecutingAssembly().Location; } }
-    public static ProcessStartInfo RecommendedModelStartInfo() {
-        string script = Path.Combine(Path.GetDirectoryName(Executable), "RecommendedModel.ps1");
-        MeetingConfig.CheckOrdinaryPath(script);
-        if (!File.Exists(script)) throw new IOException("缺少推荐模型安装组件，请使用完整安装包。");
-        return new ProcessStartInfo {
-            FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
-            Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\"",
-            WorkingDirectory = Path.GetDirectoryName(Executable), UseShellExecute = false, CreateNoWindow = true
-        };
-    }
-    public static void DownloadRecommendedModel() { using (var process = Process.Start(RecommendedModelStartInfo())) { } }
-    public static Process PrepareLocalTranscription() {
-        var start = RecommendedModelStartInfo(); start.Arguments += " -Worker";
-        return Process.Start(start);
-    }
     // Held until a transcription worker publishes its identity. Native capture
     // does not use Python or model files and may start during model setup.
     public static IDisposable EnterModelSetupGate(string home) { return new ModelSetupGate(home); }
@@ -66,7 +51,7 @@ internal static class DesktopServices {
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.10-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.11-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {

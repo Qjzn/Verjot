@@ -17,7 +17,7 @@ $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewG
 $taskDesktopRunner = Join-Path $taskOutput 'TestDesktopRunner.exe'
 & $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskTests 'TestDesktopRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw "Isolated test desktop runner compilation failed: $LASTEXITCODE" }
-foreach ($taskTest in @('TestDesktopServices', 'TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestMeetingSettings', 'TestRecordingProtection', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestRecordingExport', 'TestQuickNoteStore', 'TestNativeNoteDocument', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput', 'TestQuickNoteNewlines')) {
+foreach ($taskTest in @('TestDesktopServices', 'TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestMeetingSettings', 'TestRecordingProtection', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestRecordingExport', 'TestNativeApiTranscription', 'TestQuickNoteStore', 'TestNativeNoteDocument', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput', 'TestQuickNoteNewlines')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
     $taskBinary = Join-Path $taskFolder ($taskTest + '.exe')
@@ -30,7 +30,7 @@ foreach ($taskTest in @('TestDesktopServices', 'TestSessionCatalog', 'TestJsonRe
     & $taskCompiler @taskArguments
     if ($LASTEXITCODE -ne 0) { throw "$taskTest compilation failed: $LASTEXITCODE" }
     Copy-Item -LiteralPath (Join-Path $taskRoot 'lib\NAudio.dll') -Destination $taskFolder
-    if ($taskTest -eq 'TestRecordingExport') { & (Join-Path $taskRoot 'Restore-Encoder.ps1') -Destination $taskFolder }
+    if ($taskTest -in @('TestRecordingExport', 'TestNativeApiTranscription')) { & (Join-Path $taskRoot 'Restore-Encoder.ps1') -Destination $taskFolder }
     Copy-Item -LiteralPath (Join-Path $taskRoot 'config.schema.json') -Destination $taskFolder
     Copy-Item -LiteralPath (Join-Path $taskRoot 'ObsidianMeeting.exe.config') -Destination ($taskBinary + '.config')
     # Each fixture gets a separate desktop without switching the user's screen.

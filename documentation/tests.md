@@ -1,5 +1,8 @@
 # 验证映射
 
+> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+
+
 缩放与工作区：`TestRecorderPanel` 在实际可用显示器逐状态检查，同时用生产布局入口测试 96/120/144/168/192/240 DPI 的录音、待机、告警、转写、结果状态，检查边界、单行高度和重叠。模拟字体/坐标不等于相应物理显示器的 WM_DPICHANGED 实测。`TestMeetingSettings` 检查实际工作区、800×540 模拟短工作区中的滚动页、标签及保存/取消；`TestDesktopServices` 检查小屏、负坐标工作区的定位与幂等约束。`TestQuickNoteEditor --geometry-only` 补查速记最小尺寸不超过短工作区，正常工作区仍保留原逻辑尺寸。测试不修改系统显示设置。
 
 2026-10-27 仅录音与悬停稳定性：`TestQuickNoteEditor --hover-only` 验证空文、短文、长文清空及再次输入的滚动条；隐藏导航后正文收回上下空间，仅保留正常内边距。检查 60 次显隐不替换窗口 Region、不改变窗口位置和尺寸，每次最多布局一次，重复悬停不重排；保留选区、焦点、正文及有效滚动位置。完整速记回归仍覆盖格式、图片、预览、拖动与保存。`TestMeetingSettings` 检查仅录音缺省、显式开启及保存；`TestMeetingExperience` 用模拟导出进程证明仅录音不启动模型、仍可手动转写；`TestRecordingExport` 校验真实合成音导出与源分轨不变，不能代替真实采集或人物识别评估。

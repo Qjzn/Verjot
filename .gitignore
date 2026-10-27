@@ -198,4 +198,5 @@
 !/documentation/clean-windows-validation.md
 !/src/DesktopServices.cs
 !/tests/TestDesktopServices.cs
+!/tests/TestNativeApiTranscription.cs
 !/documentation/changelog.md

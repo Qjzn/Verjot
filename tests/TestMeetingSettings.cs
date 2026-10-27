@@ -274,7 +274,16 @@ internal static class TestMeetingSettings {
         string path = Path.Combine(directory, "first-run-config.json");
         var snapshot = MeetingSettingsSnapshot.CreateNew(path, root);
         Check(!File.Exists(path), "Preparing first-run settings does not create a config");
-        Check(!(bool)snapshot.Values["open_in_obsidian"] && (string)snapshot.Values["transcription_mode"] == "local" && !(bool)snapshot.Values["auto_transcribe"], "New installs use ordinary notes and record only without connecting to a service");
+        Check(!(bool)snapshot.Values["open_in_obsidian"] && (string)snapshot.Values["transcription_mode"] == "api" && !(bool)snapshot.Values["auto_transcribe"], "New installs use ordinary notes and record only without connecting to a service");
+        Check((string)snapshot.Values["meeting_folder"] == "verbit", "New installs save meetings under verbit; old configurations retain their folders");
+        using(var form = new MeetingSettingsDialog(snapshot, delegate { return null; }, true)) {
+            form.Show();form.ShowTranscription();Application.DoEvents();
+            Check(form.Controls.Find("download_recommended_model",true).Length==0,"First-run settings contain no model download entry");
+            ((CheckBox)form.Controls.Find("auto_transcribe",true)[0]).Checked=true;Application.DoEvents();
+            Check(((ComboBox)form.Controls.Find("transcription_mode",true)[0]).Items.Count==1 && Input(form,"api_model").Visible,"New user can directly configure their third-party model without a dead local option");
+            using(var image=new Bitmap(form.Width,form.Height)) {form.DrawToBitmap(image,new Rectangle(0,0,form.Width,form.Height));image.Save(Path.Combine(directory,"settings-api-first-use.png"));}
+            form.Close();
+        }
         Check((string)snapshot.Values["quick_note_hotkey"] == "Ctrl+Alt+J" && Convert.ToInt32(snapshot.Values["recording_protection_seconds"]) == 5, "First-run defaults include current quick note and protection settings");
         Check((string)MeetingSettingsSnapshot.CreateNew(path, "").Values["vault_root"] == "", "An unavailable suggested folder does not prevent the first-run chooser from opening");
         var invalid = snapshot.Values; invalid["vault_root"] = Path.Combine(root, "missing");
@@ -440,9 +449,10 @@ internal static class TestMeetingSettings {
             var snapshot = MeetingSettingsSnapshot.Open(path);
             using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { snapshot.Commit(next); return null; })) {
                 form.Show(); Application.DoEvents();
-                ((ComboBox)form.Controls.Find("transcription_mode", true)[0]).SelectedIndex = 0;
+                Check(((ComboBox)form.Controls.Find("transcription_mode", true)[0]).Items.Count == 1, "A machine without a local environment offers API only, without a dead model selector");
+                ((CheckBox)form.Controls.Find("auto_transcribe", true)[0]).Checked = false;
                 ((Button)form.AcceptButton).PerformClick();
-                Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "local", "Missing old API key can be repaired by switching to local through the actual dialog");
+                Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "api" && !(bool)MeetingSettingsSnapshot.Open(path).Values["auto_transcribe"], "Missing API credentials do not prevent saving record-only settings, without inventing a local model");
             }
             var api = ConfigWithApi(root);
             // Never contend with the user's running verbit default shortcuts.
@@ -463,12 +473,7 @@ internal static class TestMeetingSettings {
         int calls = 0;
         using (var form = new MeetingSettingsDialog(snapshot, delegate { return null; })) {
             form.Show(); form.ShowTranscription(); Application.DoEvents();
-            typeof(MeetingSettingsDialog).GetField("engineLauncher", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(form,
-                new Func<System.Diagnostics.Process>(delegate { return System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c exit 9") { UseShellExecute = false, CreateNoWindow = true }); }));
-            form.BeginPreparation();
-            ((System.Diagnostics.Process)Field(form, "engineProcess")).WaitForExit(5000);
-            typeof(MeetingSettingsDialog).GetMethod("RefreshEngine", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, null);
-            Check(((Button)form.Controls.Find("download_recommended_model", true)[0]).Enabled && form.Controls.Find("engine_detail", true)[0].Text.Contains("未能启动"), "Integrated preparation exposes an exited worker even without a fresh status file");
+            Check(form.Controls.Find("download_recommended_model", true).Length == 0, "No recommended model download control is constructed, even for existing local users");
             ((Button)form.CancelButton).PerformClick();
         }
         using (var form = new MeetingSettingsDialog(snapshot, delegate { calls++; return "synthetic apply failure"; })) {
@@ -484,11 +489,11 @@ internal static class TestMeetingSettings {
             Check(tabs.TabPages.Count == 3, "General, transcription and about pages exist");
             tabs.SelectedIndex = 1; Application.DoEvents();
             var automaticTranscription = (CheckBox)form.Controls.Find("auto_transcribe", true)[0];
-            Check(!automaticTranscription.Checked && !form.Controls.Find("download_recommended_model", true)[0].Visible, "Default record-only settings hide model preparation until explicitly enabled");
+            Check(!automaticTranscription.Checked && form.Controls.Find("download_recommended_model", true).Length == 0, "Default record-only settings have no model download entry");
             automaticTranscription.Checked = true; Application.DoEvents();
-            Check(form.Controls.Find("download_recommended_model", true).Length == 1 && form.Controls.Find("download_recommended_model", true)[0].Visible, "One recommended local model download entry is visible");
+            Check(form.Controls.Find("download_recommended_model", true).Length == 0, "Enabling transcription never exposes a model download entry");
             Check(!Input(form, "asr_terms").Visible && !Input(form, "api_model").Visible, "Local defaults hide advanced and API fields instead of displaying a disabled form");
-            Check(form.Controls.Find("transcription_readiness", true)[0].Text.Contains("尚未启用"), "Actual settings distinguishes choosing local from installing its model");
+            Check(form.Controls.Find("transcription_readiness", true)[0].Text.Contains("已有本地"), "Old model configuration remains available only as compatibility mode");
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-local.png")); }
             ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
             Check(Input(form, "asr_terms").Visible && !Input(form, "api_model").Visible, "Advanced local options expand without exposing API credentials");

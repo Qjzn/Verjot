@@ -192,7 +192,10 @@ class ConfigurationTests(unittest.TestCase):
             self.validate(pause_hotkey="Alt+Space\n")
 
     def test_api_requires_audio_provider_model_and_safe_url(self):
-        for fields in ({}, {"api_base_url": "https://api.example/v1"},
+        self.assertFalse(self.validate(transcription_mode="api")["auto_transcribe"])
+        with self.assertRaises(ValueError):
+            self.validate(transcription_mode="api", auto_transcribe=True)
+        for fields in ({"api_base_url": "https://api.example/v1"},
                        {"api_base_url": "https://secret@api.example/v1", "api_model": "asr"},
                        {"api_base_url": "https://api.example/v1?key=secret", "api_model": "asr"},
                        {"api_base_url": " https://api.example/v1", "api_model": "asr"},
