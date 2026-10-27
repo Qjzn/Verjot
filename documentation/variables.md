@@ -8,6 +8,7 @@
 | 四组 `*_hotkey`/`hotkey` | 设置/配置；当前用户全局热键 | 不允许互相重复；已占用时提示，设置失败不覆盖旧值。 |
 | `recording_protection_seconds` | 设置/配置，默认 5 秒 | 有效录音不足阈值时不保存成品、不调用转写。 |
 | `transcription_mode`、模型目录 | 配置/本机下载；worker | `local`/`api` 决定处理边界；模型和运行环境单独安装。 |
+| `auto_transcribe` | 设置/配置，默认 `false`；开始录音时固定本场选择 | 默认只导出 MP3；开启后结束时转写。手动转写不受此开关限制，已有模型配置保留。 |
 | `api_base_url`、`api_model` | 配置；`api_asr.py` | 决定音频提交目的地，远端应使用 HTTPS；普通聊天接口不能替代语音接口。 |
 | `api_key_env` / `TINGJI_API_KEY` | 配置只存变量名，密钥从进程环境读取 | 更换/撤销在服务商完成，再更新环境变量并重启；不把值写入配置、截图、Issue 或日志。 |
 | `TINGJI_FFMPEG_EXE` | 用户环境；本地编码 | 显式指定可执行文件来源，只使用可信 FFmpeg。 |

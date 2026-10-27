@@ -27,12 +27,65 @@ internal static class TestRecorderPanel {
             bitmap.Save(filename, System.Drawing.Imaging.ImageFormat.Png);
         }
     }
+    static void CheckScreenLayout(RecorderPanel panel, string state, int dpi) {
+        Console.WriteLine("State=" + state + "; dpi=" + dpi + "; size=" + panel.ClientSize + "; brand=" + panel.BrandTitle.Bounds + "; heading=" + panel.Heading.Bounds + "; font=" + panel.Heading.Font.Height);
+        Check(panel.ClientSize == new Size((int)Math.Round(186 * dpi / 96.0), (int)Math.Round(68 * dpi / 96.0)), "Cross-monitor panel retains logical size: " + state);
+        foreach (Control control in panel.Controls) {
+            if (!control.Visible) continue;
+            Check(panel.ClientRectangle.Contains(control.Bounds), "Visible control fits at " + dpi + " DPI: " + control.GetType().Name + " " + state);
+            var label = control as Label;
+            if (label != null && label.Text.Length != 0) {
+                Size line = TextRenderer.MeasureText("国Ag", label.Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+                Check(line.Height <= label.Height, "Label line fits at " + dpi + " DPI: " + label.Text + " required=" + line.Height + " actual=" + label.Height);
+            }
+        }
+        foreach (Control content in new Control[] { panel.Heading, panel.Detail, panel.AudioFile, panel.TranscriptFile, panel.QuickNoteButton, panel.StartButton, panel.SettingsButton })
+            if (content.Visible) {
+                Check(!content.Bounds.IntersectsWith(panel.BrandMark.Bounds) && !content.Bounds.IntersectsWith(panel.BrandTitle.Bounds), "Content never overlaps brand header: " + state);
+                foreach (Control action in new Control[] { panel.QuickNoteButton, panel.StartButton, panel.SettingsButton })
+                    if (action.Visible && content is Label) Check(!content.Bounds.IntersectsWith(action.Bounds), "Labels do not overlap quick actions: " + state);
+            }
+    }
+    static void CheckMonitorMatrix(string output) {
+        Directory.CreateDirectory(output);
+        var failures = new System.Collections.Generic.List<string>();
+        using (var panel = new RecorderPanel()) {
+            panel.Show(); Application.DoEvents();
+            foreach (string state in new[] { "attention", "recording", "processing", "result", "ready" }) {
+                typeof(RecorderPanel).GetMethod("RestoreDpiFonts", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(panel, null);
+                if (state == "attention") panel.ShowAttention("转写完成 · 录音需检查", "默认设备采集告警，请核对原始录音");
+                else if (state == "recording") panel.ShowRecording("Synthetic microphone", "Synthetic system audio");
+                else if (state == "processing") panel.ShowWorking("正在转写", "中文识别 · 23 / 80 段");
+                else if (state == "result") panel.ShowResult("synthetic", "C:\\Demo\\meeting.mp3", "C:\\Demo\\meeting.md", "C:\\Demo");
+                else panel.ShowStatus("verbit 已就绪", "");
+                foreach (Screen screen in Screen.AllScreens) {
+                    panel.Location = new Point(screen.WorkingArea.Left + 80, screen.WorkingArea.Top + 80);
+                    for (int tick = 0; tick < 12; tick++) { Application.DoEvents(); System.Threading.Thread.Sleep(15); }
+                    Snapshot(panel, Path.Combine(output, "matrix-" + state + "-" + panel.DeviceDpi + ".png"));
+                    try { CheckScreenLayout(panel, state + " actual-monitor", panel.DeviceDpi); }
+                    catch (Exception error) { failures.Add(error.Message); Console.WriteLine("FAIL: " + error.Message); }
+                }
+                foreach (int dpi in new[] { 96, 120, 144, 168, 192, 240 }) {
+                    // Exercise production logical geometry/font metrics without
+                    // changing Windows scale or pretending these are real monitors.
+                    typeof(RecorderPanel).GetMethod("ApplyDpiLayout", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(panel, new object[] { dpi });
+                    try { CheckScreenLayout(panel, state + " simulated-metrics", dpi); }
+                    catch (Exception error) { failures.Add(error.Message); Console.WriteLine("FAIL: " + error.Message); }
+                    Snapshot(panel, Path.Combine(output, "simulated-" + state + "-" + dpi + ".png"));
+                }
+            }
+            panel.AllowClose = true;
+        }
+        Check(failures.Count == 0, String.Join("\n", failures.ToArray()));
+    }
     [STAThread]
     static int Main(string[] args) {
         try {
             Application.EnableVisualStyles();
             string output = args.Length > 0 ? Path.GetFullPath(args[0]) : AppDomain.CurrentDomain.BaseDirectory;
             Directory.CreateDirectory(output);
+            if (Array.IndexOf(args, "--screen-matrix") >= 0) { CheckMonitorMatrix(output); Console.WriteLine("PASS monitor matrix: " + assertions); return 0; }
+            CheckMonitorMatrix(Path.Combine(output, "dpi-matrix"));
             using (var panel = new RecorderPanel()) {
                 panel.ShowRecording("Test microphone", "Test speakers");
                 panel.Show();

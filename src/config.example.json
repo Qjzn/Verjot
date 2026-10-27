@@ -27,6 +27,7 @@
   "notify_device_changes": true,
   "auto_open_completed_note": true,
   "transcription_mode": "local",
+  "auto_transcribe": false,
   "api_base_url": "",
   "api_model": "",
   "api_key_env": "TINGJI_API_KEY",

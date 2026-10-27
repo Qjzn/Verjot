@@ -2,7 +2,7 @@
 
 The installer contains the desktop controller, the reviewed NAudio 1.10.0 DLL with its Ms-PL license, configuration examples, runtime/bootstrap source, and user documentation. It never packages the developer's configuration, notes, recordings, logs, `work`, Python environment, models, or FFmpeg. New files require an explicit addition to `Build-Installer.ps1`.
 
-The per-user default is `%LOCALAPPDATA%\Programs\verbit`. First launch opens settings without needing Python. Quick notes work immediately. Meeting recording/transcription requires a separate runtime setup; see [installation instructions](../documentation/install-windows.md). The installer does not download models or install system prerequisites. It checks .NET Framework 4.8 and requires Windows 10 1809 / Windows 11 x64.
+The per-user default is `%LOCALAPPDATA%\Programs\verbit`. First launch opens settings without needing Python. Quick notes and native recording work before model setup; transcription requires separately prepared dependencies and models. Recording-only is the default. The optional installer task or settings entry explicitly prepares the recommended local transcription environment; the lightweight payload itself contains no Python or model. See [installation instructions](../documentation/install-windows.md). Setup checks .NET Framework 4.8 and requires Windows 10 1809 / Windows 11 x64.
 
 Build from a reviewed checkout using Windows PowerShell 5.1 or newer:
 
@@ -16,7 +16,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Get-InnoCompiler
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-Installer.ps1
 ```
 
-Alternatively supply `-CompilerPath 'C:\...\ISCC.exe'`. The build stages a new allowlisted directory, builds from that staged source, writes a SHA256 file manifest, and produces `validation\release\verbit-0.1.0-beta.2-setup-x64.exe` plus `SHA256SUMS.txt`. It does not replace a running local controller. Builds are repeatable through the script; byte-for-byte determinism is not claimed. These beta artifacts have no Authenticode signing certificate.
+Alternatively supply `-CompilerPath 'C:\...\ISCC.exe'`. The build stages a new allowlisted directory, builds from that staged source, writes a SHA256 file manifest, and produces `validation\release\verbit-0.1.0-beta.10-setup-x64.exe` plus `SHA256SUMS.txt`. It does not replace a running local controller. Builds are repeatable through the script; byte-for-byte determinism is not claimed. These beta artifacts have no Authenticode signing certificate.
 
 The pinned compiler is [Inno Setup 6.7.3 from its official release](https://github.com/jrsoftware/issrc/releases/tag/is-6_7_3), distributed by Pyrsys B.V.; [official verification and portable-mode documentation](https://jrsoftware.org/isdl-verify.php), [portable mode](https://jrsoftware.org/ishelp/topic_technotes.htm). Inno Setup's own license and applicable commercial-use terms remain in effect for the build tool. The compiler is not included in the product payload.
 

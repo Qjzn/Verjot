@@ -4,11 +4,45 @@ using System.Runtime.InteropServices;
 using System.Reflection;
 
 internal static class TestDesktopServices {
+    static void LocalReadiness() {
+        string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "engine-receipt-fixture"); Directory.CreateDirectory(root);
+        Check(!LocalEngineState.Read(root).Ready, "A new installation is not marked ready");
+        string[] files = { ".venv/Scripts/python.exe", "check_local_engine.py", "asr_engine.py", "prepare_audio.py", "assets/engine-check.wav",
+            "models/Qwen3-ASR-1.7B-hf/config.json", "models/Qwen3-ASR-1.7B-hf/model.safetensors", "models/Qwen3-ASR-1.7B-hf/processor_config.json",
+            "models/Qwen3-ASR-1.7B-hf/tokenizer_config.json", "models/Qwen3-ASR-1.7B-hf/tokenizer.json", "models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+            ".venv/Lib/site-packages/torch/__init__.py", ".venv/Lib/site-packages/transformers/__init__.py", ".venv/Lib/site-packages/sherpa_onnx/__init__.py", "models/segmentation/model.onnx" };
+        var manifest = new System.Collections.Generic.List<object>();
+        foreach (string name in files) {
+            string path = Path.Combine(root, name); Directory.CreateDirectory(Path.GetDirectoryName(path)); File.WriteAllText(path, "synthetic file metadata only");
+            var info = new FileInfo(path); manifest.Add(new { path = name, size = info.Length, mtime_ns = (info.LastWriteTimeUtc.Ticks - 621355968000000000L) * 100 });
+        }
+        Directory.CreateDirectory(Path.Combine(root, "installation"));
+        string receipt = Path.Combine(root, "installation", "local-ready.json");
+        MeetingFiles.WriteJson(receipt, new { version = 1, state = "ready", files = manifest });
+        Check(LocalEngineState.Read(root).Ready, "A matching smoke-test receipt is reused without loading a model");
+        string setupLock = Path.Combine(root, "recommended-model.lock");
+        using (var handle = new FileStream(setupLock, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            Check(LocalEngineState.Read(root).Busy && !LocalEngineState.Read(root).Ready, "Active setup overrides a prior ready receipt");
+        MeetingFiles.WriteJson(Path.Combine(root, "installation", "recommended-model.json"), new { state = "verifying" });
+        Check(!LocalEngineState.Read(root).Ready && LocalEngineState.Read(root).Action == "继续准备", "Interrupted verification is recoverable and never ready");
+        MeetingFiles.WriteJson(Path.Combine(root, "installation", "recommended-model.json"), new { state = "completed" });
+        File.AppendAllText(Path.Combine(root, files[6]), "changed");
+        Check(!LocalEngineState.Read(root).Ready, "Changed model files invalidate readiness");
+        File.WriteAllText(receipt, "{broken");
+        Check(!LocalEngineState.Read(root).Ready, "A damaged receipt never enables local transcription");
+    }
     static int count;
     static void Check(bool ok, string message) { if (!ok) throw new Exception(message); count++; }
     static void Reject(Action action, string message) { bool rejected = false; try { action(); } catch (InvalidDataException) { rejected = true; } Check(rejected, message); }
     [STAThread] static int Main() {
         try {
+            foreach (int dpi in new[] { 96, 120, 144, 192, 240 })
+                foreach (var work in new[] { new System.Drawing.Rectangle(0, 0, 1024, 560), new System.Drawing.Rectangle(0, 0, 1920, 1040), new System.Drawing.Rectangle(-1280, -100, 1280, 680) }) {
+                    var desired = new System.Drawing.Rectangle(work.Right - 50, work.Bottom - 50, 600 * dpi / 96, 700 * dpi / 96);
+                    var fit = DesktopServices.FitWindowBounds(desired, work);
+                    Check(work.Contains(fit) && fit.Width > 0 && fit.Height > 0, "Dialog fits small/offset work areas at " + dpi + " DPI");
+                    Check(DesktopServices.FitWindowBounds(fit, work) == fit, "Work-area clamping is stable");
+                }
             string setupRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "model-setup-gate"); Directory.CreateDirectory(setupRoot);
             using (DesktopServices.EnterModelSetupGate(setupRoot)) {
                 bool blocked = false; try { using (DesktopServices.EnterModelSetupGate(setupRoot)) { } } catch (IOException) { blocked = true; }
@@ -32,6 +66,7 @@ internal static class TestDesktopServices {
             Check(DesktopServices.ReleaseSummary(release, "0.1.0-beta.4").Contains("beta.10"), "Draft excluded; beta checked without latest endpoint");
             Check(DesktopServices.ReleaseSummary("[]", "0.1.0-beta.4-dev").Contains("没有更高"), "No releases and dev builds supported");
             Reject(delegate { DesktopServices.ReleaseSummary("{}", "0.1.0"); }, "Malformed metadata rejected");
+            LocalReadiness();
             System.Windows.Forms.Application.EnableVisualStyles();
             string document = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "synthetic-changelog.md");
             File.WriteAllText(document, "# 版本说明\r\n中文离线说明，无需文件关联。", new System.Text.UTF8Encoding(false));

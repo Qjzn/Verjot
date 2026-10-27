@@ -9,6 +9,20 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 internal static class DesktopServices {
+    internal static System.Drawing.Rectangle FitWindowBounds(System.Drawing.Rectangle bounds, System.Drawing.Rectangle work) {
+        int width = Math.Min(bounds.Width, work.Width), height = Math.Min(bounds.Height, work.Height);
+        return new System.Drawing.Rectangle(Math.Max(work.Left, Math.Min(bounds.Left, work.Right - width)),
+            Math.Max(work.Top, Math.Min(bounds.Top, work.Bottom - height)), width, height);
+    }
+    internal static void KeepWindowOnScreen(System.Windows.Forms.Form window) {
+        Action fit = delegate {
+            if (!window.IsDisposed) window.Bounds = FitWindowBounds(window.Bounds, System.Windows.Forms.Screen.FromControl(window).WorkingArea);
+        };
+        window.Shown += delegate { fit(); };
+        window.DpiChanged += delegate {
+            if (window.IsHandleCreated && !window.IsDisposed) window.BeginInvoke(fit);
+        };
+    }
     public const string Repository = "https://github.com/Qjzn/verbit";
     public const int ShowMessage = 0x802a;
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr child, string className, string title);
@@ -30,6 +44,10 @@ internal static class DesktopServices {
         };
     }
     public static void DownloadRecommendedModel() { using (var process = Process.Start(RecommendedModelStartInfo())) { } }
+    public static Process PrepareLocalTranscription() {
+        var start = RecommendedModelStartInfo(); start.Arguments += " -Worker";
+        return Process.Start(start);
+    }
     // Held until a transcription worker publishes its identity. Native capture
     // does not use Python or model files and may start during model setup.
     public static IDisposable EnterModelSetupGate(string home) { return new ModelSetupGate(home); }
@@ -48,7 +66,7 @@ internal static class DesktopServices {
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.6-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.10-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {
@@ -108,6 +126,7 @@ internal static class DesktopServices {
         var reader = new System.Windows.Forms.TextBox { Name = "document_text", Text = text, ReadOnly = true, Multiline = true,
             Dock = System.Windows.Forms.DockStyle.Fill, ScrollBars = System.Windows.Forms.ScrollBars.Vertical, WordWrap = true };
         window.Controls.Add(reader);
+        KeepWindowOnScreen(window);
         return window;
     }
     public static bool Newer(string candidate, string current) {
@@ -163,5 +182,85 @@ internal static class DesktopServices {
             }
             throw new IOException("检查更新失败，请检查网络后重试；当前版本可继续使用。", error);
         }
+    }
+}
+
+internal sealed class LocalEngineState {
+    public bool Ready, Busy;
+    public string Title, Detail, Action;
+    public static LocalEngineState Read(string root) {
+        var value = new LocalEngineState { Title = "尚未启用", Detail = "仅首次准备，约占 5 GB；音频留在电脑。", Action = "启用本地转写" };
+        try {
+            string statusPath = Path.Combine(root, "installation", "recommended-model.json");
+            MeetingConfig.CheckOrdinaryPath(statusPath);
+            var status = File.Exists(statusPath) ? MeetingFiles.ReadJson(statusPath) : new Dictionary<string, object>();
+            string state = MeetingFiles.Text(status, "state", "");
+            string lockPath = Path.Combine(root, "recommended-model.lock"); MeetingConfig.CheckOrdinaryPath(lockPath);
+            if (File.Exists(lockPath)) {
+                try { using (var handle = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { } }
+                catch (IOException) { value.Busy = true; }
+            }
+            if (value.Busy) {
+                value.Title = state == "verifying" ? "正在验证中文转写" : "正在准备本地转写";
+                value.Detail = MeetingFiles.Text(status, "message", "已下载内容会保留；可以关闭设置，后台继续。");
+                string progressPath = Path.Combine(root, "models", "download-status.json");
+                if (state == "installing" && File.Exists(progressPath) && File.GetLastWriteTimeUtc(progressPath) >= File.GetLastWriteTimeUtc(statusPath)) {
+                    MeetingConfig.CheckOrdinaryPath(progressPath);
+                    var progress = MeetingFiles.ReadJson(progressPath);
+                    if (MeetingFiles.Text(progress, "state", "") == "downloading") {
+                        double received, total, speed;
+                        if (double.TryParse(MeetingFiles.Text(progress, "received", "0"), out received) && double.TryParse(MeetingFiles.Text(progress, "total", "0"), out total) && total > 0) {
+                            double.TryParse(MeetingFiles.Text(progress, "bytes_per_second", "0"), out speed);
+                            value.Detail = string.Format("正在下载当前文件：{0:N0}% · {1:N0}/{2:N0} MB · {3:N1} MB/s。关闭设置后继续。", 100 * received / total, received / 1048576, total / 1048576, speed / 1048576);
+                        }
+                    }
+                }
+                value.Action = "准备中…"; return value;
+            }
+            if (state == "error" || state == "preparing" || state == "installing" || state == "verifying") {
+                value.Title = "准备未完成"; value.Action = "继续准备";
+                value.Detail = state == "error" ? MeetingFiles.Text(status, "message", "请重试，已下载文件会复用。") : "上次准备已中断，继续时复用已下载文件。";
+                return value;
+            }
+            if (Verified(root)) {
+                value.Ready = true; value.Title = "本地转写已可用"; value.Action = "已就绪";
+                value.Detail = "内置中文样本试运行通过 · 千问 1.7B · 音频不上传"; return value;
+            }
+            string python = Path.Combine(root, ".venv", "Scripts", "python.exe");
+            if (File.Exists(python)) {
+                value.Title = "需要完成验证"; value.Action = "验证并启用";
+                value.Detail = "复用已有组件，补齐缺失文件并测试一次中文转写。";
+            }
+        } catch (Exception error) {
+            value.Title = "状态需要检查"; value.Action = "重新检查";
+            value.Detail = "无法读取本地状态：" + error.Message;
+        }
+        return value;
+    }
+    public static bool Verified(string root) {
+        try {
+            string path = Path.Combine(root, "installation", "local-ready.json"); MeetingConfig.CheckOrdinaryPath(path);
+            if (!File.Exists(path) || new FileInfo(path).Length > 128 * 1024) return false;
+            var receipt = MeetingFiles.ReadJson(path);
+            if (MeetingFiles.Text(receipt, "version", "") != "1" || MeetingFiles.Text(receipt, "state", "") != "ready") return false;
+            object files;
+            if (!receipt.TryGetValue("files", out files) || !(files is IEnumerable)) return false;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (object entry in (IEnumerable)files) {
+                var row = entry as Dictionary<string, object>; if (row == null) return false;
+                string relative = MeetingFiles.Text(row, "path", "");
+                string full = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+                if (relative.Length == 0 || Path.IsPathRooted(relative) || !full.StartsWith(Path.GetFullPath(root).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) return false;
+                MeetingConfig.CheckOrdinaryPath(full);
+                var info = new FileInfo(full);
+                if (!info.Exists || info.Length == 0 || info.Length != Convert.ToInt64(row["size"]) ||
+                    info.LastWriteTimeUtc.Ticks != Convert.ToInt64(row["mtime_ns"]) / 100 + 621355968000000000L || !names.Add(relative)) return false;
+            }
+            foreach (string required in new[] { ".venv/Scripts/python.exe", "check_local_engine.py", "asr_engine.py", "prepare_audio.py", "assets/engine-check.wav",
+                "models/Qwen3-ASR-1.7B-hf/config.json", "models/Qwen3-ASR-1.7B-hf/model.safetensors", "models/Qwen3-ASR-1.7B-hf/processor_config.json",
+                "models/Qwen3-ASR-1.7B-hf/tokenizer_config.json", "models/Qwen3-ASR-1.7B-hf/tokenizer.json", "models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+                ".venv/Lib/site-packages/torch/__init__.py", ".venv/Lib/site-packages/transformers/__init__.py", ".venv/Lib/site-packages/sherpa_onnx/__init__.py" }) if (!names.Contains(required)) return false;
+            return names.Count == 15 && (names.Contains("models/segmentation/model.onnx") || names.Contains("models/sherpa-onnx-pyannote-segmentation-3-0/model.onnx") || names.Contains("models/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx"));
+        } catch { return false; }
     }
 }

@@ -10,7 +10,7 @@ using System.Web.Script.Serialization;
 // Only controller metadata is written here. Recorded audio and notes are never opened.
 internal sealed class SessionRecord {
     public string DirectoryPath, Label, State, Message, NotePath, AudioPath, Fingerprint;
-    public bool CanRetry, NeedsAttention, WorkerAlive;
+    public bool CanRetry, NeedsAttention, WorkerAlive, OutputsComplete;
     public int WorkerPid;
     public DateTime WorkerStartUtc;
     public DateTime WorkerLaunchUtc, PreviousStatusWriteUtc;
@@ -81,12 +81,13 @@ internal sealed class SessionCatalog {
         catch (Exception error) { return InvalidRecord(path, error); }
     }
 
-    public void SaveWorker(string session, Process process, DateTime launchUtc = default(DateTime), DateTime previousStatusUtc = default(DateTime), bool audioExport = false) {
+    public void SaveWorker(string session, Process process, DateTime launchUtc = default(DateTime), DateTime previousStatusUtc = default(DateTime), bool audioExport = false, bool transcribeAfterExport = true) {
         session = CheckSession(session);
         string controllerPath = Path.Combine(session, "controller.json");
         var controller = ReadJson(controllerPath, true);
         controller["schema_version"] = 1;
         controller["audio_export_only"] = audioExport;
+        controller["transcribe_after_export"] = transcribeAfterExport;
         controller["worker_pid"] = process == null ? 0 : process.Id;
         string started = process == null ? "" : process.StartTime.ToUniversalTime().ToString("o");
         controller["worker_start_time_utc"] = started;
@@ -216,6 +217,7 @@ internal sealed class SessionCatalog {
             bool noteExists = File.Exists(record.NotePath), audioExists = File.Exists(record.AudioPath);
             bool verifiedStatus = Text(status, "merge_error", "").Length == 0 && Text(status, "artifact_error", "").Length == 0;
             bool hasArtifacts = declaredArtifacts && noteExists && audioExists && verifiedStatus;
+            record.OutputsComplete = hasArtifacts;
             bool captureNeedsReview = metadataState == "recorded_with_error" ||
                 !string.IsNullOrWhiteSpace(Text(metadata, "capture_error", "")) ||
                 !string.IsNullOrWhiteSpace(Text(status, "capture_error", "")) ||
@@ -252,6 +254,10 @@ internal sealed class SessionCatalog {
                 record.CanRetry = true;
                 record.Message = "转录已保存，录音生成失败；可重试生成成品";
             }
+        } else if (fresh && statusState == "audio_ready" && Text(status, "stage", "") == "recording_only" && File.Exists(record.AudioPath)) {
+            record.State = metadataState == "recorded_with_error" ? "recorded_warning" : "recorded";
+            record.CanRetry = true;
+            record.Message = record.State == "recorded_warning" ? "MP3 已保存；采集存在异常，请检查录音和恢复资料" : "MP3 已保存 · 仅录音；可手动转写，无损资料暂保留";
         } else if (fresh && (statusState == "failed" || statusState == "error")) {
             record.State = "failed";
             record.CanRetry = true;

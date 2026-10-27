@@ -80,7 +80,22 @@ internal sealed class QuickNoteScrollBar : Control {
     [StructLayout(LayoutKind.Sequential)] struct ScrollInfo { internal uint Size, Mask; internal int Min, Max; internal uint Page; internal int Pos, Track; }
     [DllImport("user32.dll")] static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref ScrollInfo info);
     [DllImport("user32.dll", EntryPoint = "SendMessageW")] static extern IntPtr PointMessage(IntPtr hwnd, int message, IntPtr wparam, ref Point point);
-    internal RichTextBox Target;
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")] static extern IntPtr NativeMessage(IntPtr hwnd, int message, IntPtr wparam, IntPtr lparam);
+    RichTextBox target;
+    int contentHeight;
+    bool extentDirty = true;
+    internal RichTextBox Target {
+        get { return target; }
+        set {
+            if (target == value) return;
+            if (target != null) { target.TextChanged -= ExtentChanged; target.SizeChanged -= ExtentChanged; target.FontChanged -= ExtentChanged; }
+            target = value; contentHeight = 0; extentDirty = true;
+            if (target != null) { target.TextChanged += ExtentChanged; target.SizeChanged += ExtentChanged; target.FontChanged += ExtentChanged; }
+            Invalidate();
+        }
+    }
+    void ExtentChanged(object sender, EventArgs e) { extentDirty = true; Invalidate(); }
+    void ContentResized(object sender, ContentsResizedEventArgs e) { contentHeight = e.NewRectangle.Height; }
     bool hover, dragging;
     int dragOffset;
     internal QuickNoteScrollBar() {
@@ -91,7 +106,19 @@ internal sealed class QuickNoteScrollBar : Control {
     internal static void SetPosition(RichTextBox target, Point position) { if (target.IsHandleCreated) PointMessage(target.Handle, 0x4de, IntPtr.Zero, ref position); }
     ScrollInfo Info() {
         var info = new ScrollInfo { Size = (uint)Marshal.SizeOf(typeof(ScrollInfo)), Mask = 0x17 };
-        if (Target != null && Target.IsHandleCreated) GetScrollInfo(Target.Handle, 1, ref info);
+        if (Target != null && Target.IsHandleCreated && extentDirty) {
+            // Request the extent lazily while painting/using the scrollbar,
+            // outside RichEdit's WM_CHAR / IME editing path. A permanently
+            // enabled EN_REQUESTRESIZE adds synchronous work to every edit.
+            extentDirty = false; contentHeight = 0;
+            Target.ContentsResized += ContentResized;
+            try { NativeMessage(Target.Handle, 0x441, IntPtr.Zero, IntPtr.Zero); }
+            finally { Target.ContentsResized -= ContentResized; }
+        }
+        // Forced native scrollbars may retain their former range after Clear.
+        // Never draw that stale range for an empty document.
+        if (Target != null && Target.IsHandleCreated && Target.TextLength != 0 &&
+            (contentHeight == 0 || contentHeight > Target.ClientSize.Height)) GetScrollInfo(Target.Handle, 1, ref info);
         return info;
     }
     Rectangle Thumb(ScrollInfo info) {
@@ -128,6 +155,13 @@ internal sealed class QuickNoteScrollBar : Control {
         Point position = Position(Target); position.Y = (int)((long)Math.Max(0, Math.Min(span, y - dragOffset)) * maximum / span);
         SetPosition(Target, position); Invalidate();
     }
+    protected override void Dispose(bool disposing) { if (disposing) Target = null; base.Dispose(disposing); }
+}
+
+// Buffer just the navigation background. Native RichEdit retains its own
+// independent paint and input path, including during toolbar transitions.
+internal sealed class QuickNoteChromePanel : Panel {
+    internal QuickNoteChromePanel() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true); }
 }
 
 // Owned, non-activating rail. Animation runs only for 150ms transitions; the
@@ -145,7 +179,8 @@ internal sealed class QuickNoteTabs : Form {
     string[] files = new string[0];
     string current;
     int hovered = -1;
-    float reveal, targetReveal, emphasis, targetEmphasis;
+    float reveal, targetReveal;
+    float[] emphasis = new float[1];
     int lastTick;
     internal QuickNoteTabs() {
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
@@ -154,9 +189,15 @@ internal sealed class QuickNoteTabs : Form {
         AccessibleName = "最近便签标签";
         animation.Tick += delegate {
             int now = Environment.TickCount; float amount = 1 - (float)Math.Exp(-Math.Max(1, unchecked(now - lastTick)) / 36.0); lastTick = now;
-            reveal += (targetReveal - reveal) * amount; emphasis += (targetEmphasis - emphasis) * amount;
-            if (Math.Abs(targetReveal - reveal) < .01f && Math.Abs(targetEmphasis - emphasis) < .01f) {
-                reveal = targetReveal; emphasis = targetEmphasis; animation.Stop(); if (reveal == 0) Hide();
+            reveal += (targetReveal - reveal) * amount;
+            bool settled = Math.Abs(targetReveal - reveal) < .01f;
+            for (int i = 0; i < emphasis.Length; i++) {
+                float target = i == hovered ? 1 : 0;
+                emphasis[i] += (target - emphasis[i]) * amount;
+                if (Math.Abs(target - emphasis[i]) < .01f) emphasis[i] = target; else settled = false;
+            }
+            if (settled) {
+                reveal = targetReveal; animation.Stop(); if (reveal == 0) Hide();
             }
             Invalidate();
         };
@@ -168,16 +209,17 @@ internal sealed class QuickNoteTabs : Form {
         bool changed = current != selected || files.Length != names.Length;
         for (int i = 0; !changed && i < names.Length; i++) changed = files[i] != names[i];
         if (!changed) return;
-        files = names; current = selected; hovered = -1; tip.Hide(this);
+        files = names; current = selected; hovered = -1; emphasis = new float[files.Length + 1]; tip.Hide(this);
         Height = (files.Length + 1) * Row; Invalidate();
     }
     void Animate() { lastTick = Environment.TickCount; if (!animation.Enabled) animation.Start(); }
     internal void Reveal() { if (targetReveal == 1) return; targetReveal = 1; Animate(); }
-    internal void Conceal() { tip.Hide(this); hovered = -1; targetReveal = targetEmphasis = 0; if (Visible) Animate(); }
+    internal void Conceal() { tip.Hide(this); hovered = -1; targetReveal = 0; if (Visible) Animate(); }
+    internal void SuspendForMove() { tip.Hide(this); hovered = -1; targetReveal = reveal = 0; Array.Clear(emphasis, 0, emphasis.Length); animation.Stop(); Hide(); }
     int Hit(Point point) { int row = point.Y / Row; return (OnRight ? point.X < Width * 4 / 5 : point.X >= Width / 5) && point.X >= 0 && point.X < Width && point.Y >= 0 && row <= files.Length ? row : -1; }
     protected override void OnMouseMove(MouseEventArgs e) {
         base.OnMouseMove(e); int index = Hit(e.Location); if (index == hovered) return;
-        tip.Hide(this); hovered = index; emphasis = 0; targetEmphasis = index >= 0 ? 1 : 0; Animate();
+        tip.Hide(this); hovered = index; Animate();
         if (HoverFile != null) HoverFile(index >= 0 && index < files.Length ? files[index] : null);
         if (index >= 0 && index < files.Length) ShowFileTip(files[index] + (files[index] == current ? "\n当前便签" : "\n悬停预览 · 点击切换"));
     }
@@ -216,7 +258,7 @@ internal sealed class QuickNoteTabs : Form {
     }
     protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); tip.Hide(this); }
     protected override void OnMouseLeave(EventArgs e) {
-        base.OnMouseLeave(e); tip.Hide(this); hovered = -1; targetEmphasis = 0; Animate();
+        base.OnMouseLeave(e); tip.Hide(this); hovered = -1; Animate();
         if (LeaveRail != null) LeaveRail();
     }
     protected override void OnMouseDown(MouseEventArgs e) {
@@ -234,7 +276,7 @@ internal sealed class QuickNoteTabs : Form {
         Color[] colors = { Color.FromArgb(255, 241, 183), Color.FromArgb(224, 239, 223), Color.FromArgb(222, 235, 249), Color.FromArgb(236, 226, 245), Color.FromArgb(249, 229, 215) };
         for (int i = 0; i <= files.Length; i++) {
             bool selected = i < files.Length && String.Equals(files[i], current, StringComparison.OrdinalIgnoreCase);
-            float extra = selected ? 7 : i == hovered ? 7 * emphasis : 0;
+            float extra = selected ? 7 : 7 * emphasis[i];
             int width = (int)((70 + extra) * DeviceDpi / 96f * reveal), height = Row - 7 * DeviceDpi / 96;
             if (width < 8) continue;
             Rectangle r = new Rectangle(Width - width, i * Row + 2, width + 6, height);
@@ -314,21 +356,49 @@ internal sealed class QuickNoteRecentPicker : UserControl {
     }
 }
 
+// A tiny, interruptible color transition. The timer is off at rest, and never
+// changes control bounds or repaints the native document.
+internal sealed class QuickNoteHoverFeedback : IDisposable {
+    readonly Timer timer = new Timer { Interval = 16 };
+    internal float Value;
+    float target;
+    int previous;
+    internal QuickNoteHoverFeedback(Action invalidate) {
+        timer.Tick += delegate {
+            int now = Environment.TickCount;
+            Value += (target - Value) * (1 - (float)Math.Exp(-Math.Max(1, unchecked(now - previous)) / 26.0)); previous = now;
+            if (Math.Abs(Value - target) < .015f) { Value = target; timer.Stop(); }
+            invalidate();
+        };
+    }
+    internal void Set(bool hovered) {
+        float next = hovered ? 1 : 0;
+        if (target == next) return;
+        target = next; previous = Environment.TickCount; timer.Start();
+    }
+    internal Color Background(Color normal, bool active) {
+        Color highlight = Color.FromArgb(231, 239, 248); float amount = active ? 1 : Value;
+        return Color.FromArgb((int)Math.Round(normal.R + (highlight.R - normal.R) * amount), (int)Math.Round(normal.G + (highlight.G - normal.G) * amount), (int)Math.Round(normal.B + (highlight.B - normal.B) * amount));
+    }
+    public void Dispose() { timer.Dispose(); }
+}
+
 internal sealed class QuickNoteHeaderButton : Button {
     public bool IsPin;
     internal string ActionIcon;
     public bool Pinned;
-    bool hover;
+    readonly QuickNoteHoverFeedback hover;
     public QuickNoteHeaderButton() {
+        hover = new QuickNoteHoverFeedback(Invalidate);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
         BackColor = Color.FromArgb(250, 250, 248); ForeColor = Color.FromArgb(55, 96, 138);
         TabStop = true; Size = new Size(32, 30);
-        MouseEnter += delegate { hover = true; Invalidate(); };
-        MouseLeave += delegate { hover = false; Invalidate(); };
+        MouseEnter += delegate { hover.Set(true); };
+        MouseLeave += delegate { hover.Set(false); };
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
     }
     protected override void OnPaint(PaintEventArgs e) {
-        e.Graphics.Clear(hover ? Color.FromArgb(231, 239, 248) : BackColor);
+        e.Graphics.Clear(hover.Background(BackColor, false));
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, cx = Width / 2f, cy = Height / 2f;
         using (var pen = new Pen(IsPin && Pinned ? Color.FromArgb(40, 104, 168) : ForeColor, 1.6f * scale)) {
@@ -352,6 +422,7 @@ internal sealed class QuickNoteHeaderButton : Button {
         }
         if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4));
     }
+    protected override void Dispose(bool disposing) { if (disposing) hover.Dispose(); base.Dispose(disposing); }
 }
 
 internal sealed class QuickNoteTitle : Label {
@@ -365,16 +436,17 @@ internal sealed class QuickNoteTitle : Label {
 internal sealed class QuickNoteFormatButton : Button {
     internal string Format;
     internal bool Active;
-    bool hover;
+    readonly QuickNoteHoverFeedback hover;
     internal QuickNoteFormatButton() {
+        hover = new QuickNoteHoverFeedback(Invalidate);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TabStop = true;
         Size = new Size(34, 30); Margin = new Padding(0, 0, 2, 0);
         BackColor = Color.FromArgb(250, 250, 248); ForeColor = Color.FromArgb(55, 75, 95);
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-        MouseEnter += delegate { hover = true; Invalidate(); }; MouseLeave += delegate { hover = false; Invalidate(); };
+        MouseEnter += delegate { hover.Set(true); }; MouseLeave += delegate { hover.Set(false); };
     }
     protected override void OnPaint(PaintEventArgs e) {
-        e.Graphics.Clear(hover || Active ? Color.FromArgb(231, 239, 248) : BackColor);
+        e.Graphics.Clear(hover.Background(BackColor, Active));
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, x = Width / 2f, y = Height / 2f;
         using (var pen = new Pen(Enabled ? ForeColor : SystemColors.GrayText, 1.4f * scale)) {
@@ -401,6 +473,7 @@ internal sealed class QuickNoteFormatButton : Button {
         }
         if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
     }
+    protected override void Dispose(bool disposing) { if (disposing) hover.Dispose(); base.Dispose(disposing); }
 }
 
 internal sealed class QuickNoteWindow : Form {
@@ -431,6 +504,7 @@ internal sealed class QuickNoteWindow : Form {
     int previewEpoch;
     bool chromeVisible = true, statusShown, statusError;
     bool tabsHaveSpace = true;
+    bool movingWindow;
     Rectangle imageDragStart, imageDragOutline;
     int imageDragCp = -1, imageDragHandle;
     bool previewCaretHidden;
@@ -488,7 +562,7 @@ internal sealed class QuickNoteWindow : Form {
         Padding = new Padding(4); SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer, true);
         ClientSize = new Size(360, 420); MinimumSize = new Size(280, 240);
         StartPosition = FormStartPosition.Manual; BackColor = Color.FromArgb(250, 250, 248);
-        top = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = BackColor };
+        top = new QuickNoteChromePanel { Dock = DockStyle.Top, Height = 40, BackColor = BackColor };
         dateLabel = new QuickNoteTitle { TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, UseMnemonic = false, ForeColor = Color.FromArgb(36, 59, 83), AccessibleName = "当前便签文件名" };
         brand = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Image = MeetingBrand.LogoBitmap(48), AccessibleName = "片言 Logo" };
         newButton = new QuickNoteHeaderButton { ActionIcon = "new", AccessibleName = "新建便签", Name = "note-new" };
@@ -513,7 +587,7 @@ internal sealed class QuickNoteWindow : Form {
         viewport.Resize += delegate { LayoutEditors(); };
         editor.VScroll += delegate { CancelImageDrag(); scroll.Invalidate(); };
         editor.HScroll += delegate { CancelImageDrag(); };
-        formatBar = new Panel { Dock = DockStyle.Bottom, Height = 38, BackColor = BackColor, AccessibleName = "速记格式工具栏", Enabled = false };
+        formatBar = new QuickNoteChromePanel { Dock = DockStyle.Bottom, Height = 38, BackColor = BackColor, AccessibleName = "速记格式工具栏", Enabled = false };
         string[] formats = { "bold", "italic", "underline", "strike", "bullet", "image", "location" };
         string[] labels = { "加粗 · Ctrl+B", "斜体 · Ctrl+I", "下划线 · Ctrl+U", "删除线 · Ctrl+Shift+X", "圆点列表 · Ctrl+Shift+L", "插入图片…", "保存位置与恢复选项" };
         for (int index = 0; index < formats.Length; index++) {
@@ -532,9 +606,8 @@ internal sealed class QuickNoteWindow : Form {
         LayoutFormatBar();
         formatBar.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Color.FromArgb(226, 230, 233))) e.Graphics.DrawLine(pen, 12, 0, formatBar.Width - 12, 0); };
         Controls.Add(body); Controls.Add(status); Controls.Add(formatBar); Controls.Add(top);
-        // Keep the content's screen rectangle fixed while hiding chrome. A
-        // cropped native window region removes empty bands without reflowing
-        // RichEdit, moving the caret, or changing its scroll position.
+        // Keep the top-level HWND geometry stable. Replacing the window
+        // Region on pointer entry/exit forces a full native repaint.
         top.Dock = body.Dock = formatBar.Dock = status.Dock = DockStyle.None;
         nativeDocument = new NativeNoteDocument(editor, null);
         editor.ImagePointer = HandleImagePointer;
@@ -566,7 +639,7 @@ internal sealed class QuickNoteWindow : Form {
         dateLabel.Cursor = Cursors.Hand;
         tips.SetToolTip(dateLabel, "点击切换便签");
         dateLabel.Click += delegate { ShowRecentMenu(); };
-        Move += delegate { EraseImageOutline(); PositionTabs(); }; Resize += delegate { CancelImageDrag(); LayoutChrome(); if (tabs != null && tabs.Visible) { UpdateTabs(); PositionTabs(); } };
+        Move += delegate { EraseImageOutline(); if (!movingWindow && tabs != null && tabs.Visible) PositionTabs(); }; Resize += delegate { CancelImageDrag(); LayoutChrome(); if (!movingWindow && tabs != null && tabs.Visible) { UpdateTabs(); PositionTabs(); } };
         VisibleChanged += delegate { if (!Visible) { CancelPreview(); HideTabs(); } };
         Deactivate += delegate { CancelImageDrag(); if (tabs == null || !tabs.Bounds.Contains(Cursor.Position)) { CancelPreview(); HideTabs(); UpdateChromeForPointer(Cursor.Position); } };
         hoverTimer.Tick += delegate { hoverTimer.Stop(); StartPreview(); };
@@ -608,6 +681,24 @@ internal sealed class QuickNoteWindow : Form {
         base.OnLoad(e);
         // Persisted bounds are physical pixels, after initial WinForms scaling.
         RestoreWindowState();
+    }
+    protected override void OnShown(EventArgs e) {
+        base.OnShown(e); RefreshChromeScale();
+        // OnLoad can move to a monitor with a different DPI. Its suggested
+        // bounds are then scaled by Windows; reapply the saved physical size
+        // only after that initial transition, before presenting the note.
+        RestoreWindowState(); RefreshChromeScale();
+    }
+    protected override void OnDpiChanged(DpiChangedEventArgs e) { base.OnDpiChanged(e); RefreshChromeScale(); }
+    internal static Size MinimumForWorkArea(int dpi, Size work) {
+        return new Size(Math.Min((int)Math.Round(280 * dpi / 96f), work.Width), Math.Min((int)Math.Round(240 * dpi / 96f), work.Height));
+    }
+    void RefreshChromeScale() {
+        if (top == null || formatBar == null || IsDisposed) return;
+        Rectangle work = Screen.FromControl(this).WorkingArea;
+        MinimumSize = MinimumForWorkArea(DeviceDpi, work.Size);
+        LayoutChrome(); LayoutHeader(); LayoutFormatBar();
+        if (Visible && !movingWindow) Bounds = FitWindowBounds(Bounds, work, MinimumSize);
     }
     public void Toggle() {
         if (IsDisposed) return;
@@ -1261,21 +1352,40 @@ internal sealed class QuickNoteWindow : Form {
     void LayoutChrome() {
         if (Disposing || IsDisposed || body == null || formatBar == null) return;
         Rectangle area = DisplayRectangle;
+        // Window state stores physical pixels; toolbar metrics stay in logical
+        // pixels after initial scaling and every monitor transition.
+        top.Height = (int)Math.Round(40 * DeviceDpi / 96f);
+        formatBar.Height = (int)Math.Round(38 * DeviceDpi / 96f);
+        status.Height = (int)Math.Round(32 * DeviceDpi / 96f);
         top.Bounds = new Rectangle(area.Left, area.Top, area.Width, top.Height);
         formatBar.Bounds = new Rectangle(area.Left, area.Bottom - formatBar.Height, area.Width, formatBar.Height);
         status.Bounds = new Rectangle(area.Left, formatBar.Top - status.Height, area.Width, status.Height);
-        body.Bounds = Rectangle.FromLTRB(area.Left, top.Bottom, area.Right, statusShown ? status.Top : formatBar.Top);
+        body.Bounds = chromeVisible ? Rectangle.FromLTRB(area.Left, top.Bottom, area.Right, statusShown ? status.Top : formatBar.Top) : area;
         top.Visible = formatBar.Visible = chromeVisible;
         status.Visible = chromeVisible && statusShown;
-        Region old = Region;
-        Region = chromeVisible ? null : new Region(Rectangle.Inflate(body.Bounds, Padding.Left, 0));
-        if (old != null) old.Dispose();
     }
     void SetChromeVisible(bool visible) {
         if (chromeVisible == visible) return;
-        chromeVisible = visible;
         if (!visible) { tips.Hide(status); foreach (Control c in top.Controls) tips.Hide(c); foreach (Control c in formatBar.Controls) tips.Hide(c); }
-        LayoutChrome();
+        // Reclaim the hidden bands in one layout, without changing the HWND
+        // shape or animating RichEdit's bounds on every frame. Suppress native
+        // intermediate paints and restore scroll without changing selection.
+        bool redraw = editor.IsHandleCreated && editor.Visible;
+        bool previewRedraw = previewEditor != null && previewEditor.IsHandleCreated && previewEditor.Visible;
+        Point position = QuickNoteScrollBar.Position(editor);
+        Point previewPosition = previewRedraw ? QuickNoteScrollBar.Position(previewEditor) : Point.Empty;
+        if (redraw) SendMessage(editor.Handle, 0xb, IntPtr.Zero, IntPtr.Zero);
+        if (previewRedraw) SendMessage(previewEditor.Handle, 0xb, IntPtr.Zero, IntPtr.Zero);
+        SuspendLayout(); body.SuspendLayout();
+        try {
+            chromeVisible = visible; LayoutChrome();
+        } finally {
+            body.ResumeLayout(true); ResumeLayout(true);
+            QuickNoteScrollBar.SetPosition(editor, position);
+            if (previewRedraw) QuickNoteScrollBar.SetPosition(previewEditor, previewPosition);
+            if (redraw) { SendMessage(editor.Handle, 0xb, new IntPtr(1), IntPtr.Zero); editor.Invalidate(); }
+            if (previewRedraw) { SendMessage(previewEditor.Handle, 0xb, new IntPtr(1), IntPtr.Zero); previewEditor.Invalidate(); }
+        }
     }
     void UpdateChromeForPointer(Point screen) {
         bool held = statusError || imageDragCp >= 0 || editor.Capture;
@@ -1391,13 +1501,14 @@ internal sealed class QuickNoteWindow : Form {
         } catch (Exception error) { SetStatus("无法查看原图：" + error.Message, true); }
     }
     void RevealForPointer() {
-        if (!Visible || WindowState != FormWindowState.Normal) return;
+        if (!Visible || movingWindow || WindowState != FormWindowState.Normal) return;
         leaveTimer.Stop(); SetChromeVisible(true);
         if (tabs == null || tabsHaveSpace && (!tabs.Visible || !tabs.IsRevealed)) ShowTabs();
     }
     void ShowTabs() {
         leaveTimer.Stop();
-        if (IsDisposed || !Visible || WindowState != FormWindowState.Normal || note == null) return;
+        if (IsDisposed || movingWindow || !Visible || WindowState != FormWindowState.Normal || note == null) return;
+        if (tabs != null && tabs.Visible && tabs.IsRevealed) return;
         if (tabs == null) {
             tabs = new QuickNoteTabs(); tabs.Font = uiFont;
             tabs.HoverFile = HoverNote; tabs.SelectFile = delegate(string file) { RequestNote(file, false); editor.Focus(); };
@@ -1575,7 +1686,15 @@ internal sealed class QuickNoteWindow : Form {
         base.OnPaint(e); using (var border = new Pen(Color.FromArgb(211, 219, 225))) e.Graphics.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
     }
     protected override void WndProc(ref Message message) {
+        if (message.Msg == 0x231) {
+            movingWindow = true; CancelPreview(); CancelImageDrag(); hoverTimer.Stop(); leaveTimer.Stop();
+            if (tabs != null) tabs.SuspendForMove();
+        }
         base.WndProc(ref message);
+        if (message.Msg == 0x232) {
+            movingWindow = false; RefreshChromeScale(); UpdateChromeForPointer(Cursor.Position);
+            if (Bounds.Contains(Cursor.Position)) RevealForPointer();
+        }
         if (message.Msg == 0x84 && message.Result.ToInt32() == 1 && WindowState == FormWindowState.Normal) {
             long packed = message.LParam.ToInt64(); Point p = PointToClient(new Point((short)(packed & 0xffff), (short)((packed >> 16) & 0xffff)));
             int edge = Math.Max(4, 4 * DeviceDpi / 96);

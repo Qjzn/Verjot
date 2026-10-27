@@ -194,6 +194,7 @@ internal static class TestSessionCatalog {
             "capture warning retains both output routes and explains the capture problem");
         True(warning.Message.Contains("转写已完成") && warning.Message.Contains("fixture capture discontinuity"),
             "successful transcription must be distinguished from the precise capture warning");
+        True(warning.OutputsComplete, "capture warning can expose completed files only when both outputs are verified");
         catalog.MarkNotified(warning);
         True(!new SessionCatalog(home, vault).Get(captureWarning).NeedsAttention,
             "acknowledged capture warning does not alert again after restart");
@@ -213,6 +214,7 @@ internal static class TestSessionCatalog {
         True(catalog.Get(captureWarning).State == "capture_warning" && catalog.Get(captureWarning).NotePath == warningNote,
             "removing one output cannot hide a capture warning or its retained transcript");
         File.Delete(warningNote);
+        True(!catalog.Get(captureWarning).OutputsComplete, "removed warning outputs must clear the completed-output flag");
         True(catalog.Get(captureWarning).State == "capture_warning" && Contains(catalog.Snapshot(), captureWarning),
             "removing both outputs cannot hide known capture failure evidence");
         File.WriteAllText(warningNote, "capture warning note");

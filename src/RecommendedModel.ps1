@@ -45,7 +45,7 @@ function Assert-ModelIdle([string]$Root) {
 }
 function Set-ModelStatus([string]$State, [string]$Message) {
     $taskTemp = $taskModelStatus + '.' + $PID + '.tmp'
-    [IO.File]::WriteAllText($taskTemp, (@{ state=$State; message=$Message; pid=$PID; updated_at=[DateTimeOffset]::Now.ToString('o') } | ConvertTo-Json -Compress), $taskModelUtf8)
+    [IO.File]::WriteAllText($taskTemp, (@{ state=$State; verified=($State -eq 'completed'); message=$Message; pid=$PID; updated_at=[DateTimeOffset]::Now.ToString('o') } | ConvertTo-Json -Compress), $taskModelUtf8)
     if (Test-Path -LiteralPath $taskModelStatus) { [IO.File]::Replace($taskTemp, $taskModelStatus, ($taskModelStatus + '.previous')) }
     else { [IO.File]::Move($taskTemp, $taskModelStatus) }
 }
@@ -115,10 +115,23 @@ if ($Worker) {
         $taskPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
         & $taskPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskInstallScript -RuntimeOnly -Backend $taskBackend -PythonExe $taskPrivatePython *> $taskInstallLog
         if ($LASTEXITCODE -ne 0) { throw '准备未完成。可重试并复用已下载文件；请查看 installation\recommended-install.log。若缺少 VC++ 运行库，按日志中的 Microsoft 官方入口安装。' }
+        Set-ModelStatus 'verifying' '正在用内置中文样本试运行；不录音、不播放、不读取你的会议。'
+        $taskEngineCheck = Join-Path $taskModelRoot 'check_local_engine.py'; Assert-ModelPath $taskEngineCheck
+        if (-not (Test-Path -LiteralPath $taskEngineCheck -PathType Leaf)) { throw '缺少本地转写自检组件，请使用完整安装包更新程序。' }
+        $taskEnginePython = Join-Path $taskModelRoot '.venv\Scripts\python.exe'
+        # Model libraries legitimately publish progress on stderr. PowerShell
+        # 5.1 turns redirected native stderr into a terminating error under
+        # ErrorActionPreference=Stop, even when the process would exit zero.
+        $env:PYTHONIOENCODING = 'utf-8'
+        $taskEngineProcess = Start-Process -FilePath $taskEnginePython -ArgumentList @('-B', ('"' + $taskEngineCheck + '"'), '--root', ('"' + $taskModelRoot + '"')) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $taskModelDirectory 'engine-check.log') -RedirectStandardError (Join-Path $taskModelDirectory 'engine-check.error.log')
+        try { if ($taskEngineProcess.ExitCode -ne 0) { throw '本地中文试运行未通过，已下载组件和录音保留。请查看 installation\engine-check.error.log 后继续准备。' } }
+        finally { $taskEngineProcess.Dispose() }
         Set-ModelStatus 'completed' '本地模型与运行依赖检查通过，可以关闭此窗口开始本地转写。已下载文件会复用；API 模式不会自动切换为本地。'
         exit 0
     } catch {
-        if ($taskLock) { Set-ModelStatus 'error' $_.Exception.Message }
+        $taskFailure = $_.Exception.Message
+        if ([string]::IsNullOrWhiteSpace($taskFailure)) { $taskFailure = '本地准备异常退出，请查看 installation 日志后重试；已下载组件和录音保留。' }
+        if ($taskLock) { Set-ModelStatus 'error' $taskFailure }
         exit 1
     } finally { if ($taskLock) { $taskLock.Dispose() } }
 }
@@ -183,22 +196,29 @@ $taskDownload.Add_Click({
 $taskTimer = New-Object Windows.Forms.Timer
 $taskTimer.Interval = 1000
 $taskTimer.Add_Tick({
+    $taskValue = $null
     try {
         if (Test-Path -LiteralPath $taskModelStatus -PathType Leaf) {
             $taskValue = [IO.File]::ReadAllText($taskModelStatus) | ConvertFrom-Json
-            if ($taskState.began -and [DateTimeOffset]::Parse($taskValue.updated_at) -lt $taskState.began) {
-                if ($taskState.child -and $taskState.child.HasExited) {
-                    $taskState.actionError = '检查进程未能启动或没有更新状态，请查看日志后重试；已下载模型与会议文件未改动。'
-                    $taskMessage.Text = $taskState.actionError
-                    $taskDownload.Enabled = $true; $taskDownload.Text = '重试检查'; $taskProgress.Visible = $false; $taskClose.Text = '关闭'
-                }
-                return
-            }
+        }
+    } catch { } # An unreadable status must not hide an exited child.
+    $taskUpdated = [DateTimeOffset]::MinValue
+    $taskFresh = $taskValue -and [DateTimeOffset]::TryParse([string]$taskValue.updated_at, [ref]$taskUpdated) -and
+        (-not $taskState.began -or $taskUpdated -ge $taskState.began)
+    if ($taskState.child -and $taskState.child.HasExited -and -not $taskFresh) {
+        $taskState.actionError = '检查进程未能启动或没有更新状态，请查看日志后重试；已下载模型与会议文件未改动。'
+        $taskMessage.Text = $taskState.actionError
+        $taskDownload.Enabled = $true; $taskDownload.Text = '重试检查'; $taskProgress.Visible = $false; $taskClose.Text = '关闭'
+        return
+    }
+    try {
+        if ($taskValue) {
+            if ($taskState.began -and -not $taskFresh) { return }
             # A rejected click must remain visible instead of being replaced
             # by last week's successful download on the next timer tick.
             if ($taskState.actionError) { $taskMessage.Text = $taskState.actionError; return }
-            $taskMessage.Text = if ($taskValue.state -eq 'completed') { '本地模型与运行依赖已准备好，可关闭此窗口。需要重新校验时点击“重新检查”；已下载的完整文件会复用。' } else { [string]$taskValue.message }
-            $taskActive = $taskValue.state -in @('preparing','installing')
+            $taskMessage.Text = if ($taskValue.state -eq 'completed' -and $taskValue.verified -eq $true) { '内置中文试运行已通过，本地转写可用。可以关闭此窗口；已下载文件会保留。' } elseif ($taskValue.state -eq 'completed') { '旧版组件已下载，尚未完成中文试运行。点击“验证并启用”，复用已有文件，不读取你的会议。' } else { [string]$taskValue.message }
+            $taskActive = $taskValue.state -in @('preparing','installing','verifying')
             # The lock, not a stale JSON flag/PID, determines a live installation.
             $taskProbe = $null
             try { $taskProbe = [IO.File]::Open((Join-Path $taskModelRoot 'recommended-model.lock'), 'OpenOrCreate', 'ReadWrite', 'None'); $taskActive = $false }
@@ -206,7 +226,7 @@ $taskTimer.Add_Tick({
             finally { if ($taskProbe) { $taskProbe.Dispose() } }
             $taskDownload.Enabled = -not $taskActive; $taskProgress.Visible = $taskActive
             $taskClose.Text = if ($taskActive) { '后台继续' } else { '关闭' }
-            $taskDownload.Text = if ($taskActive) { '检查中…' } elseif ($taskValue.state -eq 'completed') { '重新检查' } else { '重试下载' }
+            $taskDownload.Text = if ($taskActive) { '检查中…' } elseif ($taskValue.state -eq 'completed' -and $taskValue.verified -eq $true) { '重新检查' } elseif ($taskValue.state -eq 'completed') { '验证并启用' } else { '重试下载' }
             if ($taskActive -and $taskValue.state -eq 'installing') {
                 $taskStep = Join-Path $taskModelDirectory 'status.json'
                 if (Test-Path -LiteralPath $taskStep) { $taskMessage.Text = ([IO.File]::ReadAllText($taskStep) | ConvertFrom-Json).message }
@@ -216,10 +236,22 @@ $taskTimer.Add_Tick({
                     if ($taskData.state -eq 'downloading' -and $taskData.total -gt 0) { $taskMessage.Text += (' · 当前文件 {0:N0}%' -f (100 * $taskData.received / $taskData.total)) }
                 }
             }
-            if (-not $taskActive -and $taskValue.state -in @('preparing','installing')) { $taskMessage.Text = '上次准备意外中断，可重试并复用已下载文件。' }
+            if (-not $taskActive -and $taskValue.state -in @('preparing','installing','verifying')) { $taskMessage.Text = '上次准备意外中断，可重试并复用已下载文件。' }
         }
         if ($taskState.child -and $taskState.child.HasExited -and $taskState.child.ExitCode -ne 0) { $taskDownload.Enabled = $true; $taskProgress.Visible = $false }
     } catch { } # Atomic status replacement may race one tick; retry next tick.
 })
-$taskWindow.Add_Shown({ $taskTimer.Start(); if ($Start) { $taskDownload.PerformClick() } })
+$taskFitWindow = {
+    if ($taskWindow.IsDisposed) { return }
+    $taskWorkArea = [Windows.Forms.Screen]::FromControl($taskWindow).WorkingArea
+    $taskWindow.MinimumSize = [Drawing.Size]::Empty
+    $taskWidth = [Math]::Min($taskWindow.Width, $taskWorkArea.Width)
+    $taskHeight = [Math]::Min($taskWindow.Height, $taskWorkArea.Height)
+    $taskLeft = [Math]::Max($taskWorkArea.Left, [Math]::Min($taskWindow.Left, $taskWorkArea.Right - $taskWidth))
+    $taskTop = [Math]::Max($taskWorkArea.Top, [Math]::Min($taskWindow.Top, $taskWorkArea.Bottom - $taskHeight))
+    $taskWindow.Bounds = New-Object Drawing.Rectangle($taskLeft, $taskTop, $taskWidth, $taskHeight)
+    $taskWindow.MinimumSize = $taskWindow.Size
+}
+$taskWindow.Add_DpiChanged({ if ($taskWindow.IsHandleCreated -and -not $taskWindow.IsDisposed) { $null = $taskWindow.BeginInvoke([Action]$taskFitWindow) } })
+$taskWindow.Add_Shown({ & $taskFitWindow; $taskTimer.Start(); if ($Start) { $taskDownload.PerformClick() } })
 try { [Windows.Forms.Application]::Run($taskWindow) } finally { $taskTimer.Dispose(); $taskWindow.Dispose() }

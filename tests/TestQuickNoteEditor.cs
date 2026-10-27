@@ -13,6 +13,7 @@ internal static class TestQuickNoteEditor {
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int WindowStyle(IntPtr window, int index);
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] struct NativeRectangle { internal int Left, Top, Right, Bottom; }
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out NativeRectangle rectangle);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessageW")] static extern IntPtr FormatRectangle(IntPtr window, int message, IntPtr wparam, ref NativeRectangle rectangle);
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessageW")] static extern IntPtr NativeMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
     static int assertions;
@@ -293,8 +294,85 @@ internal static class TestQuickNoteEditor {
             return true;
         }
     }
+    static void CheckScreenChrome(string vault, string root) {
+        var store = new QuickNoteStore(vault, "屏幕布局", Path.Combine(root, "screen-recovery"));
+        foreach (var screen in Screen.AllScreens) {
+            string state = Path.Combine(root, "screen-state-" + screen.DeviceName.Replace("\\", "").Replace(".", ""));
+            Directory.CreateDirectory(state);
+            File.WriteAllText(Path.Combine(state, "quick-note-window.txt"), (screen.WorkingArea.Left + 100) + "," + (screen.WorkingArea.Top + 80) + ",267,330,1");
+            using (var window = new QuickNoteWindow(store, state)) {
+                window.Toggle(); Settled(window); Pump(60);
+                var bar = (Control)Field(window, "formatBar");
+                Console.WriteLine("Note screen=" + screen.Bounds + "; DPI=" + window.DeviceDpi + "; window=" + window.ClientRectangle + "; bar=" + bar.Bounds);
+                Check(window.Height == Math.Max(330, window.MinimumSize.Height), "Saved physical height is restored after the destination monitor finishes scaling");
+                Check(bar.Height >= (int)Math.Round(38 * window.DeviceDpi / 96f), "Footer retains its logical height after restoring physical pixel bounds");
+                foreach (Control button in bar.Controls) {
+                    Console.WriteLine("  " + button.Name + " " + button.Bounds);
+                    Check(bar.ClientRectangle.Contains(button.Bounds), "Restored toolbar buttons fit fully on " + screen.DeviceName + ": " + button.Name);
+                }
+                Check(window.ClientRectangle.Contains(bar.Bounds), "Restored footer fits the complete client area");
+                foreach (var destination in Screen.AllScreens) {
+                    window.Location = new Point(destination.WorkingArea.Left + 100, destination.WorkingArea.Top + 80); Pump(60);
+                    Console.WriteLine("  moved to " + destination.DeviceName + "; DPI=" + window.DeviceDpi + "; footer=" + bar.Bounds);
+                    Check(window.ClientRectangle.Contains(bar.Bounds), "Cross-monitor footer remains within client bounds at " + window.DeviceDpi + " DPI");
+                    foreach (Control button in bar.Controls) Check(bar.ClientRectangle.Contains(button.Bounds), "Cross-monitor toolbar action is not clipped: " + button.Name);
+                }
+                Call(window, "SetChromeVisible", true);
+                Rectangle bodyBounds = ((Control)Field(window, "body")).Bounds;
+                Check(bodyBounds.Bottom <= bar.Top, "Editor content never covers the footer");
+                foreach (Control button in bar.Controls) {
+                    Rectangle actual = button.RectangleToScreen(button.ClientRectangle);
+                    Check(window.RectangleToScreen(window.ClientRectangle).Contains(actual), "Visible footer action stays inside the window: " + button.Name);
+                }
+                Call(window, "SetChromeVisible", false); Call(window, "SetChromeVisible", true);
+                Check(((Control)Field(window, "body")).Bounds == bodyBounds, "Reopening navigation restores the editor layout without covering the footer");
+                using (var picture = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(picture, new Rectangle(Point.Empty, picture.Size)); picture.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "note-screen-" + window.DeviceDpi + ".png")); }
+                Settled(window); window.FlushAndClose(); Settled(window);
+                Check(window.IsDisposed, "Screen fixture closes after pending writes settle");
+            }
+        }
+    }
+    static void CheckPointerMotion(string vault, string root) {
+        var store = new QuickNoteStore(vault, "动效测试", Path.Combine(root, "motion-recovery"));
+        var seed = store.Load(DateTime.Today); store.Save(seed, "流畅测试，不读取真实笔记");
+        using (var window = new QuickNoteWindow(store, Path.Combine(root, "motion-state"))) {
+            window.Toggle(); Settled(window); Call(window, "SetChromeVisible", true); Call(window, "ShowTabs"); Pump(220);
+            var editor = (Control)Field(window, "editor"); Rectangle originalBounds = editor.Bounds;
+            var bar = (Control)Field(window, "formatBar");
+            var feedback = (QuickNoteHoverFeedback)Field(bar.Controls[0], "hover");
+            feedback.Set(true); Pump(40); float partial = feedback.Value;
+            Check(partial > 0 && partial < 1, "Hover feedback progresses without an abrupt full-color jump");
+            feedback.Set(false);
+            Check(feedback.Value == partial, "Leaving retargets from the current hover color without resetting");
+            Pump(180); Check(feedback.Value == 0 && !((System.Windows.Forms.Timer)Field(feedback, "timer")).Enabled, "Hover timer stops at rest");
+            var rail = (QuickNoteTabs)Field(window, "tabs");
+            rail.SetFiles(new[] { "当前.md", "第二.md", "第三.md" }, "当前.md");
+            int row = Math.Max(30, 36 * window.DeviceDpi / 96);
+            Call(rail, "OnMouseMove", new MouseEventArgs(MouseButtons.None, 0, rail.Width / 2, row + 4, 0)); Pump(40);
+            float[] emphasis = (float[])Field(rail, "emphasis"); float previous = emphasis[1];
+            Call(rail, "OnMouseMove", new MouseEventArgs(MouseButtons.None, 0, rail.Width / 2, row * 2 + 4, 0));
+            Check(emphasis[1] == previous && previous > 0, "Changing labels retains the previous label's current animation state");
+            Pump(40); Check(emphasis[1] < previous && emphasis[2] > 0, "Previous and new labels ease concurrently rather than snapping");
+            NativeMessage(window.Handle, 0x231, IntPtr.Zero, IntPtr.Zero);
+            Check((bool)Field(window, "movingWindow") && !rail.Visible && !((System.Windows.Forms.Timer)Field(rail, "animation")).Enabled, "Native drag suspends the separate rail and its animation");
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 60; i++) window.Location = new Point(window.Left + (i % 2 == 0 ? 1 : -1), window.Top);
+            watch.Stop(); Console.WriteLine("60 position calls during native drag: " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms; not screen FPS");
+            Check(editor.Bounds == originalBounds, "Dragging never relayouts the native text editor");
+            NativeMessage(window.Handle, 0x232, IntPtr.Zero, IntPtr.Zero);
+            Check(!(bool)Field(window, "movingWindow"), "Finishing native drag releases interaction suspension");
+            Check(window.ReadMarkdown() == seed.Text, "Motion does not mutate note content");
+            Settled(window); window.FlushAndClose(); Settled(window);
+        }
+    }
     static void CheckWindowGeometry(QuickNoteStore store, string root) {
         var minimum = new Size(280, 240);
+        foreach (int dpi in new[] { 96, 120, 144, 168, 192, 240 }) {
+            var work = new Size(1024, 560);
+            var fittedMinimum = QuickNoteWindow.MinimumForWorkArea(dpi, work);
+            Check(fittedMinimum.Width <= work.Width && fittedMinimum.Height <= work.Height, "Scaled native minimum cannot force a note beyond a short work area: " + dpi);
+            Check(QuickNoteWindow.MinimumForWorkArea(dpi, new Size(3840, 2120)) == new Size((int)Math.Round(280 * dpi / 96f), (int)Math.Round(240 * dpi / 96f)), "Normal work areas retain the original logical note minimum: " + dpi);
+        }
         Rectangle[,] samples = {
             { new Rectangle(0, 0, 1024, 700), new Rectangle(444, 60, 556, 669), new Rectangle(444, 31, 556, 669) },
             { new Rectangle(-1024, 40, 1024, 680), new Rectangle(-580, 100, 556, 669), new Rectangle(-580, 51, 556, 669) },
@@ -440,7 +518,7 @@ internal static class TestQuickNoteEditor {
             window.ClientSize = new Size(280, 270); window.PerformLayout();
             foreach (Control button in toolbar.Controls) Check(toolbar.ClientRectangle.Contains(button.Bounds), "Toolbar fits the minimum width: " + button.Name + "; bar=" + toolbar.ClientRectangle + "; button=" + button.Bounds);
             for (int i = 1; i < toolbar.Controls.Count; i++) Check(Math.Abs((toolbar.Controls[i].Left - toolbar.Controls[i - 1].Left) - (toolbar.Controls[1].Left - toolbar.Controls[0].Left)) <= 1, "Footer icons are evenly spaced: " + i);
-            Check(toolbar.Controls["format-location"].Right >= toolbar.ClientSize.Width - 14, "Save location is the bottom-right action");
+            Check(toolbar.Controls["format-location"].Right >= toolbar.ClientSize.Width - (int)Math.Round(14 * window.DeviceDpi / 96f), "Save location is the bottom-right action within a 14 logical pixel inset");
             input.SelectAll(); Document(window).InsertText("会议速记\r\n确认下周排期\r\n整理客户反馈\r\n\r\n重点：周五前完成"); input.Select(0, 4); Call(window, "ApplyFormat", "bold");
             input.Select(5, 13); Call(window, "ApplyFormat", "bullet"); Autosaved(window);
             input.Select(input.TextLength, 0);
@@ -601,8 +679,10 @@ internal static class TestQuickNoteEditor {
             Rectangle editorBounds = editor.RectangleToScreen(editor.ClientRectangle);
             editor.Select(1, 2); Point scroll = QuickNoteScrollBar.Position(editor);
             Call(window, "UpdateChromeForPointer", new Point(-10000, -10000));
-            Check(!top.Visible && !bottom.Visible && window.Region != null, "Leaving the window hides both navigation bars and clips empty chrome bands");
-            Check(editor.RectangleToScreen(editor.ClientRectangle) == editorBounds && editor.SelectionStart == 1 && editor.SelectionLength == 2 && QuickNoteScrollBar.Position(editor) == scroll, "Chrome conceal never reflows content or moves selection/scroll");
+            Check(!top.Visible && !bottom.Visible && window.Region == null, "Leaving hides navigation without replacing the native window shape");
+            Rectangle concealedBounds = editor.RectangleToScreen(editor.ClientRectangle);
+            Check(concealedBounds.Top < editorBounds.Top && concealedBounds.Height > editorBounds.Height && concealedBounds.Width == editorBounds.Width, "Chrome conceal expands the image document vertically without changing its wrapping width");
+            Check(editor.SelectionStart == 1 && editor.SelectionLength == 2 && QuickNoteScrollBar.Position(editor) == scroll, "Chrome conceal preserves selection and effective scroll in an image document");
             Call(editor, "OnMouseEnter", EventArgs.Empty); Pump(30);
             Check(top.Visible && bottom.Visible && window.Region == null, "Entering text reveals controls without requiring a click");
             Check(editor.RectangleToScreen(editor.ClientRectangle) == editorBounds, "Chrome reveal preserves exact editor geometry");
@@ -741,6 +821,63 @@ internal static class TestQuickNoteEditor {
         }
         Check(failures == 0, "Refinement audit failures=" + failures);
         Console.WriteLine("Refinement audit passed: " + assertions + "; clipboard_access=0; global_input=0");
+    }
+    static void CheckHoverStabilityAndScroll(string vault, string root) {
+        var store = new QuickNoteStore(vault, "hover-stability", Path.Combine(root, "hover-stability-recovery"));
+        var seed = store.Load(DateTime.Today); store.Save(seed, "");
+        using (var window = new QuickNoteWindow(store, Path.Combine(root, "hover-stability-state"))) {
+            window.Toggle(); Settled(window); Call(window, "SetChromeVisible", true);
+            var input = (QuickNoteInputBox)Field(window, "editor");
+            var bar = (QuickNoteScrollBar)Field(window, "scroll");
+            Rectangle empty = (Rectangle)Call(bar, "Thumb", Call(bar, "Info"));
+            Console.WriteLine("Empty thumb=" + empty + "; editor=" + input.Size + "; dpi=" + window.DeviceDpi);
+            Check(empty.IsEmpty, "Empty notes never paint a scrollbar thumb");
+            input.Text = "仅一行中文"; Pump(40);
+            Check(((Rectangle)Call(bar, "Thumb", Call(bar, "Info"))).IsEmpty, "A fitting short note has no scrollbar thumb");
+            input.Text = String.Join("\n", new string[100]).Replace("\n", "长正文\n"); Pump(40);
+            Check(!((Rectangle)Call(bar, "Thumb", Call(bar, "Info"))).IsEmpty, "Overflow still exposes the usable custom thumb");
+            input.Clear(); Pump(40);
+            Check(((Rectangle)Call(bar, "Thumb", Call(bar, "Info"))).IsEmpty, "Deleting overflow removes the thumb");
+            input.Text = "清空后重新输入"; Pump(40);
+            Check(((Rectangle)Call(bar, "Thumb", Call(bar, "Info"))).IsEmpty, "Typing a short line after clearing overflow keeps the scrollbar hidden");
+            var body = (Control)Field(window, "body");
+            Rectangle expandedArea = window.DisplayRectangle, windowBounds = window.Bounds;
+            Call(window, "SetChromeVisible", false);
+            Check(body.Bounds == expandedArea, "Hidden navigation returns both toolbar bands to the document viewport");
+            Check(input.RectangleToScreen(input.ClientRectangle).Top - window.Top <= (int)Math.Ceiling(20 * window.DeviceDpi / 96f), "Hidden document has only the normal top inset");
+            using (var picture = new Bitmap(window.Width, window.Height)) {
+                using (Graphics graphics = Graphics.FromImage(picture)) {
+                    IntPtr dc = graphics.GetHdc();
+                    try { Check(PrintWindow(window.Handle, dc, 0), "Native capture of the isolated hidden-navigation note succeeds"); }
+                    finally { graphics.ReleaseHdc(dc); }
+                }
+                picture.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "note-hidden-" + window.DeviceDpi + ".png"));
+            }
+            Call(window, "SetChromeVisible", true);
+            int regionChanges = 0, editorLayouts = 0;
+            window.RegionChanged += delegate { regionChanges++; };
+            input.Layout += delegate { editorLayouts++; };
+            Rectangle bounds = input.Bounds;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 30; i++) { Call(window, "SetChromeVisible", false); Call(window, "SetChromeVisible", true); }
+            clock.Stop();
+            Console.WriteLine("Hover transitions=60; regionChanges=" + regionChanges + "; editorLayouts=" + editorLayouts + "; elapsed_ms=" + clock.Elapsed.TotalMilliseconds.ToString("F2"));
+            Check(regionChanges == 0, "Hover must not replace the native top-level window region");
+            Check(input.Bounds == bounds && editorLayouts <= 60, "Each visibility transition lays out the document at most once and restores visible geometry");
+            Check(window.Bounds == windowBounds, "Reclaiming toolbar space never resizes or moves the top-level window");
+            int layoutsAfterTransitions = editorLayouts;
+            for (int i = 0; i < 60; i++) Call(window, "SetChromeVisible", true);
+            Check(editorLayouts == layoutsAfterTransitions, "Moving across already-visible controls does not relayout the editor");
+            input.Text = String.Join("\n", new string[100]).Replace("\n", "长正文\n"); input.Select(9, 5);
+            QuickNoteScrollBar.SetPosition(input, new Point(0, 100));
+            Point position = QuickNoteScrollBar.Position(input); bool focused = input.Focused, modified = input.Modified;
+            string text = input.Text;
+            Call(window, "SetChromeVisible", false); Call(window, "SetChromeVisible", true);
+            Check(input.SelectionStart == 9 && input.SelectionLength == 5 && input.Focused == focused, "Hover preserves the selection and input focus");
+            Check(input.Text == text && input.Modified == modified, "Hover does not edit note contents or its modification state");
+            Check(QuickNoteScrollBar.Position(input) == position, "Hover restores the scroll position when it remains within the content range");
+            window.FlushAndClose(); Settled(window);
+        }
     }
     static void CheckInteractionUpgrade(string vault, string root) {
         int failures = 0;
@@ -962,6 +1099,10 @@ internal static class TestQuickNoteEditor {
         try {
             string vault = Path.Combine(root, "vault"), recovery = Path.Combine(root, "recovery");
             Directory.CreateDirectory(vault);
+            if (Array.IndexOf(arguments, "--screen-only") >= 0) { CheckScreenChrome(vault, root); Console.WriteLine("Screen tests passed: " + assertions); return 0; }
+            if (Array.IndexOf(arguments, "--hover-only") >= 0) { CheckHoverStabilityAndScroll(vault, root); Console.WriteLine("Hover tests passed: " + assertions); return 0; }
+            if (Array.IndexOf(arguments, "--motion-only") >= 0) { CheckPointerMotion(vault, root); Console.WriteLine("Motion tests passed: " + assertions); return 0; }
+            if (Array.IndexOf(arguments, "--geometry-only") >= 0) { CheckWindowGeometry(new QuickNoteStore(vault, "几何验证", Path.Combine(root, "geometry-recovery")), root); CheckScreenChrome(vault, root); CheckPointerMotion(vault, root); Console.WriteLine("Geometry tests passed: " + assertions); return 0; }
             if (Array.IndexOf(arguments, "--interaction-only") >= 0) { CheckInteractionUpgrade(vault, root); return 0; }
             if (Array.IndexOf(arguments, "--delete-only") >= 0) { CheckTabDeletion(vault, root); return 0; }
             if (Array.IndexOf(arguments, "--refine-audit-only") >= 0) { CheckRefinementAudit(vault, root); return 0; }
@@ -981,6 +1122,7 @@ internal static class TestQuickNoteEditor {
             CheckFailedImportRecovery(vault, root);
             CheckSyntheticNewlines(vault, root);
             CheckWindowGeometry(store, root);
+            CheckScreenChrome(vault, root); CheckPointerMotion(vault, root); CheckHoverStabilityAndScroll(vault, root);
             float[] imageDpis = new float[] { 96, 144, 192 };
             var originals = new byte[imageDpis.Length][];
             var encodedImages = new byte[imageDpis.Length][];

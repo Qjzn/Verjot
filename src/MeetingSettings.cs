@@ -153,39 +153,87 @@ internal static class MeetingFirstRunSetup {
 
 // Native controls keep the settings window small and retain normal keyboard,
 // IME, DPI and accessibility behavior. Show() makes this a modeless window.
+internal sealed class LocalPreparationPrompt : Form {
+    public bool PreparationAccepted { get; private set; }
+    public LocalPreparationPrompt(Func<bool> prepare) {
+        Text = "verbit · 录音已保存"; Icon = MeetingBrand.IdleIcon;
+        AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
+        Font = new Font("Microsoft YaHei UI", 10); BackColor = Color.White;
+        ClientSize = new Size(410, 210); Padding = new Padding(22);
+        FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false;
+        var text = new Label { Text = "录音已保存，转写可以稍后进行\n\n转成文字需准备本地组件，约占 5 GB。\n仅首次准备，会议音频不上传。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(42, 65, 92) };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+        var later = new Button { Text = "仅保留录音", AutoSize = true, Height = 32, DialogResult = DialogResult.Cancel };
+        var start = new Button { Text = "启用并转写这场", AutoSize = true, Height = 32, BackColor = Color.FromArgb(40, 104, 168), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        start.Click += delegate { if (prepare()) { PreparationAccepted = true; Close(); } }; later.Click += delegate { Close(); };
+        actions.Controls.Add(later); actions.Controls.Add(start); Controls.Add(text); Controls.Add(actions); CancelButton = later;
+        DesktopServices.KeepWindowOnScreen(this);
+    }
+}
+
+// Composite only the settings content tree. Keep native dropdown popups and the
+// note/recording windows outside this scope so their input paths stay unchanged.
+internal sealed class SettingsTabControl : TabControl {
+    protected override CreateParams CreateParams {
+        get { var parameters = base.CreateParams; parameters.ExStyle |= 0x02000000; return parameters; }
+    }
+}
+
 internal sealed class MeetingSettingsDialog : Form {
     readonly MeetingSettingsSnapshot snapshot;
     readonly Func<Dictionary<string, object>, string> apply;
     readonly Dictionary<string, TextBox> inputs = new Dictionary<string, TextBox>();
     readonly Dictionary<string, ComboBox> choices = new Dictionary<string, ComboBox>();
-    CheckBox startup, automaticUpdates, echoFilter;
+    CheckBox startup, automaticUpdates, echoFilter, autoTranscribe;
     bool originalStartup;
     readonly Label error = new Label { AutoSize = false, ForeColor = Color.FromArgb(171, 37, 37), Dock = DockStyle.Fill };
     readonly Button save = new Button { Text = "保存", AutoSize = true, MinimumSize = new Size(76, 28) };
     Font dpiFont;
     Image githubImage;
+    Image brandImage;
+    PictureBox brandMark;
+    readonly List<Font> displayFonts = new List<Font>();
+    readonly System.Windows.Forms.Timer engineTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+    System.Diagnostics.Process engineProcess;
+    DateTime engineBeganUtc;
+    string preparationError;
+    Func<System.Diagnostics.Process> engineLauncher = DesktopServices.PrepareLocalTranscription;
+    Label engineTitle, engineDetail;
+    Button engineAction;
+    ProgressBar engineProgress;
+    bool awaitingEngine;
+    public event Action LocalEngineReady;
     public void ShowAbout() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 2; }
+    public void ShowTranscription() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 1; }
     public MeetingSettingsDialog(MeetingSettingsSnapshot snapshot, Func<Dictionary<string, object>, string> apply, bool firstRun = false) {
         if (snapshot == null || apply == null) throw new ArgumentNullException(snapshot == null ? "snapshot" : "apply");
         this.snapshot = snapshot; this.apply = apply;
         SuspendLayout();
         Text = firstRun ? "verbit · 首次设置" : "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
-        dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
-        ClientSize = new Size(520, 590); Padding = new Padding(16);
+        dpiFont = new Font("Microsoft YaHei UI", 13, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
+        ClientSize = new Size(600, 660); Padding = new Padding(20, 12, 20, 16);
+        BackColor = Color.White; ForeColor = Color.FromArgb(34, 46, 63);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.CenterScreen;
-        var tabs = new TabControl { Name = "settingsTabs", Dock = DockStyle.Fill };
-        var general = new TabPage("常规") { Padding = new Padding(8), AutoScroll = true };
-        var models = new TabPage("转写") { Padding = new Padding(8), AutoScroll = true };
-        var about = new TabPage("关于与更新") { Padding = new Padding(12), AutoScroll = true };
+        var tabs = new SettingsTabControl { Name = "settingsTabs", Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed, ItemSize = new Size(170, 38) };
+        tabs.DrawItem += delegate(object sender, DrawItemEventArgs e) {
+            bool selected = e.Index == tabs.SelectedIndex;
+            using (var background = new SolidBrush(selected ? Color.FromArgb(238, 245, 253) : Color.FromArgb(248, 250, 252))) e.Graphics.FillRectangle(background, e.Bounds);
+            TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, selected ? Color.FromArgb(30, 91, 156) : Color.FromArgb(77, 91, 111), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (selected) using (var pen = new Pen(Color.FromArgb(40, 104, 168), Math.Max(2, DeviceDpi / 48f))) e.Graphics.DrawLine(pen, e.Bounds.Left + 18, e.Bounds.Bottom - 2, e.Bounds.Right - 18, e.Bounds.Bottom - 2);
+        };
+        var general = new TabPage("常规") { Padding = new Padding(18, 16, 18, 12), AutoScroll = true, BackColor = Color.White };
+        var models = new TabPage("转写") { Padding = new Padding(18, 16, 18, 12), AutoScroll = true, BackColor = Color.White };
+        var about = new TabPage("关于与更新") { Padding = new Padding(18, 16, 18, 12), AutoScroll = true, BackColor = Color.White };
         tabs.TabPages.AddRange(new[] { general, models, about });
         var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 14 };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
-        for (int row = 0; row < 14; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 ? 38 : row == 11 ? 44 : row == 12 ? 30 : row == 13 ? 0 : 32));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+        for (int row = 0; row < 14; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 ? 48 : row == 10 ? 42 : row == 11 || row == 12 ? 34 : row == 13 ? 0 : 36));
         var current = snapshot.Values;
         AddField(layout, 0, "保存目录", "vault_root", current);
         var browse = new Button { Text = "选择…", Dock = DockStyle.Fill, Margin = new Padding(4, 1, 0, 4) };
@@ -214,18 +262,47 @@ internal sealed class MeetingSettingsDialog : Form {
         actions.Controls.Add(save); actions.Controls.Add(cancel);
         general.Controls.Add(layout);
         BuildModels(models, current); BuildAbout(about);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 76, RowCount = 2, ColumnCount = 1 };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 76, Padding = new Padding(0, 8, 0, 0), RowCount = 2, ColumnCount = 1 };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         footer.Controls.Add(error, 0, 0); footer.Controls.Add(actions, 0, 1);
-        Controls.Add(tabs); Controls.Add(footer); AcceptButton = save; CancelButton = cancel;
+        var header = new Panel { Dock = DockStyle.Top, Height = 64 };
+        brandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Bounds = new Rectangle(2, 9, 30, 30) };
+        var title = new Label { Text = "设置", AutoSize = false, Bounds = new Rectangle(44, 2, 220, 30), Font = DisplayFont(20, FontStyle.Bold), Tag = 20f };
+        var subtitle = new Label { Text = "记录、保存与本地转写", AutoSize = false, Bounds = new Rectangle(45, 34, 400, 22), ForeColor = Color.FromArgb(85, 101, 123) };
+        header.Controls.AddRange(new Control[] { brandMark, title, subtitle });
+        Controls.Add(tabs); Controls.Add(footer); Controls.Add(header); AcceptButton = save; CancelButton = cancel;
         if (firstRun) {
             save.Text = "保存并启动";
-            ClientSize = new Size(520, 642);
-            var intro = new Label { Text = "先确认保存目录和快捷键。保存后驻留托盘，速记可直接使用；会议转写需另配本地模型或 API。", Dock = DockStyle.Top, Height = 52, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 0, 0, 8) };
-            Controls.Add(intro);
+            subtitle.Text = "先开始速记和录音，转写组件可以稍后准备";
         }
+        StyleControls(this); StyleButton(save, true);
+        engineTimer.Tick += delegate { RefreshEngine(); }; engineTimer.Start();
         ResumeLayout(false);
+    }
+    Font DisplayFont(float pixels, FontStyle style) { var font = new Font("Microsoft YaHei UI", pixels, style, GraphicsUnit.Pixel); displayFonts.Add(font); return font; }
+    static void StyleButton(Button button, bool primary) {
+        // FlatAppearance setters invalidate even when their values are unchanged.
+        // Readiness polling must not repaint the page (including under an open popup).
+        if (button.FlatStyle != FlatStyle.Flat) button.FlatStyle = FlatStyle.Flat;
+        if (button.FlatAppearance.BorderSize != 1) button.FlatAppearance.BorderSize = 1;
+        Color border = primary ? Color.FromArgb(40, 104, 168) : Color.FromArgb(211, 220, 231);
+        Color background = primary ? Color.FromArgb(40, 104, 168) : Color.White;
+        Color foreground = primary ? Color.White : Color.FromArgb(42, 65, 92);
+        Color hover = primary ? Color.FromArgb(31, 85, 143) : Color.FromArgb(240, 245, 251);
+        if (button.FlatAppearance.BorderColor != border) button.FlatAppearance.BorderColor = border;
+        if (button.BackColor != background) button.BackColor = background;
+        if (button.ForeColor != foreground) button.ForeColor = foreground;
+        if (button.FlatAppearance.MouseOverBackColor != hover) button.FlatAppearance.MouseOverBackColor = hover;
+        if (button.MinimumSize != new Size(80, 30)) button.MinimumSize = new Size(80, 30);
+        if (button.Cursor != Cursors.Hand) button.Cursor = Cursors.Hand;
+    }
+    static void StyleControls(Control root) {
+        foreach (Control control in root.Controls) {
+            var button = control as Button; if (button != null) StyleButton(button, false);
+            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = Color.FromArgb(252, 253, 255); }
+            StyleControls(control);
+        }
     }
     void AddChoice(TableLayoutPanel layout, int row, string label, string key, Dictionary<string, object> current, string[] values, string[] captions) {
         layout.Controls.Add(new Label { Text = label, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, row);
@@ -235,37 +312,110 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     string Choice(string key) { return ((string[])choices[key].Tag)[choices[key].SelectedIndex]; }
     void BuildModels(TabPage page, Dictionary<string, object> current) {
-        var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 13 };
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
-        for (int row = 0; row < 13; row++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 1 || row == 12 ? 58 : 32));
-        AddChoice(grid, 0, "转写方式", "transcription_mode", current, new[] { "local", "api" }, new[] { "本地 · Qwen3-ASR-1.7B", "API · 音频将发送至服务商" });
-        var hint = new Label { Name = "transcription_readiness", Text = "", Dock = DockStyle.Fill };
-        grid.Controls.Add(hint, 0, 1); grid.SetColumnSpan(hint, 3);
-        var download = new Button { Name = "download_recommended_model", Text = "下载推荐模型…", AutoSize = true, Dock = DockStyle.Fill, AccessibleName = "下载推荐模型" };
-        download.Click += delegate { try { DesktopServices.DownloadRecommendedModel(); } catch (Exception failure) { error.Text = failure.Message; } };
-        grid.Controls.Add(download, 0, 2); grid.SetColumnSpan(download, 3);
-        AddField(grid, 3, "API 地址", "api_base_url", current);
-        AddField(grid, 4, "API 模型 ID", "api_model", current);
-        AddField(grid, 5, "密钥变量名", "api_key_env", current);
-        AddField(grid, 6, "超时（秒）", "api_timeout_seconds", current);
-        AddField(grid, 7, "术语提示", "asr_terms", current); inputs["asr_terms"].MaxLength = 1000;
-        AddField(grid, 8, "转写上下文", "asr_context", current); inputs["asr_context"].MaxLength = 2000;
-        AddChoice(grid, 9, "轻量降噪", "asr_denoise", current, new[] { "light", "off" }, new[] { "开启 · 降低低频轰鸣", "关闭" });
+        var container = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+        container.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        autoTranscribe = new CheckBox { Name = "auto_transcribe", Text = "录音 + 转写", AccessibleName = "结束录音后自动转写", Checked = Convert.ToBoolean(current["auto_transcribe"]), Dock = DockStyle.Top, Height = 36 };
+        var modeHint = new Label { Name = "recording_mode_hint", Dock = DockStyle.Top, Height = 58, ForeColor = Color.FromArgb(76, 92, 114) };
+        container.Controls.Add(autoTranscribe, 0, 0); container.Controls.Add(modeHint, 0, 1);
+        var stack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 7 };
+        stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int row = 0; row < 7; row++) stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var local = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5, Margin = new Padding(0, 0, 0, 12) };
+        local.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        local.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); local.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        local.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); local.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); local.RowStyles.Add(new RowStyle(SizeType.Absolute, 12));
+        local.Controls.Add(new Label { Text = "本地转写", Font = DisplayFont(18, FontStyle.Bold), Tag = 18f, Dock = DockStyle.Fill }, 0, 0);
+        engineTitle = new Label { Name = "transcription_readiness", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+        engineDetail = new Label { Name = "engine_detail", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114) };
+        engineAction = new Button { Name = "download_recommended_model", Dock = DockStyle.Left, AutoSize = true, AccessibleName = "启用本地转写", Margin = new Padding(0, 2, 0, 8), MinimumSize = new Size(160, 32) };
+        engineAction.Click += delegate { BeginPreparation(); };
+        engineProgress = new ProgressBar { Dock = DockStyle.Fill, Style = ProgressBarStyle.Marquee, Visible = false, Margin = new Padding(0, 4, 0, 2) };
+        local.Controls.Add(engineTitle, 0, 1); local.Controls.Add(engineDetail, 0, 2); local.Controls.Add(engineAction, 0, 3); local.Controls.Add(engineProgress, 0, 4);
+        stack.Controls.Add(local, 0, 0);
+        var localInfo = new Label { Text = "中文 · 千问 1.7B；CPU 长会议处理可能较慢。\n文字与说话人需核对；术语提示可填写姓名和专用词。", Dock = DockStyle.Top, Height = 48, ForeColor = Color.FromArgb(76, 92, 114), Margin = new Padding(0, 0, 0, 12) }; stack.Controls.Add(localInfo, 0, 1);
+        var disclosure = new Button { Text = "展开高级选项", Name = "transcription_advanced", Dock = DockStyle.Top, Height = 32, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 8, 0, 8) };
+        stack.Controls.Add(disclosure, 0, 2);
+        var advanced = new TableLayoutPanel { Name = "transcription_advanced_fields", Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Visible = false, Margin = Padding.Empty };
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var modeGrid = SettingsGrid(); modeGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        AddChoice(modeGrid, 0, "转写方式", "transcription_mode", current, new[] { "local", "api" }, new[] { "本地 · 音频不上传", "API · 音频发送至服务商" }); advanced.Controls.Add(modeGrid, 0, 0);
+        var apiFields = SettingsGrid();
+        for (int row = 0; row < 5; row++) apiFields.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 4 ? 72 : 36));
+        AddField(apiFields, 0, "API 地址", "api_base_url", current); AddField(apiFields, 1, "API 模型 ID", "api_model", current);
+        AddField(apiFields, 2, "密钥变量名", "api_key_env", current); AddField(apiFields, 3, "超时（秒）", "api_timeout_seconds", current);
+        var secret = new Label { Text = "只支持音频转写接口。密钥通过 Windows 用户环境变量配置，不写入配置文件；提交音频前还会询问。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114), Padding = new Padding(0, 4, 0, 0) };
+        apiFields.Controls.Add(secret, 0, 4); apiFields.SetColumnSpan(secret, 3); advanced.Controls.Add(apiFields, 0, 1);
+        var grid = SettingsGrid();
+        for (int row = 0; row < 4; row++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 ? 48 : 36));
+        AddField(grid, 0, "术语（可选）", "asr_terms", current); inputs["asr_terms"].MaxLength = 1000;
+        AddField(grid, 1, "转写上下文", "asr_context", current); inputs["asr_context"].MaxLength = 2000;
+        AddChoice(grid, 2, "轻量降噪", "asr_denoise", current, new[] { "light", "off" }, new[] { "开启 · 降低低频轰鸣", "关闭" });
         echoFilter = new CheckBox { Name = "asr_echo_filter", Text = "去除有高置信证据的重复回声（不修改原录音）", Checked = Convert.ToBoolean(current["asr_echo_filter"]), Dock = DockStyle.Fill };
-        grid.Controls.Add(echoFilter, 0, 10); grid.SetColumnSpan(echoFilter, 3);
-        var guide = new LinkLabel { Text = "打开本地模型与 API 安装说明", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+        grid.Controls.Add(echoFilter, 0, 3); grid.SetColumnSpan(echoFilter, 3); advanced.Controls.Add(grid, 0, 2);
+        stack.Controls.Add(advanced, 0, 3);
+        var guide = new LinkLabel { Text = "安装帮助与诊断", Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 14, 0, 0) };
         guide.LinkClicked += delegate { OpenLink(Path.Combine(MeetingFiles.Home, "documentation", "install-windows.md")); };
-        grid.Controls.Add(guide, 0, 11); grid.SetColumnSpan(guide, 3);
-        var secret = new Label { Text = "选择本地不会自动下载模型。API 只填密钥变量名，提交前检查。保存后，尚未开始转写的新录音重试时使用新设置。", Dock = DockStyle.Fill };
-        grid.Controls.Add(secret, 0, 12); grid.SetColumnSpan(secret, 3);
+        stack.Controls.Add(guide, 0, 4);
+        var logs = new LinkLabel { Text = "查看准备日志", Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft };
+        logs.LinkClicked += delegate { string directory = Path.Combine(MeetingFiles.Home, "installation"); if (Directory.Exists(directory)) OpenLink(directory); else error.Text = "还没有准备日志。"; }; stack.Controls.Add(logs, 0, 5);
+        disclosure.Click += delegate {
+            stack.SuspendLayout();
+            try { advanced.Visible = !advanced.Visible; disclosure.Text = advanced.Visible ? "收起高级选项" : "展开高级选项"; }
+            finally { stack.ResumeLayout(true); }
+        };
         Action refresh = delegate {
             bool api = Choice("transcription_mode") == "api";
-            foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api;
-            hint.Text = api ? "API 音频转写：保存可先于密钥配置；实际提交前确认服务商并检查密钥。普通聊天模型不能替代语音转写。" : MeetingConfig.LocalRuntimeStatus(MeetingFiles.Home);
+            page.SuspendLayout(); stack.SuspendLayout(); advanced.SuspendLayout();
+            try {
+                apiFields.Visible = api; local.Visible = localInfo.Visible = logs.Visible = !api;
+                foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api;
+                RefreshEngine();
+            } finally { advanced.ResumeLayout(true); stack.ResumeLayout(true); page.ResumeLayout(true); }
         };
         choices["transcription_mode"].SelectedIndexChanged += delegate { refresh(); };
         Activated += delegate { refresh(); }; refresh();
-        page.Controls.Add(grid);
+        if (Choice("transcription_mode") == "api") { advanced.Visible = true; disclosure.Text = "收起高级选项"; }
+        container.Controls.Add(stack, 0, 2);
+        Action updateRecordingMode = delegate {
+            container.SuspendLayout();
+            try {
+                stack.Visible = autoTranscribe.Checked;
+                modeHint.Text = autoTranscribe.Checked ? "结束录音先保存 MP3，再后台转写。\n请准备本地模型或配置 API；模型未就绪也能正常录音。" : "仅录音 · 无需模型，结束后保存 MP3。\n也可稍后在最近会议中手动转写；无损资料暂保留。";
+            } finally { container.ResumeLayout(true); }
+        };
+        autoTranscribe.CheckedChanged += delegate { updateRecordingMode(); }; updateRecordingMode();
+        page.Controls.Add(container);
+    }
+    static TableLayoutPanel SettingsGrid() {
+        var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Margin = Padding.Empty };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0)); return grid;
+    }
+    public void BeginPreparation() {
+        autoTranscribe.Checked = true;
+        try {
+            preparationError = null; error.Text = "";
+            var state = LocalEngineState.Read(MeetingFiles.Home);
+            if (state.Ready) { if (LocalEngineReady != null) LocalEngineReady(); return; }
+            if (!state.Busy) { engineBeganUtc = DateTime.UtcNow; engineProcess = engineLauncher(); if (engineProcess == null) throw new IOException("未能启动准备进程，请重试。"); }
+            awaitingEngine = true; engineAction.Enabled = false; engineAction.Text = "正在开始…";
+        } catch (Exception failure) { error.Text = "无法准备本地转写：" + failure.Message; }
+    }
+    void RefreshEngine() {
+        if (IsDisposed || engineTitle == null) return;
+        var state = LocalEngineState.Read(MeetingFiles.Home);
+        if (state.Ready || state.Busy) preparationError = null;
+        if (engineProcess != null && engineProcess.HasExited && !state.Ready && !state.Busy &&
+            File.GetLastWriteTimeUtc(Path.Combine(MeetingFiles.Home, "installation", "recommended-model.json")) < engineBeganUtc)
+            preparationError = "准备进程未能启动或未更新状态。请重试；已下载组件和录音保留。";
+        bool starting = engineProcess != null && !engineProcess.HasExited && !state.Busy;
+        engineTitle.Text = starting ? "正在开始准备" : state.Title;
+        engineTitle.ForeColor = state.Ready ? Color.FromArgb(27, 108, 76) : Color.FromArgb(42, 65, 92);
+        engineDetail.Text = starting ? "请稍候，已下载组件会复用。" : state.Detail;
+        engineAction.Text = starting ? "准备中…" : state.Action; engineAction.Enabled = !starting && !state.Busy && !state.Ready;
+        engineProgress.Visible = starting || state.Busy; StyleButton(engineAction, !state.Ready);
+        if (!string.IsNullOrEmpty(preparationError)) { engineTitle.Text = "准备未完成"; engineDetail.Text = preparationError; engineAction.Text = "重试准备"; engineAction.Enabled = true; engineProgress.Visible = false; }
+        if (engineProcess != null && engineProcess.HasExited) { engineProcess.Dispose(); engineProcess = null; }
+        if (awaitingEngine && state.Ready) { awaitingEngine = false; if (LocalEngineReady != null) LocalEngineReady(); }
     }
     void OpenLink(string url) { try { DesktopServices.Open(url); } catch (Exception failure) { error.Text = "无法打开：" + failure.Message; } }
     void BuildAbout(TabPage page) {
@@ -314,6 +464,7 @@ internal sealed class MeetingSettingsDialog : Form {
             foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "asr_terms", "asr_context" }) edits[key] = inputs[key].Text.Trim();
             edits["transcription_mode"] = Choice("transcription_mode"); edits["asr_denoise"] = Choice("asr_denoise");
             edits["asr_echo_filter"] = echoFilter.Checked; edits["check_updates"] = automaticUpdates.Checked;
+            edits["auto_transcribe"] = autoTranscribe.Checked;
             int timeout;
             if (!int.TryParse(inputs["api_timeout_seconds"].Text, out timeout)) throw new InvalidOperationException("API 超时请填写 10 到 600 之间的整数秒。");
             edits["api_timeout_seconds"] = timeout;
@@ -332,19 +483,50 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     void RestoreDpiFont() {
         var previous = dpiFont;
-        dpiFont = new Font("Microsoft YaHei UI", 9 * DeviceDpi / 72f, FontStyle.Regular, GraphicsUnit.Pixel);
+        dpiFont = new Font("Microsoft YaHei UI", 13 * DeviceDpi / 96f, FontStyle.Regular, GraphicsUnit.Pixel);
         Font = dpiFont; previous.Dispose();
+        ScaleHeadings(this);
+        if (brandMark != null) {
+            int pixels = Math.Max(16, (int)Math.Round(30 * DeviceDpi / 96f));
+            Image next;
+            using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Tingji.Idle.ico"))
+            using (var icon = new Icon(stream, new Size(pixels, pixels))) next = icon.ToBitmap();
+            brandMark.Image = next; if (brandImage != null) brandImage.Dispose(); brandImage = next;
+        }
         PerformLayout();
+        FitToWorkArea(Screen.FromControl(this).WorkingArea);
         var tabs = (TabControl)Controls.Find("settingsTabs", true)[0];
         tabs.PerformLayout();
         // WinForms leaves inactive pages at the previous monitor's DPI bounds.
         foreach (TabPage page in tabs.TabPages) page.Bounds = tabs.DisplayRectangle;
     }
+    void FitToWorkArea(Rectangle work) {
+        Bounds = DesktopServices.FitWindowBounds(Bounds, work);
+        LayoutTabHeaders();
+    }
+    void LayoutTabHeaders() {
+        Control[] found = Controls.Find("settingsTabs", true);
+        if (found.Length == 0) return;
+        var tabs = (TabControl)found[0];
+        var size = new Size(Math.Max(1, Math.Min((int)Math.Round(170 * DeviceDpi / 96f), (tabs.ClientSize.Width - 8) / 3)), (int)Math.Round(38 * DeviceDpi / 96f));
+        if (tabs.ItemSize != size) tabs.ItemSize = size;
+    }
+    protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutTabHeaders(); }
+    void ScaleHeadings(Control root) {
+        foreach (Control child in root.Controls) {
+            if (child is Label && child.Tag is float) child.Font = DisplayFont((float)child.Tag * DeviceDpi / 96f, FontStyle.Bold);
+            ScaleHeadings(child);
+        }
+    }
     protected override void OnShown(EventArgs e) { base.OnShown(e); RestoreDpiFont(); }
-    protected override void OnDpiChanged(DpiChangedEventArgs e) { base.OnDpiChanged(e); RestoreDpiFont(); }
+    protected override void OnDpiChanged(DpiChangedEventArgs e) {
+        base.OnDpiChanged(e); RestoreDpiFont();
+        if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(delegate { if (!IsDisposed) RestoreDpiFont(); }));
+    }
     protected override void Dispose(bool disposing) {
         base.Dispose(disposing);
         if (disposing && dpiFont != null) { dpiFont.Dispose(); dpiFont = null; }
         if (disposing && githubImage != null) { githubImage.Dispose(); githubImage = null; }
+        if (disposing) { engineTimer.Dispose(); if (engineProcess != null) engineProcess.Dispose(); foreach (var font in displayFonts) font.Dispose(); if (brandImage != null) brandImage.Dispose(); }
     }
 }

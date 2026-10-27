@@ -94,6 +94,32 @@ internal static class TestMeetingExperience {
         Set(value, "DirectoryPath", session); Set(value, "stopping", true);
         return value;
     }
+    static void RecordingOnly(Dictionary<string, object> config) {
+        var next = new Dictionary<string, object>(config); next["auto_transcribe"] = false;
+        string session = Fixture("20991027-120000-record-only", "recorded");
+        var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+        metadata["audio_export_version"] = 1; metadata["auto_transcribe"] = false;
+        MeetingFiles.WriteJson(Path.Combine(session, "session.json"), metadata);
+        string audio = Path.Combine((string)config["vault_root"], "record-only.mp3");
+        File.WriteAllBytes(audio, new byte[] { 1, 2, 3 });
+        MeetingFiles.WriteJson(Path.Combine(session, "status.json"), new { state = "audio_ready", stage = "encode", published_audio = new { path = audio } });
+        File.WriteAllText(Path.Combine(session, "native_audio.json"), "{}");
+        int launches = 0;
+        using (var context = new MeetingContext(next, delegate { launches++; return Child(true); }, delegate { })) {
+            ((System.Windows.Forms.Timer)Field(context, "timer")).Stop();
+            Process export = Child(true); export.WaitForExit();
+            var jobs = (List<TranscriptionJob>)Field(context, "jobs");
+            jobs.Add(new TranscriptionJob { Session = session, Process = export, AudioExport = true, TranscribeAfterExport = false });
+            Call(context, "Tick");
+            var record = new SessionCatalog(MeetingFiles.Home, (string)config["vault_root"]).Get(session);
+            Check(launches == 0 && jobs.Count == 0, "Record-only export completion never launches or preflights ASR");
+            Check(record.State == "recorded" && record.CanRetry && record.AudioPath == audio, "Intentional recording-only result has its MP3 and a manual transcription route, not a failure");
+            Check(File.Exists(Path.Combine(session, "mic.wav")) && !File.Exists(Path.Combine(session, "transcription-settings.json")), "Record-only keeps lossless retry sources without model authorization");
+            Call(context, "LaunchTranscriptionWorker", session);
+            Check(launches == 1, "An explicit manual transcription can still launch with automatic transcription disabled");
+            Call(context, "RequestExit");
+        }
+    }
     static void DeferredTranscription(Dictionary<string, object> config) {
         string session = Fixture("20991022-120000-deferred", "recorded");
         var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
@@ -110,6 +136,11 @@ internal static class TestMeetingExperience {
             Check(new SessionCatalog(MeetingFiles.Home, MeetingFiles.VaultRoot(config)).Get(session).CanRetry, "Unconfigured recording remains retryable");
             Check(Convert.ToBase64String(raw) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(session, "mic.wav"))), "Missing dependencies never rewrite recorded bytes");
             Check(!File.Exists(Path.Combine(session, "transcription-settings.json")), "Failed preflight cannot authorize an upload or bind an unready engine");
+            Form setupPrompt = null;
+            foreach (Form form in Application.OpenForms) if (form is LocalPreparationPrompt) setupPrompt = form;
+            Check(setupPrompt != null, "Missing local engine presents a non-blocking prepare-or-keep-recording choice");
+            ((Button)setupPrompt.CancelButton).PerformClick();
+            Check(setupPrompt.IsDisposed && ((HashSet<string>)Field(pending, "resumeAfterPreparation")).Count == 0, "Keeping audio does not download anything or enroll an automatic transcription");
             pending.ExitThread();
         }
         config["asr_context"] = "updated locally before first transcription";
@@ -117,7 +148,17 @@ internal static class TestMeetingExperience {
         Process child = null;
         using (var ready = new MeetingContext(config, delegate(string path) { launched = path; child = Child(false); return child; }, delegate { throw new Exception("No external app"); })) {
             ((System.Windows.Forms.Timer)Field(ready, "timer")).Stop();
-            Call(ready, "RetrySession", session);
+            var queued = (HashSet<string>)Field(ready, "resumeAfterPreparation"); queued.Add(session);
+            Set(ready, "localEngineReady", new Func<string, bool>(delegate { return false; }));
+            Call(ready, "ResumePreparedTranscriptions");
+            Check(launched == null && queued.Contains(session), "Pending local transcription waits for actual readiness");
+            Set(ready, "localEngineReady", new Func<string, bool>(delegate { return true; }));
+            ((Dictionary<string, object>)Field(ready, "config"))["transcription_mode"] = "api";
+            Call(ready, "ResumePreparedTranscriptions");
+            Check(launched == null && queued.Count == 0, "A later API mode change cannot reuse local-only consent");
+            ((Dictionary<string, object>)Field(ready, "config"))["transcription_mode"] = "local"; queued.Add(session);
+            Call(ready, "ResumePreparedTranscriptions");
+            Check(queued.Count == 0, "Automatic local continuation is consumed only once");
             var selection = MeetingFiles.ReadJson(Path.Combine(session, "transcription-settings.json"));
             Check(launched == session && (string)selection["asr_context"] == (string)config["asr_context"], "Actual retry binds current model settings and vocabulary without a tray restart");
             Check(!(bool)selection["api_upload_confirmed"] && (string)selection["transcription_mode"] == "local", "Local retry cannot authorize cloud upload");
@@ -372,6 +413,14 @@ internal static class TestMeetingExperience {
             Check(MenuAction(warningItem, "打开转录笔记") != null && MenuAction(warningItem, "定位录音文件") != null, "Warning results must keep both published files reachable");
             Check(MenuAction(warningItem, "重试这场转写") == null, "A completed warning must not offer an ineffective ASR retry");
             menu.Close();
+            File.Delete(warningNote);
+            Call(context, "RefreshFeedback");
+            Check(panel.Heading.Text == "采集异常 · 文件需检查", "A capture warning with a missing transcript must not claim transcription is complete");
+            warningItem = OpenRecent(menu, recent, "Native capture-warning fixture");
+            Check(warningItem != null && warningItem.Text.Contains("文件需检查") && !warningItem.Text.Contains("转写完成"), "Recent history must distinguish unavailable warning outputs from completed files");
+            menu.Close();
+            File.WriteAllText(warningNote, "synthetic native test note");
+            Call(context, "RefreshFeedback");
             // Exercise the controller's actual exit entry while quick-note
             // persistence is asynchronous. Never stop a real recording here.
             bool rejectNoteSave = false;
@@ -402,7 +451,7 @@ internal static class TestMeetingExperience {
             Check(noteWindow.IsDisposed && (bool)Field(context, "exiting"), "Successful note persistence must automatically resume the controller exit");
             Check(noteStore.Load(DateTime.Today).Text == "退出保护样本恢复后尾文", "The actual controller exit must preserve the final note text");
             context.Dispose(); context = null; menu.Dispose();
-            DeferredTranscription(config);
+            RecordingOnly(config); DeferredTranscription(config);
             Console.WriteLine("Meeting experience: " + assertions + " assertions passed; no audio, model, cloud or external editor.");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

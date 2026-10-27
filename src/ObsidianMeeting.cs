@@ -224,7 +224,7 @@ internal static class MeetingConfig {
     }
     public static void CheckRecordingRuntime(string home) {
         if (!File.Exists(Path.Combine(home, ".venv", "Scripts", "python.exe")) || !File.Exists(Path.Combine(home, "meeting_worker.py")))
-            throw new IOException("缺少独立 Python 转写环境。请打开「设置 → 转写 → 下载推荐模型…」准备环境，完成后从「最近会议」重试。原始录音已保留。");
+            throw new IOException("缺少独立 Python 转写环境。请打开「设置 → 转写 → 启用本地转写」准备环境，完成后从「最近会议」重试。原始录音已保留。");
     }
     public static string LocalRuntimeStatus(string home) {
         try { CheckTranscriptionRuntime(home, new Dictionary<string, object> { { "transcription_mode", "local" } }); }
@@ -239,7 +239,7 @@ internal static class MeetingConfig {
             Path.Combine(models, "sherpa-onnx-pyannote-segmentation-3-0", "model.onnx"),
             Path.Combine(models, "sherpa-onnx-pyannote-segmentation-3-0", "model.int8.onnx") })
             if (File.Exists(file) && new FileInfo(file).Length > 0) segmentation = true;
-        if (!segmentation) throw new IOException("缺少本地说话人分段模型。请在「设置 → 转写 → 下载推荐模型…」准备，完成后重试；原始录音已保留。");
+        if (!segmentation) throw new IOException("缺少本地说话人分段模型。请在「设置 → 转写 → 启用本地转写」准备，完成后重试；原始录音已保留。");
         var required = new List<string> {
             Path.Combine(models, "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
         };
@@ -248,7 +248,7 @@ internal static class MeetingConfig {
             foreach (string file in new[] { "config.json", "model.safetensors", "processor_config.json", "tokenizer_config.json", "tokenizer.json" }) required.Add(Path.Combine(qwen, file));
         }
         foreach (string file in required) if (!File.Exists(file) || new FileInfo(file).Length == 0)
-            throw new IOException("本地转写模型尚未准备完整，请打开「设置 → 转写 → 下载推荐模型…」；完成后从「最近会议」重试。原始录音已保留。缺少：" + Path.GetFileName(file));
+            throw new IOException("本地转写模型尚未准备完整，请打开「设置 → 转写 → 启用本地转写」；完成后从「最近会议」重试。原始录音已保留。缺少：" + Path.GetFileName(file));
     }
 }
 
@@ -1031,6 +1031,7 @@ internal sealed class RecordingSession : IDisposable {
             { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(audioFolder, Path.GetFileName(DirectoryPath))) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
             { "transcription_deferred", true }, { "audio_export_version", 1 },
+            { "auto_transcribe", config["auto_transcribe"] },
             { "transcription_mode", config["transcription_mode"] }, { "asr_denoise", config["asr_denoise"] },
             { "asr_context", MeetingFiles.Text(config, "asr_context", "") },
             { "asr_terms", MeetingFiles.Text(config, "asr_terms", "") },
@@ -1648,9 +1649,11 @@ internal sealed class RecorderPanel : Form {
     readonly Stopwatch processingClock = new Stopwatch();
     bool processingBusy;
     string resultSession;
+    string resultRoot;
     public bool AllowClose;
     bool showingRecording;
     bool showingAttention;
+    bool showingQuickActions;
     bool microphonePaused;
     bool recordingPaused;
     DateTime bookmarkFeedbackUntil;
@@ -1671,7 +1674,9 @@ internal sealed class RecorderPanel : Form {
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        AutoScaleMode = AutoScaleMode.Dpi;
+        // This compact, fixed-size surface has one 96-DPI coordinate system.
+        // Do not combine WinForms child autoscaling with explicit pixel fonts.
+        AutoScaleMode = AutoScaleMode.None;
         Font = new Font("Microsoft YaHei UI", 9);
         BackColor = Color.White;
         DoubleBuffered = true;
@@ -1757,11 +1762,6 @@ internal sealed class RecorderPanel : Form {
         Heading.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text); };
         Detail.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text + "\n" + Detail.Text); };
         SetMicPaused(false);
-        foreach (Control label in new Control[] { Time, Heading, Detail, AudioFile, TranscriptFile })
-            label.DpiChangedAfterParent += delegate { RestoreDpiFonts(); };
-        // Keep all design coordinates at 96 DPI until initialization is complete.
-        // Setting the font earlier can otherwise reset this baseline to the desktop DPI.
-        AutoScaleDimensions = new SizeF(96, 96);
         ResumeLayout(false);
     }
     void RefreshBrandBitmap() {
@@ -1771,7 +1771,7 @@ internal sealed class RecorderPanel : Form {
         if (previous != null) previous.Dispose();
     }
     void LayoutBrandHeader() {
-        float scale = DeviceDpi / 96f;
+        float scale = fontDpi / 96f;
         int iconSize = (int)Math.Round(16 * scale);
         int titleWidth = (int)Math.Round(40 * scale);
         int gap = (int)Math.Round(4 * scale);
@@ -1782,11 +1782,12 @@ internal sealed class RecorderPanel : Form {
     static Font DpiFont(string family, float points, int dpi) {
         return new Font(family, points * dpi / 72f, FontStyle.Regular, GraphicsUnit.Pixel);
     }
-    void RestoreDpiFonts() {
+    void RestoreDpiFonts() { ApplyDpiLayout(DeviceDpi); }
+    void ApplyDpiLayout(int dpi) {
         Font[] previous = null;
-        if (fontDpi != DeviceDpi) {
+        if (fontDpi != dpi) {
             previous = new Font[] { timeNormal, timeLong, recordingHeadingFont, processingHeadingFont, artifactFont, detailFont, brandFont };
-            fontDpi = DeviceDpi;
+            fontDpi = dpi;
             timeNormal = DpiFont("Segoe UI Semibold", 11, fontDpi);
             timeLong = DpiFont("Segoe UI Semibold", 8, fontDpi);
             recordingHeadingFont = DpiFont("Microsoft YaHei UI", 7.5f, fontDpi);
@@ -1801,9 +1802,33 @@ internal sealed class RecorderPanel : Form {
         Detail.Font = detailFont;
         AudioFile.Font = TranscriptFile.Font = artifactFont;
         BrandTitle.Font = brandFont;
-        LayoutBrandHeader();
-        if (QuickNoteButton.Visible) LayoutQuickActions(showingAttention);
+        Size size = new Size((int)Math.Round(186 * fontDpi / 96.0), (int)Math.Round(68 * fontDpi / 96.0));
+        if (ClientSize != size || MinimumSize != size || MaximumSize != size) {
+            MinimumSize = MaximumSize = Size.Empty;
+            ClientSize = size;
+            MinimumSize = MaximumSize = size;
+        }
+        LayoutPanelContent();
         if (previous != null) foreach (Font font in previous) font.Dispose();
+    }
+    Rectangle PanelBounds(int x, int y, int width, int height) {
+        double scale = fontDpi / 96.0;
+        return new Rectangle((int)Math.Round(x * scale), (int)Math.Round(y * scale), (int)Math.Round(width * scale), (int)Math.Round(height * scale));
+    }
+    void LayoutPanelContent() {
+        Time.Bounds = PanelBounds(10, 30, 55, 22);
+        AudioLevel.Bounds = PanelBounds(66, 32, 18, 18);
+        MicrophoneButton.Bounds = PanelBounds(91, 27, 32, 32);
+        StopButton.Bounds = PanelBounds(148, 29, 28, 28);
+        CollapseButton.Bounds = PanelBounds(160, 2, 22, 20);
+        LayoutBrandHeader();
+        Heading.Bounds = showingRecording ? PanelBounds(10, 52, 74, 16) : showingAttention ? PanelBounds(10, 22, 166, 18) : PanelBounds(10, 25, 166, 18);
+        Detail.Bounds = PanelBounds(10, 45, 166, 18);
+        if (showingQuickActions) LayoutQuickActions(showingAttention);
+        if (resultSession != null) {
+            SetArtifact(AudioFile, "录音", AudioFile.Tag as string, resultRoot, 25);
+            SetArtifact(TranscriptFile, "转录", TranscriptFile.Tag as string, resultRoot, 45);
+        }
     }
     void Drag(object sender, MouseEventArgs e) {
         if (e.Button != MouseButtons.Left) return;
@@ -1829,7 +1854,7 @@ internal sealed class RecorderPanel : Form {
         Detail.AccessibleName = "电脑声音：" + systemName;
         DevicesTip.SetToolTip(Detail, "电脑声音：" + systemName);
         MicrophoneButton.Enabled = StopButton.Enabled = true;
-        Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(52 * ClientSize.Height / 68f), (int)(74 * ClientSize.Width / 186f), (int)(13 * ClientSize.Height / 68f));
+        LayoutPanelContent();
         AudioLevel.SetRecording(true);
         SetMicPaused(false);
         Invalidate();
@@ -1903,17 +1928,17 @@ internal sealed class RecorderPanel : Form {
     }
     void LayoutQuickActions(bool compact) {
         var actions = new[] { QuickNoteButton, StartButton, SettingsButton };
-        int size = compact ? 24 : 32, top = compact ? 39 : 28;
+        int size = compact ? 24 : 32, top = compact ? 42 : 28;
         for (int i = 0; i < actions.Length; i++)
-            actions[i].SetBounds((int)Math.Round((18 + (compact ? 4 : 0) + i * 59) * ClientSize.Width / 186f),
-                (int)Math.Round(top * ClientSize.Height / 68f), (int)Math.Round(size * ClientSize.Width / 186f), (int)Math.Round(size * ClientSize.Height / 68f));
+            actions[i].Bounds = PanelBounds(18 + (compact ? 4 : 0) + i * 59, top, size, size);
     }
     public void SetQuickActionHotkeys(string quickNote, string start) {
         DevicesTip.SetToolTip(QuickNoteButton, "速记便签 · " + quickNote + "\n置顶输入、粘贴图片，自动保存");
-        DevicesTip.SetToolTip(StartButton, "开始会议录音 · " + start + "\n录制麦克风与电脑声音，结束后转写");
+        DevicesTip.SetToolTip(StartButton, "开始会议录音 · " + start + "\n录制麦克风与电脑声音，结束后保存 MP3；可在设置中开启转写");
         DevicesTip.SetToolTip(SettingsButton, "设置\n保存位置、转写模型与快捷键");
     }
     void SetQuickActionsVisible(bool visible) {
+        showingQuickActions = visible;
         QuickNoteButton.Visible = StartButton.Visible = SettingsButton.Visible = visible;
     }
     public void ShowProcessing(string title, string detail) {
@@ -1927,15 +1952,13 @@ internal sealed class RecorderPanel : Form {
         // Polling the same state must not hide/show icons: doing so cancels
         // native hover tracking and makes the tooltip flash every 500 ms.
         SetQuickActionsVisible(quickActions);
-        if (quickActions) LayoutQuickActions(attention);
         AudioLevel.SetRecording(false);
         MicrophoneButton.SetInputLevel(0);
         Time.Visible = AudioLevel.Visible = MicrophoneButton.Visible = StopButton.Visible = false;
         Heading.Visible = !quickActions || attention;
         Detail.Visible = !quickActions;
         Heading.Font = attention ? detailFont : processingHeadingFont;
-        Heading.SetBounds((int)(10 * ClientSize.Width / 186f), (int)((attention ? 23 : 25) * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)((attention ? 14 : 18) * ClientSize.Height / 68f));
-        Detail.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(45 * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(16 * ClientSize.Height / 68f));
+        LayoutPanelContent();
         Heading.ForeColor = Color.FromArgb(38, 49, 68);
         Heading.Text = title;
         Detail.Text = detail;
@@ -1958,20 +1981,22 @@ internal sealed class RecorderPanel : Form {
         AudioFile.Visible = TranscriptFile.Visible = false;
         AudioFile.Tag = TranscriptFile.Tag = null;
         resultSession = null;
+        resultRoot = null;
     }
     public void ShowResult(string session, string audio, string note, string root) {
         if (!showingRecording && !processingBusy && resultSession == session && (AudioFile.Tag as string) == audio && (TranscriptFile.Tag as string) == note) return;
         ShowProcessing("", "");
         Heading.Visible = Detail.Visible = false;
         resultSession = session;
+        resultRoot = root;
         SetArtifact(AudioFile, "录音", audio, root, 25);
         SetArtifact(TranscriptFile, "转录", note, root, 45);
     }
     void SetArtifact(LinkLabel link, string kind, string path, string root, int top) {
         bool available = !string.IsNullOrEmpty(path);
         string prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        string display = path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path.Substring(prefix.Length) : path;
-        link.SetBounds((int)(10 * ClientSize.Width / 186f), (int)(top * ClientSize.Height / 68f), (int)(166 * ClientSize.Width / 186f), (int)(18 * ClientSize.Height / 68f));
+        string display = available && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path.Substring(prefix.Length) : path;
+        link.Bounds = PanelBounds(10, top, 166, 18);
         link.Text = available ? CompactArtifactPath(kind + "：", display, link.Font, link.Width - 2) : kind + "：已移除";
         link.Tag = path;
         link.Enabled = available;
@@ -2053,9 +2078,9 @@ internal sealed class RecorderPanel : Form {
     }
     protected override void OnShown(EventArgs e) {
         base.OnShown(e);
+        RestoreDpiFonts();
         Rectangle work = Screen.FromPoint(Cursor.Position).WorkingArea;
         Location = new Point(Math.Max(work.Left, work.Right - Width - 24), Math.Max(work.Top, work.Bottom - Height - 24));
-        RestoreDpiFonts();
     }
     protected override void OnDpiChanged(DpiChangedEventArgs e) {
         base.OnDpiChanged(e);
@@ -2224,6 +2249,7 @@ internal sealed class TranscriptionJob {
     public string LastMessage;
     public bool Reported;
     public bool AudioExport;
+    public bool TranscribeAfterExport = true;
     public DateTime PreviousStatusWriteUtc = DateTime.MinValue;
     public DateTime WorkerStartedUtc = DateTime.MinValue;
 }
@@ -2245,6 +2271,9 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly SilenceMonitor silence = new SilenceMonitor();
     SessionCatalog catalog;
     MeetingSettingsDialog settingsDialog;
+    readonly HashSet<string> resumeAfterPreparation = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, Form> preparationPrompts = new Dictionary<string, Form>(StringComparer.OrdinalIgnoreCase);
+    Func<string, bool> localEngineReady = delegate(string root) { return LocalEngineState.Read(root).Ready; };
     DateTime lastUpdateCheck = DateTime.MinValue;
     bool checkingUpdate;
     readonly Func<string, Process> workerLauncher;
@@ -2367,6 +2396,34 @@ internal sealed class MeetingContext : ApplicationContext {
             settingsDialog.Show();
         } catch (Exception error) { Notice("无法打开设置", error.Message, ToolTipIcon.Warning); }
     }
+    void OfferLocalPreparation(string session) {
+        Form existing;
+        if (preparationPrompts.TryGetValue(session, out existing) && !existing.IsDisposed) { existing.Activate(); return; }
+        var prompt = new LocalPreparationPrompt(delegate {
+            if (recording != null || jobs.Exists(delegate(TranscriptionJob job) { return !job.Reported; })) {
+                Notice("录音已保留", "请在录音和后台处理结束后，从最近会议选择“启用并转写这场”。", ToolTipIcon.Info); return false;
+            }
+            if ((string)config["transcription_mode"] != "local") return false;
+            OpenSettings();
+            if (settingsDialog == null || settingsDialog.IsDisposed) return false;
+            resumeAfterPreparation.Add(session);
+            settingsDialog.ShowTranscription(); settingsDialog.BeginPreparation(); return true;
+        });
+        preparationPrompts[session] = prompt;
+        prompt.FormClosed += delegate { preparationPrompts.Remove(session); if (!prompt.PreparationAccepted) resumeAfterPreparation.Remove(session); };
+        prompt.Show();
+    }
+    void ResumePreparedTranscriptions() {
+        if (exiting || resumeAfterPreparation.Count == 0 || !localEngineReady(MeetingFiles.Home)) return;
+        foreach (string session in new List<string>(resumeAfterPreparation)) {
+            resumeAfterPreparation.Remove(session);
+            // A later explicit mode change must never turn local consent into cloud consent.
+            if ((string)config["transcription_mode"] != "local") continue;
+            if (ActiveJob(session)) continue;
+            try { var record = catalog.Get(session); if (record != null && record.CanRetry) RetrySession(session); }
+            catch (Exception failure) { MeetingFiles.Log(failure); Notice("这场录音需要检查", failure.Message, ToolTipIcon.Warning); }
+        }
+    }
     string ApplySettings(MeetingSettingsSnapshot snapshot, Dictionary<string, object> next) {
         if (recording != null || jobs.Count > 0 || exiting) return "请结束录音并等待后台转写完成后再保存。";
         if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose())
@@ -2398,7 +2455,6 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     void ToggleQuickNote() {
-        if (settingsDialog != null && !settingsDialog.IsDisposed) { settingsDialog.Activate(); return; }
         try {
             if (quickNote == null || quickNote.IsDisposed) {
                 string stateRoot = Path.Combine(MeetingFiles.Home, "work", "quick-note");
@@ -2412,7 +2468,6 @@ internal sealed class MeetingContext : ApplicationContext {
     void OnUi(Action action) { if (!dispatch.IsDisposed) try { dispatch.BeginInvoke(action); } catch (InvalidOperationException) { } }
     void Toggle() {
         if (exiting) return;
-        if (settingsDialog != null && !settingsDialog.IsDisposed) { settingsDialog.Activate(); return; }
         if (recording == null) Start(); else Stop();
     }
     void Start() {
@@ -2537,7 +2592,7 @@ internal sealed class MeetingContext : ApplicationContext {
         } else if (error != null) {
             RecordLaunchFailure(session, "录音保存异常，请检查原始资料：" + error.Message);
             Notice("录音保存异常", "已保留原始文件，请从最近会议检查这场资料。", ToolTipIcon.Error);
-        } else LaunchWorker(session);
+        } else LaunchWorkerCore(session, true);
         RefreshFeedback();
         if (!discarded && (bool)config["show_processing_window"] && !exiting) panel.Show();
         else panel.Hide();
@@ -2575,6 +2630,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     Process process = record.TryOpenWorker();
                     if (process != null) jobs.Add(new TranscriptionJob { Session = record.DirectoryPath, Process = process, LastMessage = record.Message,
                         AudioExport = MeetingFiles.Text(MeetingFiles.ReadJson(Path.Combine(record.DirectoryPath, "controller.json")), "audio_export_only", "").Equals("True", StringComparison.OrdinalIgnoreCase),
+                        TranscribeAfterExport = !MeetingFiles.Text(MeetingFiles.ReadJson(Path.Combine(record.DirectoryPath, "controller.json")), "transcribe_after_export", "True").Equals("False", StringComparison.OrdinalIgnoreCase),
                         WorkerStartedUtc = record.WorkerLaunchUtc, PreviousStatusWriteUtc = record.PreviousStatusWriteUtc });
                 }
                 if (record.NeedsAttention) {
@@ -2636,18 +2692,21 @@ internal sealed class MeetingContext : ApplicationContext {
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
         } catch (Exception error) { MeetingFiles.Log(error); }
     }
-    void LaunchWorker(string session) {
+    void LaunchWorker(string session) { LaunchWorkerCore(session, false); }
+    void LaunchWorkerCore(string session, bool automatic) {
         try {
             var record = catalog.Get(session);
             if (record == null || !record.CanRetry || ActiveJob(session)) return;
             var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+            bool transcribe = !automatic || MeetingFiles.Text(metadata, "auto_transcribe", MeetingFiles.Text(config, "auto_transcribe", "False")).Equals("True", StringComparison.OrdinalIgnoreCase);
             if (MeetingFiles.Text(metadata, "audio_export_version", "") == "1" && !File.Exists(Path.Combine(session, "result.json"))) {
-                LaunchAudioExport(session); return;
+                LaunchAudioExport(session, transcribe); return;
             }
+            if (!transcribe) { KeepRecordingOnly(session); return; }
             LaunchTranscriptionWorker(session);
         } catch (Exception error) { RecordLaunchFailure(session, error.Message); Notice("录音处理未启动", error.Message, ToolTipIcon.Warning); }
     }
-    void LaunchAudioExport(string session) {
+    void LaunchAudioExport(string session, bool transcribeAfterExport) {
         Process process = null;
         try {
             DateTime previous = File.GetLastWriteTimeUtc(Path.Combine(session, "status.json"));
@@ -2658,19 +2717,31 @@ internal sealed class MeetingContext : ApplicationContext {
                 WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true
             });
             if (process == null) throw new IOException("未能启动 MP3 导出进程，原始分轨已保留。");
-            jobs.Add(new TranscriptionJob { Session = session, Process = process, AudioExport = true,
+            jobs.Add(new TranscriptionJob { Session = session, Process = process, AudioExport = true, TranscribeAfterExport = transcribeAfterExport,
                 PreviousStatusWriteUtc = previous, WorkerStartedUtc = started });
-            catalog.SaveWorker(session, process, started, previous, true);
+            catalog.SaveWorker(session, process, started, previous, true, transcribeAfterExport);
             SaveLastSessionWithAttempt(session, process, started, previous);
         } catch (Exception error) {
             if (process == null) RecordLaunchFailure(session, error.Message);
             MeetingFiles.Log(error); Notice("MP3 导出需要检查", error.Message + " 原始分轨已保留。", ToolTipIcon.Warning);
         }
     }
+    void KeepRecordingOnly(string session) {
+        var status = MeetingFiles.ReadJson(Path.Combine(session, "status.json"));
+        status["state"] = "audio_ready"; status["stage"] = "recording_only";
+        status["message"] = "MP3 已保存 · 仅录音；可从最近会议手动转写，无损资料暂保留";
+        status["updated_at"] = DateTimeOffset.Now.ToString("o"); status.Remove("error");
+        MeetingFiles.WriteJson(Path.Combine(session, "status.json"), status);
+        catalog.SaveWorker(session, null);
+        var record = catalog.Get(session);
+        if (recording == null) { focusedSession = session; focusedRecord = record; }
+        if (record != null) { MarkNotifiedSafely(record); Notice("录音已保存", record.AudioPath, ToolTipIcon.Info); }
+    }
     void LaunchTranscriptionWorker(string session) {
         Process startedProcess = null;
         IDisposable setupGate = null;
         bool checkingConfiguration = true;
+        bool needsLocalSetup = false;
         try {
             var record = catalog.Get(session);
             if (record == null) throw new IOException("会议资料不在当前程序的 work 中。");
@@ -2679,7 +2750,8 @@ internal sealed class MeetingContext : ApplicationContext {
             if (workerLauncher == null) {
                 setupGate = DesktopServices.EnterModelSetupGate(MeetingFiles.Home);
                 MeetingConfig.Validate(new Dictionary<string, object>(config));
-                MeetingConfig.CheckTranscriptionRuntime(MeetingFiles.Home, config);
+                try { MeetingConfig.CheckTranscriptionRuntime(MeetingFiles.Home, config); }
+                catch (IOException) { needsLocalSetup = true; throw; }
             }
             var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
             if (MeetingFiles.Text(metadata, "transcription_deferred", "").Equals("True", StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(session, "result.json"))) {
@@ -2741,7 +2813,8 @@ internal sealed class MeetingContext : ApplicationContext {
             }
             RecordLaunchFailure(session, error.Message, checkingConfiguration);
             RefreshFeedback();
-            Notice(checkingConfiguration ? "录音已保存 · 待配置转写" : "转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Warning);
+            if (checkingConfiguration && needsLocalSetup && (string)config["transcription_mode"] == "local") OfferLocalPreparation(session);
+            else Notice(checkingConfiguration ? "录音已保存 · 待配置转写" : "转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Warning);
         } finally { if (setupGate != null) setupGate.Dispose(); }
     }
     void ReportJobFailure(TranscriptionJob job, string detail) {
@@ -2754,6 +2827,7 @@ internal sealed class MeetingContext : ApplicationContext {
         Notice("转写失败 · " + label, (string.IsNullOrEmpty(detail) ? "转写进程退出，未生成完成状态。" : detail) + " 原始资料已保留；托盘 → 最近会议 → " + label + " 检查或重试。", ToolTipIcon.Error);
     }
     void Tick() {
+        ResumePreparedTranscriptions();
         if (recording != null && !recording.Stopping) {
             panel.SetElapsed(recording.Elapsed);
             float microphonePeak = recording.MicrophonePeak, systemPeak = recording.SystemPeak;
@@ -2789,7 +2863,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     job.Reported = true;
                     if (fresh && job.Process.ExitCode == 0 && File.Exists(Path.Combine(job.Session, "native_audio.json"))) {
                         catalog.SaveWorker(job.Session, null);
-                        LaunchTranscriptionWorker(job.Session);
+                        if (job.TranscribeAfterExport) LaunchTranscriptionWorker(job.Session); else KeepRecordingOnly(job.Session);
                     } else {
                         string exportError = MeetingFiles.Text(status, "error", "MP3 导出中断，原始分轨已保留，可重试。");
                         RecordLaunchFailure(job.Session, exportError);
@@ -2806,7 +2880,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     if (record.State == "completed")
                         Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
                     else if (record.State == "capture_warning")
-                        Notice("转写完成 · 录音需检查 · " + record.Label, record.Message + "\n录音：" + record.AudioPath + "\n转录：" + record.NotePath, ToolTipIcon.Warning);
+                        Notice(StateLabel(record) + " · " + record.Label, record.Message + "\n录音：" + record.AudioPath + "\n转录：" + record.NotePath, ToolTipIcon.Warning);
                     // Completing A must never take focus away from meeting B.
                     if (record.State != "capture_warning" && recording == null && File.Exists(record.NotePath) && (bool)config["auto_open_completed_note"] && (bool)config["open_in_obsidian"]) {
                         try { OpenNote(record.NotePath, true); }
@@ -2860,9 +2934,9 @@ internal sealed class MeetingContext : ApplicationContext {
             if (focusedRecord != null) {
                 rename.Enabled = focusedRecord.State == "completed" && !focusedRecord.WorkerAlive;
                 string title = StateLabel(focusedRecord);
-                if (focusedRecord.State == "completed" || focusedRecord.State == "transcript_only" || focusedRecord.State == "audio_only")
+                if (focusedRecord.State == "completed" || focusedRecord.State == "transcript_only" || focusedRecord.State == "audio_only" || focusedRecord.State == "recorded")
                     panel.ShowResult(focusedRecord.DirectoryPath, focusedRecord.State == "transcript_only" ? "" : focusedRecord.AudioPath,
-                        focusedRecord.State == "audio_only" ? "" : focusedRecord.NotePath, MeetingFiles.VaultRoot(config));
+                        focusedRecord.State == "audio_only" || focusedRecord.State == "recorded" ? "" : focusedRecord.NotePath, MeetingFiles.VaultRoot(config));
                 else if (focusedRecord.WorkerAlive) panel.ShowWorking(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 else panel.ShowAttention(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
@@ -2877,6 +2951,8 @@ internal sealed class MeetingContext : ApplicationContext {
             case "completed": return "录音与转录已完成";
             case "transcript_only": return "仅保留转录";
             case "audio_only": return "仅保留录音";
+            case "recorded": return "录音已保存 · 未转写";
+            case "recorded_warning": return "录音已保存 · 采集需检查";
             case "capture_warning": return "转写完成 · 录音需检查";
             case "interrupted": return "录音中断 · 检查资料";
             case "failed": return "转写失败 · 可重试";
@@ -2888,6 +2964,7 @@ internal sealed class MeetingContext : ApplicationContext {
         }
     }
     static string StateLabel(SessionRecord record) {
+        if (record.State == "capture_warning" && !record.OutputsComplete) return "采集异常 · 文件需检查";
         if (record.CanRetry && record.Message.StartsWith("录音已保存 · 待配置转写")) return "录音已保存 · 待配置转写";
         if (!record.CanRetry && (record.State == "failed" || record.State == "retry")) return "转写未完成 · 检查资料";
         return StateLabel(record.State);
@@ -2918,7 +2995,9 @@ internal sealed class MeetingContext : ApplicationContext {
                     item.DropDownItems.Add("定位转录文件", null, delegate { LocateArtifactForSession(session, false); });
                 if (record.State == "completed" && !record.WorkerAlive && recording == null)
                     item.DropDownItems.Add("命名这场会议…", null, delegate { PromptRename(session); });
-                if (!current && record.CanRetry) item.DropDownItems.Add("重试这场转写", null, delegate { RetrySession(session); });
+                if (!current && record.CanRetry) item.DropDownItems.Add(record.State == "recorded" || record.State == "recorded_warning" ? "转写这场会议…" : "重试这场转写", null, delegate { RetrySession(session); });
+                if (!current && record.CanRetry && (string)config["transcription_mode"] == "local" && record.Message.StartsWith("录音已保存 · 待配置转写"))
+                    item.DropDownItems.Add("启用并转写这场", null, delegate { OfferLocalPreparation(session); });
                 item.DropDownItems.Add("打开成品位置", null, delegate { OpenSessionFolder(session); });
                 if (record.CanRetry || record.State == "capture_warning" || record.State == "missing" || record.Message.Contains("清理未完成"))
                     item.DropDownItems.Add("检查恢复资料…", null, delegate { OpenFolder(session); });
@@ -2993,6 +3072,8 @@ internal sealed class MeetingContext : ApplicationContext {
     protected override void ExitThreadCore() {
         if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose(ExitThread)) return;
         if (settingsDialog != null && !settingsDialog.IsDisposed) { settingsDialog.Close(); settingsDialog = null; }
+        foreach (var prompt in new List<Form>(preparationPrompts.Values)) prompt.Close();
+        preparationPrompts.Clear(); resumeAfterPreparation.Clear();
         timer.Stop(); timer.Dispose();
         hotkey.Dispose();
         tray.Visible = false; tray.Dispose();

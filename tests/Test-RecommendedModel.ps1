@@ -6,6 +6,7 @@ $taskFixture = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ('recommended-' +
 [IO.Directory]::CreateDirectory($taskFixture) | Out-Null
 $taskHelper = Join-Path $taskFixture 'RecommendedModel.ps1'
 Copy-Item -LiteralPath (Join-Path $SourceRoot 'RecommendedModel.ps1') -Destination $taskHelper
+[IO.File]::WriteAllText((Join-Path $taskFixture 'check_local_engine.py'), '# owned smoke-test process fixture')
 $taskUtf8Test = New-Object Text.UTF8Encoding($false)
 $taskAssertions = 0
 function Check([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message }; $script:taskAssertions++ }
@@ -64,7 +65,7 @@ $taskCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.
 $taskProbeSource = Join-Path $taskFixture 'Probe.cs'
 $taskProbe = Join-Path $taskFixture '.venv\Scripts\python.exe'
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($taskProbe)) | Out-Null
-[IO.File]::WriteAllText($taskProbeSource, 'class Probe { static int Main() { System.Console.WriteLine("cpu"); return 0; } }', $taskUtf8Test)
+[IO.File]::WriteAllText($taskProbeSource, 'class Probe { static int Main(string[] args) { if(System.Array.IndexOf(args,"--root")>=0) System.Console.Error.WriteLine("synthetic model progress"); else System.Console.WriteLine("cpu"); return 0; } }', $taskUtf8Test)
 & $taskCompiler /nologo /target:exe ('/out:' + $taskProbe) $taskProbeSource
 Check ($LASTEXITCODE -eq 0) 'Owned fake probe builds'
 $taskFakeInstaller = Join-Path $taskFixture 'Install.ps1'
@@ -111,6 +112,14 @@ Check ($taskUiSource.Split(@('if ($Worker) {'), [StringSplitOptions]::None).Coun
 [IO.File]::WriteAllText($taskLaunchFailure, $taskUiSource.Replace('if ($Worker) {', 'if ($Worker) { exit 9 }; if ($Worker) {'), (New-Object Text.UTF8Encoding($true)))
 & $taskDesktop $taskPowerShell -NoProfile -ExecutionPolicy Bypass -File $taskUiTest -Helper $taskLaunchFailure -Output (Join-Path $taskFixture 'launch-failure.png') -Action launch-error
 Check ($LASTEXITCODE -eq 0) 'A worker exiting before a fresh status gives an actionable retry'
+foreach ($taskBrokenStatus in @('missing', 'malformed', 'invalid-date')) {
+    $taskBrokenStatusPath = Join-Path $taskFixture 'installation\recommended-model.json'
+    if ($taskBrokenStatus -eq 'missing') { [IO.File]::Delete($taskBrokenStatusPath) }
+    elseif ($taskBrokenStatus -eq 'malformed') { [IO.File]::WriteAllText($taskBrokenStatusPath, '{broken', $taskUtf8Test) }
+    else { [IO.File]::WriteAllText($taskBrokenStatusPath, '{"state":"completed","updated_at":"invalid"}', $taskUtf8Test) }
+    & $taskDesktop $taskPowerShell -NoProfile -ExecutionPolicy Bypass -File $taskUiTest -Helper $taskLaunchFailure -Output (Join-Path $taskFixture ($taskBrokenStatus + '.png')) -Action launch-error
+    Check ($LASTEXITCODE -eq 0) ('Dead worker remains recoverable with ' + $taskBrokenStatus + ' status')
+}
 
 # Exercise the real RuntimeOnly branch with harmless process probes. In
 # particular a missing first-run config must remain missing, and API settings

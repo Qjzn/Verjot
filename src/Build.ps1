@@ -1,6 +1,6 @@
 ﻿param(
     [string]$OutputPath = 'ObsidianMeeting.exe',
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.6'
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.10'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -76,7 +76,7 @@ if ($taskCheckout -and $taskOutputFolder -ieq $taskRoot) {
         Copy-Item -LiteralPath (Join-Path $taskRepo $taskPolicy) -Destination $taskRoot -Force
     }
     [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'assets')) | Out-Null
-    foreach ($taskName in @('verbit-logo.png', 'tingji.ico', 'tingji-recording.ico', 'github-mark.png')) {
+    foreach ($taskName in @('verbit-logo.png', 'tingji.ico', 'tingji-recording.ico', 'github-mark.png', 'engine-check.wav', 'engine-check-source.md')) {
         Copy-Item -LiteralPath (Join-Path $taskAssets $taskName) -Destination (Join-Path $taskRoot 'assets') -Force
     }
     [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'packaging')) | Out-Null

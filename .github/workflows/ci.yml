@@ -47,5 +47,5 @@ jobs:
         run: |
           $env:PYTHONPATH = "$PWD;$PWD\..\tests"
           New-Item -ItemType Directory -Path ../tests/validation -Force | Out-Null
-          python -B -m unittest test_tingji_config test_prepare_audio test_meeting_worker test_api_asr test_first_use test_speaker_evaluation test_speaker_refinement test_device_revalidation
+          python -B -m unittest test_tingji_config test_check_local_engine test_prepare_audio test_meeting_worker test_api_asr test_first_use test_speaker_evaluation test_speaker_refinement test_device_revalidation
           if ($LASTEXITCODE -ne 0) { throw 'Python contract tests failed' }

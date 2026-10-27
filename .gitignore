@@ -98,6 +98,8 @@
 *.m4a
 *.flac
 *.ogg
+!/assets/engine-check.wav
+!/assets/engine-check-source.md
 
 # Source and tests are separated from personal runtime data.
 !/src/
@@ -123,6 +125,7 @@
 !/src/api_asr.py
 !/src/app.manifest
 !/src/asr_engine.py
+!/src/check_local_engine.py
 !/src/audio_sources.py
 !/src/config.example.json
 !/src/config.schema.json
@@ -138,6 +141,7 @@
 !/src/tingji_config.py
 !/tests/
 /tests/*
+!/tests/test_check_local_engine.py
 !/tests/TestCaptureReliability.cs
 !/tests/DeviceRevalidation.cs
 !/tests/TestDeviceRevalidation.cs

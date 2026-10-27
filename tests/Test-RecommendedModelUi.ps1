@@ -33,6 +33,7 @@ $taskUiTimer.Add_Tick({
             } else {
                 $taskVisibleMessage=@($taskForm.Controls[0].Controls | Where-Object { $_ -is [Windows.Forms.Label] })[-1].Text
                 if ($taskVisibleMessage -notlike '*检查进程未能启动*' -or -not $taskButton[0].Enabled) { throw ('Dead worker must expose a retry instead of waiting forever: ' + $taskVisibleMessage) }
+                if ($taskButton[0].Text -ne '重试检查' -or @($taskForm.Controls[0].Controls | Where-Object { $_ -is [Windows.Forms.ProgressBar] -and $_.Visible }).Count -ne 0) { throw 'Dead worker must clear the busy action and progress indicator' }
             }
         }
         $taskLabels = @($taskForm.Controls[0].Controls | Where-Object { $_ -is [Windows.Forms.Label] })

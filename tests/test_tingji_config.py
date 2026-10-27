@@ -8,6 +8,13 @@ from meeting_worker import audio_link
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_record_only_default_and_explicit_transcription(self):
+        self.assertIs(self.validate()["auto_transcribe"], False)
+        self.assertIs(self.validate(auto_transcribe=True)["auto_transcribe"], True)
+        for value in ("true", 1, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.validate(auto_transcribe=value)
+
     def test_terms_are_explicit_deduplicated_and_frozen_per_meeting(self):
         config = self.validate(asr_context="产品会议", asr_terms="挚达，BOM\n挚达;OA")
         self.assertEqual(tingji_config.transcription_context(config), "产品会议\n术语：挚达、BOM、OA。")

@@ -274,7 +274,7 @@ internal static class TestMeetingSettings {
         string path = Path.Combine(directory, "first-run-config.json");
         var snapshot = MeetingSettingsSnapshot.CreateNew(path, root);
         Check(!File.Exists(path), "Preparing first-run settings does not create a config");
-        Check(!(bool)snapshot.Values["open_in_obsidian"] && (string)snapshot.Values["transcription_mode"] == "local", "New installs use ordinary notes and local transcription without connecting to a service");
+        Check(!(bool)snapshot.Values["open_in_obsidian"] && (string)snapshot.Values["transcription_mode"] == "local" && !(bool)snapshot.Values["auto_transcribe"], "New installs use ordinary notes and record only without connecting to a service");
         Check((string)snapshot.Values["quick_note_hotkey"] == "Ctrl+Alt+J" && Convert.ToInt32(snapshot.Values["recording_protection_seconds"]) == 5, "First-run defaults include current quick note and protection settings");
         Check((string)MeetingSettingsSnapshot.CreateNew(path, "").Values["vault_root"] == "", "An unavailable suggested folder does not prevent the first-run chooser from opening");
         var invalid = snapshot.Values; invalid["vault_root"] = Path.Combine(root, "missing");
@@ -412,8 +412,21 @@ internal static class TestMeetingSettings {
                 form.Location = new Point(screen.WorkingArea.Left + 20, screen.WorkingArea.Top + 20);
                 form.Show(); Application.DoEvents();
                 Check(Screen.FromControl(form).DeviceName == screen.DeviceName, "Settings layout fixture opens on the intended monitor");
+                Check(screen.WorkingArea.Contains(form.Bounds), "Settings, including save/cancel, fit the actual monitor work area");
                 CheckLayout(form, Path.Combine(directory, "settings-monitor-" + index++ + "-dpi-" + form.DeviceDpi + (firstRun ? "-first-run" : "") + ".png"));
                 Console.WriteLine("Settings layout: " + screen.DeviceName + ", " + form.DeviceDpi + " DPI, first-run " + firstRun + ", client " + form.ClientSize);
+                var smallWork = new Rectangle(screen.WorkingArea.Left, screen.WorkingArea.Top, 800, 540);
+                typeof(MeetingSettingsDialog).GetMethod("FitToWorkArea", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, new object[] { smallWork });
+                Application.DoEvents();
+                Check(smallWork.Contains(form.Bounds), "A short work area keeps the complete settings window visible");
+                var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
+                foreach (TabPage page in tabs.TabPages) {
+                    tabs.SelectedTab = page; Application.DoEvents();
+                    Check(page.AutoScroll && tabs.ItemSize.Width * tabs.TabCount <= tabs.ClientSize.Width, "All settings pages remain scrollable and headers stay reachable on a short screen");
+                }
+                var save = (Button)Field(form, "save");
+                Check(form.RectangleToScreen(form.ClientRectangle).Contains(save.RectangleToScreen(save.ClientRectangle)), "Save remains reachable after reducing available height");
+                Check(form.RectangleToScreen(form.ClientRectangle).Contains(((Control)form.CancelButton).RectangleToScreen(((Control)form.CancelButton).ClientRectangle)), "Cancel remains reachable after reducing available height");
                 ((Button)form.CancelButton).PerformClick();
             }
         }
@@ -448,6 +461,16 @@ internal static class TestMeetingSettings {
         string path = Path.Combine(directory, "extended-settings.json"); Write(path, Config(root));
         var snapshot = MeetingSettingsSnapshot.Open(path);
         int calls = 0;
+        using (var form = new MeetingSettingsDialog(snapshot, delegate { return null; })) {
+            form.Show(); form.ShowTranscription(); Application.DoEvents();
+            typeof(MeetingSettingsDialog).GetField("engineLauncher", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(form,
+                new Func<System.Diagnostics.Process>(delegate { return System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c exit 9") { UseShellExecute = false, CreateNoWindow = true }); }));
+            form.BeginPreparation();
+            ((System.Diagnostics.Process)Field(form, "engineProcess")).WaitForExit(5000);
+            typeof(MeetingSettingsDialog).GetMethod("RefreshEngine", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, null);
+            Check(((Button)form.Controls.Find("download_recommended_model", true)[0]).Enabled && form.Controls.Find("engine_detail", true)[0].Text.Contains("未能启动"), "Integrated preparation exposes an exited worker even without a fresh status file");
+            ((Button)form.CancelButton).PerformClick();
+        }
         using (var form = new MeetingSettingsDialog(snapshot, delegate { calls++; return "synthetic apply failure"; })) {
             form.Show(); Application.DoEvents();
             var startup = (CheckBox)form.Controls.Find("start_with_windows", true)[0]; startup.Checked = true;
@@ -460,11 +483,16 @@ internal static class TestMeetingSettings {
             var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
             Check(tabs.TabPages.Count == 3, "General, transcription and about pages exist");
             tabs.SelectedIndex = 1; Application.DoEvents();
+            var automaticTranscription = (CheckBox)form.Controls.Find("auto_transcribe", true)[0];
+            Check(!automaticTranscription.Checked && !form.Controls.Find("download_recommended_model", true)[0].Visible, "Default record-only settings hide model preparation until explicitly enabled");
+            automaticTranscription.Checked = true; Application.DoEvents();
             Check(form.Controls.Find("download_recommended_model", true).Length == 1 && form.Controls.Find("download_recommended_model", true)[0].Visible, "One recommended local model download entry is visible");
-            Check(Input(form, "asr_terms").Visible && !Input(form, "api_model").Enabled, "Local terms editable; API disabled for local mode");
-            Check(form.Controls.Find("transcription_readiness", true)[0].Text.Contains("未就绪"), "Actual settings distinguishes choosing local from installing its model");
+            Check(!Input(form, "asr_terms").Visible && !Input(form, "api_model").Visible, "Local defaults hide advanced and API fields instead of displaying a disabled form");
+            Check(form.Controls.Find("transcription_readiness", true)[0].Text.Contains("尚未启用"), "Actual settings distinguishes choosing local from installing its model");
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-local.png")); }
-            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 1;
+            ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
+            Check(Input(form, "asr_terms").Visible && !Input(form, "api_model").Visible, "Advanced local options expand without exposing API credentials");
+            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 1; Application.DoEvents();
             Check(Input(form, "api_model").Enabled, "Choosing API exposes API model fields");
             Input(form, "api_key_env").Text = "VERBIT_SYNTHETIC_UNSET_KEY";
             Input(form, "asr_terms").Text = "产品名,术语";
@@ -476,8 +504,57 @@ internal static class TestMeetingSettings {
             ((CheckBox)form.Controls.Find("check_updates", true)[0]).Checked = true;
             ((Button)form.AcceptButton).PerformClick();
             var saved = MeetingSettingsSnapshot.Open(path).Values;
-            Check(!form.Visible && (string)saved["transcription_mode"] == "api", "Missing API key does not prevent saving a mode switch; checked at transcription");
+            Check(!form.Visible && (string)saved["transcription_mode"] == "api" && (bool)saved["auto_transcribe"], "Automatic transcription selection persists; missing API key is checked at transcription");
             Check(!form.Visible && (string)saved["asr_terms"] == "产品名,术语" && (bool)saved["check_updates"], "Transcription terms and opt-in update preference persist");
+        }
+    }
+    static void WatchInvalidations(Control parent, Action changed) {
+        parent.Invalidated += delegate { changed(); };
+        foreach (Control child in parent.Controls) WatchInvalidations(child, changed);
+    }
+    static void RenderingResponsiveness(string directory, string root) {
+        string path = Path.Combine(directory, "render-settings.json"); Write(path, Config(root));
+        using (var form = new MeetingSettingsDialog(MeetingSettingsSnapshot.Open(path), delegate { return null; })) {
+            form.Show(); form.ShowTranscription(); Application.DoEvents();
+            ((CheckBox)form.Controls.Find("auto_transcribe", true)[0]).Checked = true; Application.DoEvents();
+            ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
+            Call(form, "RefreshEngine"); Application.DoEvents();
+            int invalidations = 0;
+            WatchInvalidations(form, delegate { invalidations++; });
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 50; i++) Call(form, "RefreshEngine");
+            watch.Stop();
+            Console.WriteLine("Settings unchanged status: 50 polls, " + invalidations + " invalidations, " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            int unchangedInvalidations = invalidations;
+            var combo = (ComboBox)form.Controls.Find("asr_denoise", true)[0];
+            combo.Focus(); combo.DroppedDown = true; Application.DoEvents();
+            int before = invalidations;
+            for (int i = 0; i < 5; i++) { Call(form, "RefreshEngine"); Application.DoEvents(); }
+            bool dropdownPreserved = combo.DroppedDown && combo.Focused;
+            int dropdownInvalidations = invalidations - before;
+            combo.DroppedDown = false;
+            var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
+            watch.Restart();
+            for (int i = 0; i < 30; i++) { tabs.SelectedIndex = i % 3; Application.DoEvents(); }
+            watch.Stop();
+            Console.WriteLine("Settings page switches: 30 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            Check(unchangedInvalidations == 0, "Unchanged readiness must not invalidate controls or redraw the page every timer tick");
+            Check(dropdownPreserved, "Status polling preserves an open native dropdown and its keyboard focus");
+            Check(dropdownInvalidations == 0, "An open dropdown must not trigger background status repaint churn");
+            Check(tabs.SelectedIndex == 2 && tabs.TabPages.Count == 3, "Repeated native page switches leave the intended page active");
+            tabs.SelectedIndex = 1; Application.DoEvents();
+            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0];
+            watch.Restart();
+            for (int i = 0; i < 12; i++) {
+                mode.DroppedDown = true; Application.DoEvents();
+                mode.SelectedIndex = i % 2; mode.DroppedDown = false; Application.DoEvents();
+                Check(Input(form, "api_model").Visible == (i % 2 == 1), "Native mode selection updates API visibility without stale controls");
+            }
+            watch.Stop();
+            Console.WriteLine("Settings mode changes: 12 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            Input(form, "api_model").Focus(); Input(form, "api_model").Text = "render-test-only";
+            Check(Input(form, "api_model").Focused && Input(form, "api_model").Text == "render-test-only", "Text fields remain immediately editable after repeated mode changes");
+            form.Close();
         }
     }
     [STAThread]
@@ -488,6 +565,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
+            RenderingResponsiveness(directory, root);
             RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); ExtendedInterface(directory, root); ApiCredentialRecovery(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");
             return 0;
