@@ -75,6 +75,11 @@ def check(root):
 
 
 def main():
+    # Redirected stdout on English Windows may default to cp1252. A status
+    # message must not turn successful inference/receipt publication into failure.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='backslashreplace')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', required=True)
     args = parser.parse_args()
