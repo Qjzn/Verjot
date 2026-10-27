@@ -35,7 +35,7 @@ internal sealed class VerbitMenu : ContextMenuStrip {
         Font previous = null;
         if (menuFont == null || menuDpi != dpi) {
             previous = menuFont; menuDpi = dpi;
-            menuFont = new Font("Microsoft YaHei UI", 13f * dpi / 96f, FontStyle.Regular, GraphicsUnit.Pixel);
+            menuFont = new Font("Microsoft YaHei UI", 12f * dpi / 96f, FontStyle.Regular, GraphicsUnit.Pixel);
         }
         StyleDropDown(this);
         if (previous != null) previous.Dispose();
@@ -49,19 +49,19 @@ internal sealed class VerbitMenu : ContextMenuStrip {
         bool hosted = menu.Items.Count == 1 && menu.Items[0] is ToolStripControlHost;
         if (!hosted) {
             menu.Padding = new Padding(pad);
-            int width = 184 * menuDpi / 96;
-            foreach (ToolStripItem item in menu.Items) if (item is ToolStripMenuItem) {
+            int width = 156 * menuDpi / 96;
+            foreach (ToolStripItem item in menu.Items) if (item.Available && item is ToolStripMenuItem) {
                 var command = (ToolStripMenuItem)item;
                 string keys = command.ShortcutKeyDisplayString ?? "";
-                width = Math.Max(width, TextRenderer.MeasureText(item.Text + keys, menuFont).Width + (keys.Length == 0 ? 62 : 82) * menuDpi / 96);
+                width = Math.Max(width, TextRenderer.MeasureText(item.Text + keys, menuFont).Width + (keys.Length == 0 ? 48 : 64) * menuDpi / 96);
             }
             int available = Screen.FromPoint(Cursor.Position).WorkingArea.Width - pad * 2;
-            width = Math.Max(80, Math.Min(width, Math.Min(520 * menuDpi / 96, available)));
-            menu.MaximumSize = new Size(width + pad * 2, 0);
+            width = Math.Max(80, Math.Min(width, Math.Min(360 * menuDpi / 96, available)));
+            menu.MaximumSize = new Size(width + pad * 2, Math.Max(40, Screen.FromPoint(Cursor.Position).WorkingArea.Height - pad * 2));
             foreach (ToolStripItem item in menu.Items) {
                 if (!(item is ToolStripMenuItem) && !(item is ToolStripSeparator)) continue;
                 item.AutoSize = false; item.Margin = Padding.Empty;
-                item.Size = new Size(width, item is ToolStripSeparator ? 9 * menuDpi / 96 : Math.Max(30 * menuDpi / 96, menuFont.Height + 10 * menuDpi / 96));
+                item.Size = new Size(width, item is ToolStripSeparator ? 7 * menuDpi / 96 : Math.Max(26 * menuDpi / 96, menuFont.Height + 8 * menuDpi / 96));
             }
         }
         if (first && menu != this) menu.Opening += delegate { if (!IsDisposed) StyleDropDown(menu); };
@@ -79,7 +79,6 @@ internal sealed class VerbitMenu : ContextMenuStrip {
         var cut = menu.Items.Add("剪切", null, delegate { field.Cut(); });
         var copy = menu.Items.Add("复制", null, delegate { field.Copy(); });
         var paste = menu.Items.Add("粘贴", null, delegate { field.Paste(); });
-        var delete = menu.Items.Add("删除", null, delegate { field.SelectedText = ""; });
         menu.Items.Add(new ToolStripSeparator());
         var all = menu.Items.Add("全选", null, delegate { field.SelectAll(); });
         ((ToolStripMenuItem)undo).ShortcutKeyDisplayString = "Ctrl+Z";
@@ -92,10 +91,13 @@ internal sealed class VerbitMenu : ContextMenuStrip {
             var text = field as TextBox;
             bool secret = text != null && (text.UseSystemPasswordChar || text.PasswordChar != '\0');
             undo.Enabled = editable && field.CanUndo;
+            undo.Visible = undo.Enabled;
+            menu.Items[1].Visible = undo.Enabled;
             cut.Enabled = editable && !secret && field.SelectionLength > 0;
             copy.Enabled = !secret && field.SelectionLength > 0;
             paste.Enabled = editable; // Never inspect the user's clipboard on hover/open.
-            delete.Enabled = editable && field.SelectionLength > 0;
+            cut.Visible = editable;
+            paste.Visible = editable;
             all.Enabled = field.TextLength > 0;
         };
         field.ContextMenuStrip = menu;
@@ -116,7 +118,7 @@ internal sealed class VerbitMenuRenderer : ToolStripProfessionalRenderer {
     internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(238, 245, 253); } }
     internal static readonly Color Danger = Color.FromArgb(174, 47, 47);
     VerbitMenuRenderer() { RoundedEdges = false; }
-    static float Scale(ToolStrip strip) { return strip.Font.Height / 18f; }
+    static float Scale(ToolStrip strip) { return strip.Font.Size / 12f; }
     static bool Destructive(ToolStripItem item) { return item.Name == "deleteNote"; }
     static Color Foreground(ToolStripItem item) {
         if (!item.Enabled) return Muted;
@@ -222,7 +224,7 @@ internal static class DesktopServices {
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.12-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.13-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {

@@ -2316,12 +2316,9 @@ internal sealed class MeetingContext : ApplicationContext {
         hotkey.ShowRequested += ShowPanel;
         var menu = new VerbitMenu();
         panel.ContextMenuStrip = menu;
-        menu.Items.Add(summary);
-        menu.Items.Add(new ToolStripSeparator());
         var quickNoteItem = new ToolStripMenuItem("速记便签 · " + QuickNoteHotkey) { Name = "quickNote" };
         quickNoteItem.Click += delegate { ToggleQuickNote(); };
         menu.Items.Add(quickNoteItem);
-        menu.Items.Add(new ToolStripSeparator());
         toggle.Click += delegate { Toggle(); };
         toggle.Text = "开始录音 · " + StartHotkey;
         menu.Items.Add(toggle);
@@ -2333,12 +2330,19 @@ internal sealed class MeetingContext : ApplicationContext {
         bookmark.Click += delegate { MarkBookmark(); };
         menu.Items.Add(bookmark);
         rename.Click += delegate { PromptRename(focusedSession); };
-        menu.Items.Add(rename);
-        menu.Items.Add("显示浮窗", null, delegate { RefreshFeedback(); panel.Show(); panel.Activate(); });
-        menu.Items.Add("收起浮窗", null, delegate { panel.Hide(); });
+        // Naming remains with each meeting; status lives in the tray tooltip.
+        var visibility = new ToolStripMenuItem("显示浮窗") { Name = "floatVisibility" };
+        visibility.Click += delegate { if (panel.Visible) panel.Hide(); else ShowPanel(); };
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(visibility);
         // WinForms does not expose an expansion affordance for an empty child
         // menu. Populate it before the parent opens, then refresh on expansion.
-        menu.Opening += delegate { RefreshFeedback(); RefreshRecentMenu(); };
+        menu.Opening += delegate {
+            RefreshFeedback(); RefreshRecentMenu();
+            pauseMicrophone.Visible = pauseMicrophone.Enabled;
+            bookmark.Visible = bookmark.Enabled;
+            visibility.Text = panel.Visible ? "收起浮窗" : "显示浮窗";
+        };
         recent.DropDownOpening += delegate { RefreshRecentMenu(); };
         menu.Items.Add(recent);
         menu.Items.Add("打开会议记录文件夹", null, delegate {
@@ -2349,8 +2353,6 @@ internal sealed class MeetingContext : ApplicationContext {
         });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("设置…", null, delegate { OpenSettings(); });
-        menu.Items.Add("首次使用检查…", null, delegate { OpenFirstUseGuide(); });
-        menu.Items.Add("关于 verbit · " + DesktopServices.Version, null, delegate { OpenSettings(true); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, delegate { RequestExit(); });
         tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "verbit · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
@@ -2988,24 +2990,21 @@ internal sealed class MeetingContext : ApplicationContext {
             var records = catalog.Snapshot();
             // Keep the tray compact while retaining a route to every local folder.
             var displayed = new List<SessionRecord>();
-            foreach (var record in records) if (record.State != "completed" && record.State != "transcript_only" && record.State != "audio_only" && !record.WorkerAlive && displayed.Count < 10) displayed.Add(record);
-            foreach (var record in records) if (displayed.Count < 20 && !displayed.Contains(record)) displayed.Add(record);
+            foreach (var record in records) if (record.State != "completed" && record.State != "transcript_only" && record.State != "audio_only" && !record.WorkerAlive && displayed.Count < 3) displayed.Add(record);
+            foreach (var record in records) if (displayed.Count < 6 && !displayed.Contains(record)) displayed.Add(record);
             foreach (var record in displayed) {
                 string session = record.DirectoryPath;
                 bool current = recording != null && string.Equals(recording.DirectoryPath, session, StringComparison.OrdinalIgnoreCase);
                 var item = new ToolStripMenuItem(record.Label + " · " + (current ? "正在录音" : StateLabel(record)));
-                item.DropDownItems.Add("查看状态", null, delegate { FocusSession(session, true); });
+                if (current || record.WorkerAlive || record.CanRetry || record.State == "capture_warning" || record.State == "missing")
+                    item.DropDownItems.Add("查看状态", null, delegate { FocusSession(session, true); });
                 if (!string.IsNullOrEmpty(record.NotePath) && File.Exists(record.NotePath))
                     item.DropDownItems.Add("打开转录笔记", null, delegate { OpenNoteForSession(session); });
-                if (!string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath))
-                    item.DropDownItems.Add("定位录音文件", null, delegate { LocateArtifactForSession(session, true); });
                 if (!string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath))
                     item.DropDownItems.Add("回听录音…", null, delegate {
                         try { MeetingPlayback.ShowForSession(catalog, session, panel); }
                         catch (Exception error) { Notice("无法回听", error.Message, ToolTipIcon.Warning); }
                     });
-                if (!string.IsNullOrEmpty(record.NotePath) && File.Exists(record.NotePath))
-                    item.DropDownItems.Add("定位转录文件", null, delegate { LocateArtifactForSession(session, false); });
                 if (record.State == "completed" && !record.WorkerAlive && recording == null)
                     item.DropDownItems.Add("命名这场会议…", null, delegate { PromptRename(session); });
                 if (!current && record.CanRetry) item.DropDownItems.Add(record.State == "recorded" || record.State == "recorded_warning" ? "转写这场会议…" : "重试这场转写", null, delegate { RetrySession(session); });
@@ -3027,8 +3026,9 @@ internal sealed class MeetingContext : ApplicationContext {
         try {
             var record = catalog.Get(session);
             if (record == null) throw new IOException("会议资料不存在。");
-            string folder = !string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath) ? Path.GetDirectoryName(record.AudioPath) :
-                Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"));
+            if (!string.IsNullOrEmpty(record.AudioPath) && File.Exists(record.AudioPath)) { LocateArtifactForSession(session, true); return; }
+            if (!string.IsNullOrEmpty(record.NotePath) && File.Exists(record.NotePath)) { LocateArtifactForSession(session, false); return; }
+            string folder = Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"));
             MeetingConfig.CheckOrdinaryPath(folder); Directory.CreateDirectory(folder);
             OpenFolder(folder);
         } catch (Exception error) { Notice("无法打开这场资料", error.Message, ToolTipIcon.Warning); }

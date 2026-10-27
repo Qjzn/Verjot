@@ -22,7 +22,7 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 原生速记支持图片、置顶和自动保存；设置可修改保存目录与快捷键：
 
-本轮 `0.1.0-beta.12` 私有候选聚焦速记和录音，**不提供推荐模型下载或安装选项**。无需 Python、模型、FFmpeg 或开发环境即可录音，192 kbps MP3 在结束后原生生成并完整解码校验。可在设置中主动启用第三方音频转写 API，填写自己的地址、模型 ID 和密钥环境变量名；确认上传后才提交，不调用普通聊天接口。已有模型与配置保留，升级不下载、不删除或自动切换。候选尚未公开发布，详见[版本说明](documentation/changelog.md)。
+本轮 `0.1.0-beta.13` 私有候选聚焦速记和录音，**不提供推荐模型下载或安装选项**。无需 Python、模型、FFmpeg 或开发环境即可录音，192 kbps MP3 在结束后原生生成并完整解码校验。可在设置中主动启用第三方音频转写 API，填写自己的地址、模型 ID 和密钥环境变量名；确认上传后才提交，不调用普通聊天接口。已有模型与配置保留，升级不下载、不删除或自动切换。候选尚未公开发布，详见[版本说明](documentation/changelog.md)。
 
 <img src="assets/screenshots/quick-note.png" alt="verbit 速记：文字和图片的演示内容" width="340"> <img src="assets/screenshots/settings.png" alt="verbit 可选转写设置：自定义第三方 API、模型 ID 和密钥变量名" width="400">
 
@@ -117,7 +117,7 @@ Windows 上随手记录想法、保存会议声音的小工具。用全局快捷
 
 ## 交给 AI 安装
 
-> 请按 documentation/ai-install.md 安装 verbit beta.12。使用 EXE，首次只设置保存目录和快捷键，默认仅录音，不安装 Python 或模型。保留已有模型、配置和会议；API 可按需填写服务地址、模型 ID 和密钥变量名，提交前单独确认上传。说明实测与未测部分，不默认修改开机启动，不操作用户剪贴板。
+> 请按 documentation/ai-install.md 安装 verbit beta.13。使用 EXE，首次只设置保存目录和快捷键，默认仅录音，不安装 Python 或模型。保留已有模型、配置和会议；API 可按需填写服务地址、模型 ID 和密钥变量名，提交前单独确认上传。说明实测与未测部分，不默认修改开机启动，不操作用户剪贴板。
 
 完整步骤见[AI 安装说明](documentation/ai-install.md)，字段见[配置说明](documentation/configuration.md)，首次模板见[config.example.json](src/config.example.json)。源码中的 Install.ps1 / RecommendedModel.ps1 等历史工具用于维护旧实验环境，不属于首期安装步骤。
 

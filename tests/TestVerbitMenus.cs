@@ -20,7 +20,7 @@ internal static class TestVerbitMenus {
             string folder = args[0];
             using (var owner = new Form { Text = "verbit synthetic menu fixture", Size = new Size(800, 600) }) {
                 owner.Show(); Pump();
-                foreach (int dpi in new[] { 96, 120, 144, 192 }) using (var menu = new VerbitMenu()) {
+                foreach (int dpi in new[] { 96, 120, 144, 192, 240, 288 }) using (var menu = new VerbitMenu()) {
                     menu.Items.Add(new ToolStripMenuItem("verbit已就绪") { Enabled = false });
                     var note = new ToolStripMenuItem("速记便签 · Ctrl+Alt+J"); menu.Items.Add(note);
                     var mic = new ToolStripMenuItem("暂停麦克风 · Alt+Space") { Enabled = false }; menu.Items.Add(mic);
@@ -33,9 +33,9 @@ internal static class TestVerbitMenus {
                     menu.Items.Add(new ToolStripMenuItem(new string('长', 180)));
                     menu.Show(owner, new Point(8, 8)); menu.ApplyStyle(dpi); note.Select(); Pump();
                     Check(menu.Renderer is VerbitMenuRenderer, "Every root uses the shared renderer");
-                    Check(menu.Font.Unit == GraphicsUnit.Pixel && Math.Abs(menu.Font.Size - 13f * dpi / 96) < .01f, "Font scales once at " + dpi);
-                    Check(menu.Width <= 520 * dpi / 96 + 16 * dpi / 96, "Long labels cannot create an unbounded menu: " + menu.Width + " at " + dpi);
-                    Check(menu.Items[0].Height >= menu.Font.Height + 8, "Chinese text fits each row at " + dpi);
+                    Check(menu.Font.Unit == GraphicsUnit.Pixel && Math.Abs(menu.Font.Size - 12f * dpi / 96) < .01f, "Compact font scales once at " + dpi);
+                    Check(menu.Width <= 360 * dpi / 96 + 16 * dpi / 96, "Long labels cannot create an unbounded menu: " + menu.Width + " at " + dpi);
+                    Check(menu.Items[0].Height >= menu.Font.Height + 8 * dpi / 96 && menu.Items[0].Height <= 28 * dpi / 96, "Chinese text fits the compact row at " + dpi);
                     Check(recent.Bounds.Right <= menu.ClientSize.Width, "Submenu arrow stays inside the constrained popup: item=" + recent.Bounds + "; menu=" + menu.Size);
                     Check(preview.Checked && !mic.Enabled, "Styling preserves checked and disabled semantics");
                     Capture(menu, Path.Combine(folder, "menu-" + dpi + ".png"));
@@ -65,10 +65,10 @@ internal static class TestVerbitMenus {
                     Check(menu.Items[2].Enabled && menu.Items[3].Enabled && menu.Items[4].Enabled, "Editable selection allows clipboard commands without probing clipboard");
                     Capture(menu, Path.Combine(folder, "text-menu.png")); menu.Close();
                     field.ReadOnly = true; menu.Show(field, new Point(0, field.Height)); Pump();
-                    Check(!menu.Items[0].Enabled && !menu.Items[2].Enabled && !menu.Items[4].Enabled && menu.Items[3].Enabled, "Read-only fields cannot undo/cut/paste but can copy selected text"); menu.Close();
+                    Check(!menu.Items[0].Available && !menu.Items[2].Available && !menu.Items[4].Available && menu.Items[3].Enabled, "Read-only fields only expose useful text commands"); menu.Close();
                     field.ReadOnly = false; field.UseSystemPasswordChar = true; menu.Show(field, new Point(0, field.Height)); Pump();
                     Check(!menu.Items[2].Enabled && !menu.Items[3].Enabled, "Password fields cannot expose selected secrets"); menu.Close();
-                    menu.Items[7].PerformClick(); Check(field.SelectionLength == field.TextLength, "Select all uses the field's native selection");
+                    menu.Items[6].PerformClick(); Check(field.SelectionLength == field.TextLength, "Select all uses the field's native selection");
                     field.Dispose(); Check(menu.IsDisposed, "Text-menu resources follow their owning field");
                 }
                 using (var hosted = new VerbitMenu()) using (var picker = new QuickNoteRecentPicker(new[] { "演示便签.md" }, "演示便签.md", owner.Font, 96, new Size(350, 450))) {

@@ -729,7 +729,8 @@ internal static class TestQuickNoteEditor {
             Call(window, "ShowEditorMenu");
             var menus = (System.ComponentModel.Container)Field(window, "transientMenus");
             var menu = (ContextMenuStrip)menus.Components[0];
-            Check(menu.Items[0].Text == "图片适合窗口" && menu.Items[1].Text == "等比例放大" && menu.Items[2].Text == "等比例缩小", "Selected image exposes proportional fit/enlarge/shrink commands");
+            var sizeMenu = menu.Items[2] as ToolStripMenuItem;
+            Check(menu.Items[0].Text == "查看原图" && menu.Items[1].Text == "图片适合窗口" && sizeMenu != null && sizeMenu.DropDownItems[0].Text == "等比例放大" && sizeMenu.DropDownItems[1].Text == "等比例缩小", "Selected image keeps common commands first and proportional sizing in a submenu");
             Call(window, "UpdateChromeForPointer", new Point(-10000, -10000)); Check(top.Visible, "An open context menu keeps its controls available");
             menu.Close(); Pump(50);
             Call(window, "ScaleImage", .8); Rectangle smaller = Document(window).SelectedImageBounds();

@@ -218,6 +218,11 @@ internal static class TestMeetingExperience {
             menu.Show(new Point(20, 20));
             Application.DoEvents();
             Check(menu.Visible, "The actual tray context menu must open");
+            int commonCommands = 0;
+            foreach (ToolStripItem command in menu.Items) if (command.Available && command is ToolStripMenuItem) commonCommands++;
+            Check(commonCommands == 7, "Idle tray exposes seven common actions, without duplicated status/onboarding/about rows");
+            Check(!menu.Items["bookmark"].Available, "Recording-only actions stay out of the idle menu");
+            using (var shot = new Bitmap(menu.Width, menu.Height)) { menu.DrawToBitmap(shot, new Rectangle(Point.Empty, menu.Size)); shot.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "idle-menu.png")); }
             Check(recent.HasDropDownItems, "Recent meetings must have an expandable submenu on the first context-menu opening");
             recent.ShowDropDown();
             Application.DoEvents();
@@ -234,7 +239,8 @@ internal static class TestMeetingExperience {
             Check(((NotifyIcon)Field(context, "tray")).Text.Contains("23/80"), "Tray must expose progress without relying on balloons");
             panel.Show(); panel.CollapseButton.PerformClick(); Call(context, "Tick");
             Check(!panel.Visible, "Progress updates must respect a collapsed panel");
-            Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Processing must remain 186 x 68");
+            Application.DoEvents(); // Drain the monitor DPI message after first showing the hidden panel.
+            Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Processing must remain 186 x 68; actual=" + panel.ClientSize + "; dpi=" + panel.DeviceDpi);
             string b = Fixture("20261014-120001", "recorded");
             Call(context, "SaveLastSession", b, null);
             Set(context, "recording", FakeActiveRecording(b));
@@ -325,7 +331,7 @@ internal static class TestMeetingExperience {
             File.Delete(deletedNote);
             var audioItem = OpenRecent(menu, recent, "Native audio-only fixture");
             Check(audioItem != null && audioItem.Text.Contains("仅保留录音"), "Deleting a completed MD must show only-kept-recording instead of a missing-artifact alarm");
-            var retainedAudio = MenuAction(audioItem, "定位录音文件");
+            var retainedAudio = MenuAction(audioItem, "打开成品位置");
             var absentNote = MenuAction(audioItem, "打开转录笔记");
             Check(retainedAudio != null && retainedAudio.Enabled, "The retained recording must remain reachable");
             Check(absentNote == null || !absentNote.Enabled, "A deleted transcript must not have an enabled open action");
@@ -410,7 +416,7 @@ internal static class TestMeetingExperience {
             Check(autoOpens == opensBeforeWarning, "Capture warning must not automatically open the note as a normal success");
             var warningItem = OpenRecent(menu, recent, "Native capture-warning fixture");
             Check(warningItem != null && warningItem.Text.Contains("录音需检查") && !warningItem.Text.Contains("成品缺失") && !warningItem.Text.Contains("失败"), "Capture errors with completed ASR must not become a failed-ASR or missing-artifact alarm");
-            Check(MenuAction(warningItem, "打开转录笔记") != null && MenuAction(warningItem, "定位录音文件") != null, "Warning results must keep both published files reachable");
+            Check(MenuAction(warningItem, "打开转录笔记") != null && MenuAction(warningItem, "打开成品位置") != null, "Warning results must keep both published files reachable through the consolidated location action");
             Check(MenuAction(warningItem, "重试这场转写") == null, "A completed warning must not offer an ineffective ASR retry");
             menu.Close();
             File.Delete(warningNote);

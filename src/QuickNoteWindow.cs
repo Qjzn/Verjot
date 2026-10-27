@@ -933,19 +933,21 @@ internal sealed class QuickNoteWindow : Form {
     void ShowEditorMenu() {
         var menu = CreateTransientMenu();
         if (!editor.ReadOnly && !IsComposing && !nativeDocument.SelectedImageBounds().IsEmpty) {
-            menu.Items.Add("图片适合窗口", null, delegate { Rectangle picture = nativeDocument.SelectedImageBounds(); if (!picture.IsEmpty) ScaleImage(Math.Max(16, viewport.Width - Math.Max(0, picture.Left) - 10) / (double)picture.Width); });
-            menu.Items.Add("等比例放大", null, delegate { ScaleImage(1.25); });
-            menu.Items.Add("等比例缩小", null, delegate { ScaleImage(.8); });
-            menu.Items.Add("恢复原图比例", null, delegate { Rectangle picture = nativeDocument.SelectedImageBounds(); if (!picture.IsEmpty) ResizeImageTo((int)Math.Round(picture.Width * 96.0 / DeviceDpi / editor.ZoomFactor)); });
             menu.Items.Add("查看原图", null, delegate { OpenSelectedImage(); });
+            menu.Items.Add("图片适合窗口", null, delegate { Rectangle picture = nativeDocument.SelectedImageBounds(); if (!picture.IsEmpty) ScaleImage(Math.Max(16, viewport.Width - Math.Max(0, picture.Left) - 10) / (double)picture.Width); });
+            var resize = new ToolStripMenuItem("调整图片大小");
+            resize.DropDownItems.Add("等比例放大", null, delegate { ScaleImage(1.25); });
+            resize.DropDownItems.Add("等比例缩小", null, delegate { ScaleImage(.8); });
+            resize.DropDownItems.Add("恢复原图比例", null, delegate { Rectangle picture = nativeDocument.SelectedImageBounds(); if (!picture.IsEmpty) ResizeImageTo((int)Math.Round(picture.Width * 96.0 / DeviceDpi / editor.ZoomFactor)); });
+            menu.Items.Add(resize);
             menu.Items.Add(new ToolStripSeparator());
         }
-        menu.Items.Add("撤销", null, delegate { CancelPendingImages(); editor.Undo(); }).Enabled = !editor.ReadOnly && editor.CanUndo;
-        menu.Items.Add("重做", null, delegate { CancelPendingImages(); editor.Redo(); }).Enabled = !editor.ReadOnly && editor.CanRedo;
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("剪切", null, delegate { CopyOrCut(true); }).Enabled = !editor.ReadOnly && editor.SelectionLength > 0;
+        if (!editor.ReadOnly && editor.CanUndo) menu.Items.Add("撤销", null, delegate { CancelPendingImages(); editor.Undo(); });
+        if (!editor.ReadOnly && editor.CanRedo) menu.Items.Add("重做", null, delegate { CancelPendingImages(); editor.Redo(); });
+        if (!editor.ReadOnly && (editor.CanUndo || editor.CanRedo)) menu.Items.Add(new ToolStripSeparator());
+        if (!editor.ReadOnly) menu.Items.Add("剪切", null, delegate { CopyOrCut(true); }).Enabled = editor.SelectionLength > 0;
         menu.Items.Add("复制", null, delegate { CopyOrCut(false); }).Enabled = editor.SelectionLength > 0;
-        menu.Items.Add("粘贴", null, delegate { PasteFromClipboard(); }).Enabled = !editor.ReadOnly;
+        if (!editor.ReadOnly) menu.Items.Add("粘贴", null, delegate { PasteFromClipboard(); });
         menu.Items.Add("全选", null, delegate { editor.SelectAll(); });
         menu.Show(editor, editor.PointToClient(Cursor.Position));
     }
