@@ -1,6 +1,6 @@
 ﻿param(
     [string]$OutputPath = 'ObsidianMeeting.exe',
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.17'
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.23'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -84,4 +84,4 @@ if ($taskCheckout -and $taskOutputFolder -ieq $taskRoot) {
     Copy-Item -LiteralPath (Join-Path $taskRepo 'packaging\quick-start.html') -Destination (Join-Path $taskRoot 'packaging') -Force
     Copy-Item -LiteralPath (Join-Path $taskRepo 'packaging\licenses') -Destination (Join-Path $taskRoot 'packaging') -Recurse -Force
 }
-Write-Output 'Keep the executable in the project folder when running it, alongside config.json, Python scripts, .venv and models.'
+Write-Output 'Run with the complete native payload and config.json. Recording and optional API transcription do not require Python or local models.'

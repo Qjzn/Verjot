@@ -10,7 +10,7 @@ from meeting_worker import audio_link
 class ConfigurationTests(unittest.TestCase):
     def test_record_only_default_and_explicit_transcription(self):
         self.assertIs(self.validate()["auto_transcribe"], False)
-        self.assertIs(self.validate(auto_transcribe=True)["auto_transcribe"], True)
+        self.assertIs(self.validate(auto_transcribe=True, api_base_url="https://example.invalid/v1", api_model="asr")["auto_transcribe"], True)
         for value in ("true", 1, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 self.validate(auto_transcribe=value)
@@ -102,10 +102,11 @@ class ConfigurationTests(unittest.TestCase):
     def validate(self, **changes):
         return validate_config({"vault_root": "D:\\Notes\\Example", **changes}, check_directory=False)
 
-    def test_old_config_keeps_obsidian_and_local_defaults(self):
+    def test_old_obsidian_preference_and_explicit_local_value_are_preserved(self):
         config = self.validate()
         self.assertTrue(config["open_in_obsidian"])
-        self.assertEqual(config["transcription_mode"], "local")
+        self.assertEqual(config["transcription_mode"], "api")
+        self.assertEqual(self.validate(transcription_mode="local")["transcription_mode"], "local")
         self.assertEqual(config["pause_hotkey"], "Alt+Space")
 
     def test_new_example_explicitly_selects_plain_markdown(self):

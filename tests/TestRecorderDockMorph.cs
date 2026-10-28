@@ -61,8 +61,8 @@ internal static class TestRecorderDockMorph {
             var timer = (System.Windows.Forms.Timer)Field(panel, "dockAnimation");
             panel.ShowAttention("转写失败 · 可重试", "原录音已保留"); panel.SetDockExpanded(true);
             Check(timer.Enabled && !panel.QuickNoteButton.Visible, "Only the raster morph runs during expansion, native controls do not flash");
-            int firstWidth = panel.Width; Pump(48);
-            Check(panel.Width > firstWidth && panel.Width < unit * 4.65, "Expansion contains intermediate native sizes");
+            int firstWidth = panel.Width; WaitForPartial(panel);
+            Check(panel.Width > firstWidth && panel.Width < (int)Math.Round(186*panel.DeviceDpi/96.0), "Expansion contains intermediate native sizes");
             var radius = (RecorderDockSpring)Field(panel, "dockRadius");
             Check(radius.Value > 12 && radius.Value < 20, "Corner radius morphs continuously from capsule to panel");
             Check(panel.Heading.Left >= (int)Math.Round(32 * panel.DeviceDpi / 96.0), "Status leaves room for the fixed side Logo");
@@ -84,7 +84,7 @@ internal static class TestRecorderDockMorph {
             panel.SetDockExpanded(true); double after = ((RecorderDockSpring)Field(panel, "dockWidth")).Value;
             Check(before == after && timer.Enabled, "Rapid reentry retargets the current shape without restarting at the logo"); WaitForRest(panel);
             panel.ShowStatus("verbit", "ready"); panel.SetDockExpanded(true); WaitForRest(panel);
-            Check(panel.Width == unit * 4 && panel.Height == unit, "Panel-to-toolbar change also reaches capsule geometry");
+            Check(panel.Width == (int)Math.Round(186*panel.DeviceDpi/96.0) && panel.Height == unit, "Panel-to-toolbar change also reaches capsule geometry");
             panel.SetDockExpanded(false); WaitForRest(panel);
             Check(panel.Width == unit && !timer.Enabled, "Collapse is shorter than expansion and leaves no running frame timer");
             panel.Location = new Point(screen.WorkingArea.Right - unit - 4, screen.WorkingArea.Bottom - unit - 4);
@@ -147,12 +147,13 @@ internal static class TestRecorderDockMorph {
             var leaveClock=Stopwatch.StartNew();
             while (((bool)Field(panel,"dockExpanded") || timer.Enabled) && leaveClock.ElapsedMilliseconds<750) Pump(2);
             Console.WriteLine("Leave settle total ms="+leaveClock.ElapsedMilliseconds);
-            Console.WriteLine("Final leave expanded="+Field(panel,"dockExpanded")+"; timer="+timer.Enabled+"; leave="+((System.Windows.Forms.Timer)Field(panel,"dockLeave")).Enabled+"; pinned="+Field(panel,"dockPinned")+"; width="+panel.Width+"; cursor="+Cursor.Position+"; bounds="+panel.Bounds);
-            Check(!timer.Enabled && !(bool)Field(panel, "dockExpanded"), "Final real leave handler collapses and stops its timer");
+
+            Check(!timer.Enabled && (bool)Field(panel, "dockExpanded"), "Leaving keeps the expanded panel stable until an explicit collapse");
+            panel.CollapseButton.PerformClick(); WaitForRest(panel);
             panel.SetDockExpanded(true); WaitForPartial(panel);
             SendMessage(handle,0x231,IntPtr.Zero,IntPtr.Zero); Event(panel,"OnMouseLeave"); Pump(260);
             SendMessage(handle,0x232,IntPtr.Zero,IntPtr.Zero); Pump(650);
-            Check(!(bool)Field(panel,"dockExpanded") && !timer.Enabled,"Leaving during a held drag is re-evaluated after release, rather than leaving the toolbar stuck open");
+            Check((bool)Field(panel,"dockExpanded") && !timer.Enabled,"Leaving during a held drag does not collapse the released panel");
             // A profile change must keep the same fixed Logo, not move it into a header.
             panel.SetDockExpanded(true); WaitForRest(panel); Rectangle logoBounds = panel.BrandMark.Bounds; PointF logo = LogoCenter(panel, logoBounds);
             using (var frame = Frame(panel)) frame.Save(Path.Combine(output, "strip-before-" + panel.DeviceDpi + ".png"));
@@ -216,13 +217,13 @@ internal static class TestRecorderDockMorph {
             for(int i=0;i<8;i++) { Event(panel,"OnMouseEnter"); Pump(25); Event(panel,"OnMouseLeave"); Pump(25); }
             Check(!(bool)Field(panel,"dockExpanded"),"Skimming the Logo never opens a panel before the dwell delay");
             Event(panel,"OnMouseEnter"); Pump(140); WaitForRest(panel);
-            Check(panel.QuickNoteButton.Visible && !(bool)Field(panel,"dockPinned"),"Dwell opens a temporary preview");
+            Check(panel.QuickNoteButton.Visible && panel.CollapseButton.Visible,"Dwell opens a panel with an explicit collapse control");
             Mouse(panel.BrandMark,"OnMouseDown",5,5); Mouse(panel.BrandMark,"OnMouseUp",5,5); Event(panel,"OnMouseLeave"); Pump(650);
-            Check((bool)Field(panel,"dockPinned") && panel.QuickNoteButton.Visible,"A Logo click pins the preview without opening a note");
+            Check((bool)Field(panel,"dockExpanded") && panel.QuickNoteButton.Visible,"A Logo click and mouse leave preserve the expanded panel");
             panel.ShowWorking("processing","synthetic"); WaitForRest(panel);
-            Check((bool)Field(panel,"dockPinned"),"Polling or a profile change preserves the explicit pinned choice");
+            Check((bool)Field(panel,"dockExpanded"),"Polling or a profile change preserves expansion");
             Check(panel.Heading.Height>=panel.Heading.Font.Height && panel.Detail.Height>=panel.Detail.Font.Height,"Shared processing labels fit their actual native fonts without clipping");
-            panel.ToggleDockPinned(); WaitForRest(panel); panel.ShowRecording("mic","system"); Pump(50);
+            panel.CollapseButton.PerformClick(); WaitForRest(panel); panel.ShowRecording("mic","system"); Pump(50);
             Check(!(bool)Field(panel,"dockExpanded") && !((System.Windows.Forms.Timer)Field(panel,"dockAnimation")).Enabled,"A new recording state does not reopen a manually collapsed dock");
             foreach(Point corner in new[] {new Point(screen.WorkingArea.Left,screen.WorkingArea.Top),new Point(screen.WorkingArea.Right-unit,screen.WorkingArea.Top),new Point(screen.WorkingArea.Left,screen.WorkingArea.Bottom-unit),new Point(screen.WorkingArea.Right-unit,screen.WorkingArea.Bottom-unit)}) {
                 panel.SetDockExpanded(false); WaitForRest(panel); panel.Location=corner; Point logo=LogoScreen(panel);
@@ -233,12 +234,19 @@ internal static class TestRecorderDockMorph {
             }
             panel.SetDockExpanded(false); WaitForRest(panel); panel.Location=new Point(screen.WorkingArea.Left+160,screen.WorkingArea.Top+160);
             panel.ShowAttention("转写失败","录音已保留；合成错误原因"); panel.SetRetryAvailable(true); panel.SetDockExpanded(true); WaitForRest(panel);
-            int retries=0; panel.RetryRequested+=delegate { retries++; panel.RetryButton.PerformClick(); };
-            Check(panel.RetryButton.Visible && !panel.StartButton.Visible,"Recoverable failure offers a direct retry rather than an unrelated recording action");
-            panel.RetryButton.PerformClick(); Check(retries==1,"A retry cannot be launched recursively or twice while its handler is running");
+            int retries=0; panel.RetryRequested+=delegate { retries++; Retry(panel); };
+            Check(panel.Heading.LinkArea.Length>0 && panel.StartButton.Visible,"Recoverable failure links its status while preserving the recording button");
+            Retry(panel); Check(retries==1,"A retry cannot be launched recursively or twice while its handler is running");
+            int moves=0, visibility=0;
+            foreach(Control button in new Control[]{panel.StartButton,panel.QuickNoteButton,panel.SettingsButton,panel.CollapseButton}) {
+                button.LocationChanged+=delegate { moves++; }; button.VisibleChanged+=delegate { visibility++; };
+            }
+            for(int i=0;i<30;i++) { panel.ShowAttention("转写失败","录音已保留；合成错误原因"); panel.SetRetryAvailable(true); }
+            Check(moves==0 && visibility==0,"Unchanged failure polling never moves or hides action buttons");
+            Check(!panel.StartButton.Bounds.IntersectsWith(panel.CollapseButton.Bounds),"Manual collapse and recording have separate hit targets");
             Pump(200);
             using(var frame=Frame(panel)) frame.Save(Path.Combine(output,"ux-retry-"+panel.DeviceDpi+".png"));
-            panel.SetRetryAvailable(false); Check(!panel.RetryButton.Visible && panel.StartButton.Visible,"A non-retryable state never offers a misleading retry action");
+            panel.SetRetryAvailable(false); Check(panel.Heading.LinkArea.Length==0 && panel.StartButton.Visible,"A non-retryable state never offers a misleading retry action");
             using(var frame=Frame(panel)) frame.Save(Path.Combine(output,"ux-attention-"+panel.DeviceDpi+".png"));
             panel.ShowRecording("synthetic mic","synthetic system"); WaitForRest(panel); panel.SetElapsed(TimeSpan.FromMinutes(12)); panel.SetInputLevels(.2f,.3f); Pump(200);
             using(var frame=Frame(panel)) frame.Save(Path.Combine(output,"ux-recording-"+panel.DeviceDpi+".png"));
@@ -274,6 +282,9 @@ internal static class TestRecorderDockMorph {
             Check(panel.Handle==handle,"All interaction modes retain one native floating window");
             panel.AllowClose=true; panel.Close();
         }
+    }
+    static void Retry(RecorderPanel panel) {
+        typeof(LinkLabel).GetMethod("OnLinkClicked",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(panel.Heading,new object[]{new LinkLabelLinkClickedEventArgs(new LinkLabel.Link())});
     }
     [STAThread] static int Main(string[] args) {
         string previous = RecorderMotionPreferences.Mode;

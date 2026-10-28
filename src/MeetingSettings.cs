@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -153,16 +153,16 @@ internal static class MeetingFirstRunSetup {
 
 // Native controls keep the settings window small and retain normal keyboard,
 // IME, DPI and accessibility behavior. Show() makes this a modeless window.
-internal sealed class LocalPreparationPrompt : Form {
+internal sealed class ApiConfigurationPrompt : Form {
     public bool PreparationAccepted { get; private set; }
-    public LocalPreparationPrompt(Func<bool> prepare) {
+    public ApiConfigurationPrompt(Func<bool> prepare) {
         Text = "verbit · 录音已保存"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         Font = new Font("Microsoft YaHei UI", 10); BackColor = Color.White;
         ClientSize = new Size(410, 210); Padding = new Padding(22);
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false;
-        var text = new Label { Text = "录音已保存，转写可以稍后进行\n\n转成文字可在设置中配置第三方 API。\n现有本地模型和配置保留；首期不提供模型下载。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(42, 65, 92) };
+        var text = new Label { Text = "录音已保存，转写可以稍后进行\n\n转成文字可在设置中配置第三方 API。\n填写你选择的云端或本机音频转写 API；不会自动连接旧模型。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(42, 65, 92) };
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         var later = new Button { Text = "仅保留录音", AutoSize = true, Height = 32, DialogResult = DialogResult.Cancel };
         var start = new Button { Text = "打开转写设置", AutoSize = true, Height = 32, BackColor = Color.FromArgb(40, 104, 168), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
@@ -259,8 +259,6 @@ internal sealed class MeetingSettingsDialog : Form {
                 autoTranscribe.Checked != Convert.ToBoolean(snapshot.Values["auto_transcribe"]) || echoFilter.Checked != Convert.ToBoolean(snapshot.Values["asr_echo_filter"]);
         }
     }
-    readonly System.Windows.Forms.Timer engineTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-    Label engineTitle, engineDetail;
     public void ShowAbout() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 2; }
     public void ShowTranscription() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 1; }
     public MeetingSettingsDialog(MeetingSettingsSnapshot snapshot, Func<Dictionary<string, object>, string> apply, bool firstRun = false) {
@@ -334,7 +332,6 @@ internal sealed class MeetingSettingsDialog : Form {
         }
         StyleControls(this); StyleButton(save, true);
         Deactivate += delegate { CancelKeyCapture(); };
-        engineTimer.Tick += delegate { RefreshEngine(); }; engineTimer.Start();
         ResumeLayout(false);
     }
     void CancelKeyCapture() { foreach (var input in inputs.Values) { var recorder = input as HotkeyInput; if (recorder != null) recorder.FinishCapture(false); } }
@@ -372,30 +369,26 @@ internal sealed class MeetingSettingsDialog : Form {
     void BuildModels(TabPage page, Dictionary<string, object> current) {
         var container = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
         container.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        autoTranscribe = new CheckBox { Name = "auto_transcribe", Text = "录音 + 转写", AccessibleName = "结束录音后自动转写", Checked = Convert.ToBoolean(current["auto_transcribe"]), Dock = DockStyle.Top, Height = 36 };
+        autoTranscribe = new CheckBox { Name = "auto_transcribe", Text = "录音 + 转写", AccessibleName = "结束录音后自动转写", Checked = (string)current["transcription_mode"] == "api" && Convert.ToBoolean(current["auto_transcribe"]), Dock = DockStyle.Top, Height = 36 };
         var modeHint = new Label { Name = "recording_mode_hint", Dock = DockStyle.Top, Height = 44, ForeColor = Color.FromArgb(76, 92, 114) };
         container.Controls.Add(autoTranscribe, 0, 0); container.Controls.Add(modeHint, 0, 1);
         var stack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 7 };
         stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int row = 0; row < 7; row++) stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var local = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0, 0, 0, 12) };
-        local.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        engineTitle = new Label { Name = "transcription_readiness", Dock = DockStyle.Top, Height = 28 };
-        engineDetail = new Label { Name = "engine_detail", Dock = DockStyle.Top, Height = 48, ForeColor = Color.FromArgb(76, 92, 114) };
-        local.Controls.Add(engineTitle, 0, 0); local.Controls.Add(engineDetail, 0, 1);
-        stack.Controls.Add(local, 0, 0);
         var disclosure = new Button { Text = "展开高级选项", Name = "transcription_advanced", Dock = DockStyle.Top, Height = 32, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 8, 0, 8) };
         stack.Controls.Add(disclosure, 0, 4);
         var advanced = new TableLayoutPanel { Name = "transcription_advanced_fields", Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Visible = false, Margin = Padding.Empty };
         advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         var modeGrid = SettingsGrid(); modeGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        bool keepLocal = (string)current["transcription_mode"] == "local" || LocalEngineState.Read(MeetingFiles.Home).Ready;
-        AddChoice(modeGrid, 0, "转写方式", "transcription_mode", current, keepLocal ? new[] { "local", "api" } : new[] { "api" }, keepLocal ? new[] { "已有本地环境（兼容）", "自定义第三方 API" } : new[] { "自定义第三方 API" }); stack.Controls.Add(modeGrid, 0, 2);
+        // Only an explicitly configured API can be used; never inspect model
+        // files or silently select the old in-process/local worker.
+        var apiSelection = new Dictionary<string, object>(current); apiSelection["transcription_mode"] = "api";
+        AddChoice(modeGrid, 0, "转写方式", "transcription_mode", apiSelection, new[] { "api" }, new[] { "自定义音频转写 API" }); stack.Controls.Add(modeGrid, 0, 2);
         var apiFields = SettingsGrid();
         for (int row = 0; row < 5; row++) apiFields.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 4 ? 44 : 32));
         AddField(apiFields, 0, "API 地址", "api_base_url", current); AddField(apiFields, 1, "API 模型 ID", "api_model", current);
         AddField(apiFields, 2, "密钥变量名", "api_key_env", current); AddField(apiFields, 3, "超时（秒）", "api_timeout_seconds", current);
-        var secret = new Label { Text = "只支持音频转写接口。密钥通过 Windows 用户环境变量配置，不写入配置文件；提交音频前还会询问。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114), Padding = new Padding(0, 4, 0, 0) };
+        var secret = new Label { Text = "支持 /audio/transcriptions，包括自建本机 API。密钥只读 Windows 用户环境变量；每次提交前确认地址与模型。", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(76, 92, 114), Padding = new Padding(0, 4, 0, 0) };
         apiFields.Controls.Add(secret, 0, 4); apiFields.SetColumnSpan(secret, 3); stack.Controls.Add(apiFields, 0, 3);
         var grid = SettingsGrid();
         for (int row = 0; row < 4; row++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 ? 48 : 36));
@@ -413,25 +406,14 @@ internal sealed class MeetingSettingsDialog : Form {
             try { advanced.Visible = !advanced.Visible; disclosure.Text = advanced.Visible ? "收起高级选项" : "展开高级选项"; }
             finally { stack.ResumeLayout(true); }
         };
-        Action refresh = delegate {
-            bool api = Choice("transcription_mode") == "api";
-            page.SuspendLayout(); stack.SuspendLayout(); advanced.SuspendLayout();
-            try {
-                apiFields.Visible = api; local.Visible = !api;
-                choices["asr_denoise"].Enabled = echoFilter.Enabled = !api;
-                echoFilter.Text = api ? "降噪与回声处理由第三方服务负责" : "去除有高置信证据的重复回声（不修改原录音）";
-                foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "api_timeout_seconds" }) inputs[key].Enabled = api;
-                RefreshEngine();
-            } finally { advanced.ResumeLayout(true); stack.ResumeLayout(true); page.ResumeLayout(true); }
-        };
-        choices["transcription_mode"].SelectedIndexChanged += delegate { refresh(); };
-        Activated += delegate { refresh(); }; refresh();
+        choices["asr_denoise"].Enabled = echoFilter.Enabled = false;
+        echoFilter.Text = "降噪与回声处理由你配置的 API 服务负责";
         container.Controls.Add(stack, 0, 2);
         Action updateRecordingMode = delegate {
             container.SuspendLayout();
             try {
                 stack.Visible = autoTranscribe.Checked;
-                modeHint.Text = autoTranscribe.Checked ? "结束录音先保存 MP3，再后台转写。\n配置第三方音频转写 API 后使用；录音不依赖转写。" : "仅录音 · 不需要模型或网络，结束后保存 MP3。\n可稍后选配 API；已有本地环境保留兼容。";
+                modeHint.Text = autoTranscribe.Checked ? "结束录音先保存 MP3，再后台转写。\n配置第三方音频转写 API 后使用；录音不依赖转写。" : "仅录音 · 不需要模型或网络，结束后保存 MP3。\n需要文字时，再配置云端或本机音频转写 API。";
             } finally { container.ResumeLayout(true); }
         };
         autoTranscribe.CheckedChanged += delegate { updateRecordingMode(); }; updateRecordingMode();
@@ -441,19 +423,11 @@ internal sealed class MeetingSettingsDialog : Form {
         var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Margin = Padding.Empty };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0)); return grid;
     }
-    void RefreshEngine() {
-        if (IsDisposed || engineTitle == null || Choice("transcription_mode") != "local") return;
-        var state = LocalEngineState.Read(MeetingFiles.Home);
-        string title = state.Ready ? "已有本地环境可用（兼容模式）" : "已有本地环境需要检查";
-        string detail = "首期不提供推荐模型或下载入口。原有模型和配置保留；需要时可改用第三方音频转写 API。";
-        if (engineTitle.Text != title) engineTitle.Text = title;
-        if (engineDetail.Text != detail) engineDetail.Text = detail;
-    }
     void OpenLink(string url) { try { DesktopServices.Open(url); } catch (Exception failure) { error.Text = "无法打开：" + failure.Message; } }
     void BuildAbout(TabPage page) {
         var stack = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
         stack.Controls.Add(new Label { Text = "版本 " + DesktopServices.Version, AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
-        stack.Controls.Add(new Label { Text = "Windows 速记与本地会议记录\n许可：MIT · 本地模式下音频不上传", AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
+        stack.Controls.Add(new Label { Text = "Windows 速记与会议录音\n许可：MIT · 默认仅录音，API 转写须明确确认", AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
         var github = new LinkLabel { Text = "GitHub · Qjzn/verbit", AutoSize = true, AccessibleName = "GitHub 项目地址" };
         using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Verbit.GitHub.png"))
             if (stream != null) using (var original = Image.FromStream(stream)) githubImage = new Bitmap(original, new Size(16, 16));
@@ -571,6 +545,5 @@ internal sealed class MeetingSettingsDialog : Form {
         base.Dispose(disposing);
         if (disposing && dpiFont != null) { dpiFont.Dispose(); dpiFont = null; }
         if (disposing && githubImage != null) { githubImage.Dispose(); githubImage = null; }
-        if (disposing) engineTimer.Dispose();
     }
 }

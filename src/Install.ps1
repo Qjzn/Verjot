@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$NotesPath,
-    [ValidateSet('local', 'api')][string]$Mode = 'local',
+    [ValidateSet('local', 'api')][string]$Mode = 'api',
     [ValidateSet('cpu', 'cuda128')][string]$Backend = 'cpu',
     [string]$PythonExe,
     [switch]$UseObsidian,
@@ -80,14 +80,19 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
 }
 
 try {
+    # Explicit legacy developer operation; never reached from desktop settings.
+    if ($RuntimeOnly -and -not $taskModeExplicit) { $Mode = 'local' }
     if ($RuntimeOnly -and ($Mode -ne 'local' -or $StartWithWindows -or $EnablePlaybackLinks)) { throw 'RuntimeOnly 仅准备推荐本地环境，不修改模式、自启或回放协议。' }
     $taskExistingConfig = Test-Path -LiteralPath $taskConfigPath -PathType Leaf
     if ($taskExistingConfig) {
         $taskConfig = Get-Content -LiteralPath $taskConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $taskConfiguredMode = [string]$taskConfig.transcription_mode
-        if ([string]::IsNullOrWhiteSpace($taskConfiguredMode)) { $taskConfiguredMode = 'local' }
+        if ([string]::IsNullOrWhiteSpace($taskConfiguredMode)) { $taskConfiguredMode = 'api' }
         if ($taskConfiguredMode -notin @('local', 'api')) { throw '已有 config.json 的 transcription_mode 必须是 local 或 api。' }
         if ($taskModeExplicit -and $Mode -ne $taskConfiguredMode -and -not $RuntimeOnly) { throw "已有配置使用 $taskConfiguredMode 模式；-Mode $Mode 不会覆盖它。请核对配置后重试。" }
+        if (-not $RuntimeOnly -and -not $taskModeExplicit -and $taskConfiguredMode -eq 'local') {
+            throw '旧本地配置已保留，不会自动准备或连接模型。请在桌面设置中显式配置音频转写 API；历史开发实验需明确指定 -Mode local。'
+        }
         if (-not $RuntimeOnly) { $Mode = $taskConfiguredMode }
         $taskNotes = [string]$taskConfig.vault_root
         if ($NotesPath -and [IO.Path]::GetFullPath($NotesPath) -ine [IO.Path]::GetFullPath($taskNotes)) {

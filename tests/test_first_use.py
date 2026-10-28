@@ -50,7 +50,7 @@ class FirstUseTests(unittest.TestCase):
         scratch.mkdir(exist_ok=True)
         self.folder = tempfile.TemporaryDirectory(prefix="first-use-test-", dir=scratch)
         self.home = Path(self.folder.name)
-        self.config = validate_config({"vault_root": str(self.home)}, check_directory=False)
+        self.config = validate_config({"vault_root": str(self.home), "transcription_mode": "local"}, check_directory=False)
         self.home_patch = patch.object(tingji, "HOME", self.home)
         self.home_patch.start()
 

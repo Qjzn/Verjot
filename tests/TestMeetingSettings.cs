@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -34,7 +34,7 @@ internal static class TestMeetingSettings {
         try { action(); return false; } catch (InvalidOperationException) { return true; } catch (IOException) { return true; }
     }
     static void RecognitionConfig(string root) {
-        var config = Config(root);
+        var config = Config(root); config["transcription_mode"] = "local"; // Legacy vocabulary validation, no engine load.
         config["asr_terms"] = "挚达，BOM\n挚达;OA";
         config["speaker_anchor_mode"] = "clean"; config["asr_segmentation"] = "speech";
         Check((string)MeetingConfig.Validate(config)["asr_terms"] == (string)config["asr_terms"], "Explicit terms and candidate modes are accepted without rewriting vocabulary");
@@ -356,17 +356,17 @@ internal static class TestMeetingSettings {
         Directory.CreateDirectory(Path.Combine(runtime, ".venv", "Scripts"));
         File.WriteAllText(Path.Combine(runtime, ".venv", "Scripts", "python.exe"), "synthetic; never executed");
         MeetingConfig.CheckRecordingRuntime(runtime); Check(true, "Runtime preflight checks file presence without executing Python or loading models");
-        Check(Reject(delegate { MeetingConfig.CheckTranscriptionRuntime(runtime, Config(root)); }), "Python alone does not make local models ready");
+        Check(Reject(delegate { MeetingConfig.CheckTranscriptionRuntime(runtime, new Dictionary<string,object> { {"transcription_mode","local"} }); }), "Python alone does not make local models ready");
         foreach (string name in new[] { "segmentation/model.onnx", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
             "Qwen3-ASR-1.7B-hf/config.json", "Qwen3-ASR-1.7B-hf/model.safetensors", "Qwen3-ASR-1.7B-hf/processor_config.json",
             "Qwen3-ASR-1.7B-hf/tokenizer_config.json", "Qwen3-ASR-1.7B-hf/tokenizer.json" }) {
             string file = Path.Combine(runtime, "models", name); Directory.CreateDirectory(Path.GetDirectoryName(file));
             File.WriteAllText(file, "synthetic; never loaded");
         }
-        MeetingConfig.CheckTranscriptionRuntime(runtime, Config(root));
+        MeetingConfig.CheckTranscriptionRuntime(runtime, new Dictionary<string,object> { {"transcription_mode","local"} });
         Check(MeetingConfig.LocalRuntimeStatus(runtime).Contains("文件已就绪"), "Ready file layout is detected without importing ML libraries");
         File.WriteAllText(Path.Combine(runtime, "models", "Qwen3-ASR-1.7B-hf", "model.safetensors"), "");
-        Check(Reject(delegate { MeetingConfig.CheckTranscriptionRuntime(runtime, Config(root)); }), "An incomplete empty ASR weight is not treated as ready");
+        Check(Reject(delegate { MeetingConfig.CheckTranscriptionRuntime(runtime, new Dictionary<string,object> { {"transcription_mode","local"} }); }), "An incomplete empty ASR weight is not treated as ready");
         MeetingConfig.CheckTranscriptionRuntime(runtime, ConfigWithApi(root));
         Check(true, "API mode requires speaker files but does not require Qwen weights");
     }
@@ -491,6 +491,17 @@ internal static class TestMeetingSettings {
         string path = Path.Combine(directory, "extended-settings.json"); Write(path, Config(root));
         var snapshot = MeetingSettingsSnapshot.Open(path);
         int calls = 0;
+        string legacyPath=Path.Combine(directory,"legacy-model-settings.json");
+        var legacy=Config(root); legacy["transcription_mode"]="local"; legacy["auto_transcribe"]=true; Write(legacyPath,legacy);
+        byte[] beforeLegacy=File.ReadAllBytes(legacyPath);
+        using(var legacyForm=new MeetingSettingsDialog(MeetingSettingsSnapshot.Open(legacyPath),delegate { throw new Exception("Cancel must not apply"); })) {
+            legacyForm.Show(); legacyForm.ShowTranscription(); Application.DoEvents();
+            Check(!((CheckBox)legacyForm.Controls.Find("auto_transcribe",true)[0]).Checked,"A legacy auto-local choice cannot silently enable API transcription");
+            ((CheckBox)legacyForm.Controls.Find("auto_transcribe",true)[0]).Checked=true; Application.DoEvents();
+            Check(((ComboBox)legacyForm.Controls.Find("transcription_mode",true)[0]).Items.Count==1,"Even an old local config only offers explicit API setup");
+            ((Button)legacyForm.CancelButton).PerformClick();
+        }
+        Check(beforeLegacy.SequenceEqual(File.ReadAllBytes(legacyPath)),"Opening and canceling API setup preserves old configuration byte-exact");
         using (var form = new MeetingSettingsDialog(snapshot, delegate { return null; })) {
             form.Show(); form.ShowTranscription(); Application.DoEvents();
             Check(form.Controls.Find("download_recommended_model", true).Length == 0, "No recommended model download control is constructed, even for existing local users");
@@ -512,12 +523,12 @@ internal static class TestMeetingSettings {
             Check(!automaticTranscription.Checked && form.Controls.Find("download_recommended_model", true).Length == 0, "Default record-only settings have no model download entry");
             automaticTranscription.Checked = true; Application.DoEvents();
             Check(form.Controls.Find("download_recommended_model", true).Length == 0, "Enabling transcription never exposes a model download entry");
-            Check(!Input(form, "asr_terms").Visible && !Input(form, "api_model").Visible, "Local defaults hide advanced and API fields instead of displaying a disabled form");
-            Check(form.Controls.Find("transcription_readiness", true)[0].Text.Contains("已有本地"), "Old model configuration remains available only as compatibility mode");
+            Check(!Input(form, "asr_terms").Visible && Input(form, "api_model").Visible, "API configuration is visible while advanced fields remain collapsed");
+            Check(form.Controls.Find("transcription_readiness", true).Length==0,"Settings never probes or exposes the old local engine");
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-local.png")); }
             ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
-            Check(Input(form, "asr_terms").Visible && !Input(form, "api_model").Visible, "Advanced local options expand without exposing API credentials");
-            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 1; Application.DoEvents();
+            Check(Input(form, "asr_terms").Visible && Input(form, "api_model").Visible, "Advanced terms expand alongside explicit API fields");
+            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 0; Application.DoEvents();
             Check(Input(form, "api_model").Enabled, "Choosing API exposes API model fields");
             Input(form, "api_key_env").Text = "VERBIT_SYNTHETIC_UNSET_KEY";
             Input(form, "asr_terms").Text = "产品名,术语";
@@ -543,18 +554,19 @@ internal static class TestMeetingSettings {
             form.Show(); form.ShowTranscription(); Application.DoEvents();
             ((CheckBox)form.Controls.Find("auto_transcribe", true)[0]).Checked = true; Application.DoEvents();
             ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
-            Call(form, "RefreshEngine"); Application.DoEvents();
+            Application.DoEvents();
+            Check(typeof(MeetingSettingsDialog).GetField("engineTimer",BindingFlags.Instance|BindingFlags.NonPublic)==null,"No local model polling timer is constructed");
             int invalidations = 0;
             WatchInvalidations(form, delegate { invalidations++; });
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            for (int i = 0; i < 50; i++) Call(form, "RefreshEngine");
+            for (int i = 0; i < 50; i++) Application.DoEvents();
             watch.Stop();
             Console.WriteLine("Settings unchanged status: 50 polls, " + invalidations + " invalidations, " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
             int unchangedInvalidations = invalidations;
-            var combo = (ComboBox)form.Controls.Find("asr_denoise", true)[0];
+            var combo = (ComboBox)form.Controls.Find("transcription_mode", true)[0];
             combo.Focus(); combo.DroppedDown = true; Application.DoEvents();
             int before = invalidations;
-            for (int i = 0; i < 5; i++) { Call(form, "RefreshEngine"); Application.DoEvents(); }
+            for (int i = 0; i < 5; i++) { Application.DoEvents(); Application.DoEvents(); }
             bool dropdownPreserved = combo.DroppedDown && combo.Focused;
             int dropdownInvalidations = invalidations - before;
             combo.DroppedDown = false;
@@ -572,8 +584,8 @@ internal static class TestMeetingSettings {
             watch.Restart();
             for (int i = 0; i < 12; i++) {
                 mode.DroppedDown = true; Application.DoEvents();
-                mode.SelectedIndex = i % 2; mode.DroppedDown = false; Application.DoEvents();
-                Check(Input(form, "api_model").Visible == (i % 2 == 1), "Native mode selection updates API visibility without stale controls");
+                mode.SelectedIndex = 0; mode.DroppedDown = false; Application.DoEvents();
+                Check(Input(form, "api_model").Visible && mode.Items.Count==1, "Native mode selection updates API visibility without stale controls");
             }
             watch.Stop();
             Console.WriteLine("Settings mode changes: 12 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");

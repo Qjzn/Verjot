@@ -37,9 +37,9 @@
     "animation_mode": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto", "description": "auto 跟随 Windows 客户区动画及高对比设置；on 仅为 verbit 开启动效；off 关闭非必要动效。均不更改 Windows 设置，不影响真实输入和进度。"},
     "notify_device_changes": {"type": "boolean", "default": true, "description": "提醒设备变化；关闭只影响提示，不关闭自动跟随/所有活动输出捕获。固定设备 ID 不随默认设备变化。不把安静当作故障。"},
     "auto_open_completed_note": {"type": "boolean", "default": true, "description": "仅在 open_in_obsidian 为 true 且当前没有录音时，自动打开刚完成的笔记；录音中完成或启动时找回的成品由托盘手动打开。"},
-    "transcription_mode": {"type": "string", "enum": ["local", "api"], "default": "local", "description": "api 为首期新用户可选的第三方 /audio/transcriptions 接口，不需要 Python 或本地模型；提交前确认上传。local 仅兼容已有本地环境，保留旧缺省值，不推荐、不下载。仅修改聊天模型 ID 不能转换接口。"},
+    "transcription_mode": {"type": "string", "enum": ["local", "api"], "default": "api", "description": "api 为首期新用户可选的第三方 /audio/transcriptions 接口，不需要 Python 或本地模型；提交前确认上传。local 仅保留旧配置可读性，桌面端不再连接或启动本地模型；请显式填写云端或自行部署的本机 API。仅修改聊天模型 ID 不能转换接口。"},
     "api_base_url": {"type": "string", "default": "", "description": "API 模式必填完整 HTTP(S) 前缀，如 https://provider.example/v1；末尾追加 /audio/transcriptions。"},
-    "auto_transcribe": {"type": "boolean", "default": false, "description": "默认 false 仅录音，无需模型或网络；true 在 MP3 保存后按显式配置转写。首期 API 原生提交校验后的 MP3，确认后才上传；已有本地模式继续使用无损分轨。新 API 仅录音校验 MP3 后清理临时音轨；转写失败保留恢复资料。"},
+    "auto_transcribe": {"type": "boolean", "default": false, "description": "默认 false 仅录音，无需模型或网络；true 在 MP3 保存后按显式配置转写。首期 API 原生提交校验后的 MP3，确认后才上传；旧 local 配置不会自动连接，需改为显式 API 配置。新 API 仅录音校验 MP3 后清理临时音轨；转写失败保留恢复资料。"},
     "api_model": {"type": "string", "default": "", "description": "API 模式必填服务支持的音频转写模型名。"},
     "api_key_env": {"type": "string", "default": "TINGJI_API_KEY", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "读取 API 密钥的环境变量名，不是密钥值。"},
     "api_timeout_seconds": {"type": "integer", "default": 120, "minimum": 10, "maximum": 600}

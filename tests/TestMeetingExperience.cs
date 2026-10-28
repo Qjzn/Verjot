@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -137,35 +137,27 @@ internal static class TestMeetingExperience {
             Check(Convert.ToBase64String(raw) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(session, "mic.wav"))), "Missing dependencies never rewrite recorded bytes");
             Check(!File.Exists(Path.Combine(session, "transcription-settings.json")), "Failed preflight cannot authorize an upload or bind an unready engine");
             Form setupPrompt = null;
-            foreach (Form form in Application.OpenForms) if (form is LocalPreparationPrompt) setupPrompt = form;
+            foreach (Form form in Application.OpenForms) if (form is ApiConfigurationPrompt) setupPrompt = form;
             Check(setupPrompt != null, "Missing local engine presents a non-blocking prepare-or-keep-recording choice");
             ((Button)setupPrompt.CancelButton).PerformClick();
-            Check(setupPrompt.IsDisposed && ((HashSet<string>)Field(pending, "resumeAfterPreparation")).Count == 0, "Keeping audio does not download anything or enroll an automatic transcription");
+            Check(setupPrompt.IsDisposed, "Keeping audio does not download anything or enroll an automatic transcription");
             pending.ExitThread();
         }
-        config["asr_context"] = "updated locally before first transcription";
-        string launched = null;
-        Process child = null;
-        using (var ready = new MeetingContext(config, delegate(string path) { launched = path; child = Child(false); return child; }, delegate { throw new Exception("No external app"); })) {
-            ((System.Windows.Forms.Timer)Field(ready, "timer")).Stop();
-            var queued = (HashSet<string>)Field(ready, "resumeAfterPreparation"); queued.Add(session);
-            Set(ready, "localEngineReady", new Func<string, bool>(delegate { return false; }));
-            Call(ready, "ResumePreparedTranscriptions");
-            Check(launched == null && queued.Contains(session), "Pending local transcription waits for actual readiness");
-            Set(ready, "localEngineReady", new Func<string, bool>(delegate { return true; }));
-            ((Dictionary<string, object>)Field(ready, "config"))["transcription_mode"] = "api";
-            Call(ready, "ResumePreparedTranscriptions");
-            Check(launched == null && queued.Count == 0, "A later API mode change cannot reuse local-only consent");
-            ((Dictionary<string, object>)Field(ready, "config"))["transcription_mode"] = "local"; queued.Add(session);
-            Call(ready, "ResumePreparedTranscriptions");
-            Check(queued.Count == 0, "Automatic local continuation is consumed only once");
-            var selection = MeetingFiles.ReadJson(Path.Combine(session, "transcription-settings.json"));
-            Check(launched == session && (string)selection["asr_context"] == (string)config["asr_context"], "Actual retry binds current model settings and vocabulary without a tray restart");
-            Check(!(bool)selection["api_upload_confirmed"] && (string)selection["transcription_mode"] == "local", "Local retry cannot authorize cloud upload");
-            Check(Convert.ToBase64String(recordingMetadata) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(session, "session.json"))), "First transcription preserves recording metadata byte-exact");
-            child.WaitForExit(); Call(ready, "Tick"); ready.ExitThread();
+        // Old local configurations are still readable, but no product path may
+        // inspect readiness, auto-resume, or launch an old Python/model worker.
+        var legacy = new Dictionary<string,object>(config); legacy["transcription_mode"]="local";
+        using(var old = new MeetingContext(legacy,null,delegate { throw new Exception("No external app"); })) {
+            ((System.Windows.Forms.Timer)Field(old,"timer")).Stop();
+            int previousJobs=((List<TranscriptionJob>)Field(old,"jobs")).Count;
+            Call(old,"LaunchWorker",session);
+            var status=MeetingFiles.ReadJson(Path.Combine(session,"status.json"));
+            Check((string)status["stage"]=="configuration" && ((string)status["message"]).Contains("API"),"Legacy local mode requests explicit API configuration instead of loading a model");
+            Check(((List<TranscriptionJob>)Field(old,"jobs")).Count==previousJobs,"Legacy configuration never launches a local worker");
+            Check(Convert.ToBase64String(recordingMetadata)==Convert.ToBase64String(File.ReadAllBytes(Path.Combine(session,"session.json"))),"Configuration guidance preserves recording metadata byte-exact");
+            old.ExitThread();
         }
     }
+
     [STAThread]
     static int Main(string[] args) {
         if (args.Length == 2 && args[0] == "--child") { Thread.Sleep(1800); return int.Parse(args[1]); }

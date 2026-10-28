@@ -110,7 +110,7 @@ internal static class TestRecorderPanel {
                 Check(!panel.QuickNoteButton.Visible && !panel.BrandTitle.Visible, "Collapsed shared window hides all duplicate branding and tools");
                 panel.SetDockExpanded(true); SettleDock(panel);
                 Console.WriteLine("SHARED expanded " + panel.Bounds + "; target=" + typeof(RecorderPanel).GetField("dockExpanded", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; progress=" + typeof(RecorderPanel).GetField("dockProgress", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; tools=" + panel.QuickNoteButton.Visible + "/" + panel.StartButton.Visible + "/" + panel.SettingsButton.Visible);
-                Check(panel.Width == unit * 4 && panel.Height == unit && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "The very same shared window expands to a clean single row of existing actions");
+                Check(panel.Width == (int)Math.Round(186*panel.DeviceDpi/96.0) && panel.Height == unit && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "The very same shared window expands to a clean single row of existing actions");
                 Snapshot(panel, Path.Combine(output, "shared-idle-" + panel.DeviceDpi + ".png"), true);
                 int logoResizes = 0, actionMoves = 0;
                 panel.BrandMark.SizeChanged += delegate { logoResizes++; };

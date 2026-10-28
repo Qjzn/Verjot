@@ -303,7 +303,12 @@ class WorkerRoutingTests(unittest.TestCase):
                         patch.object(worker, "processing_slot", lambda _: nullcontext()), \
                         patch.object(worker, "run_stage", stage), \
                         patch.dict(os.environ, {"TINGJI_API_KEY": "routing-secret-never-pass"}):
-                    self.assertEqual(worker.process_session(session), 0)
+                    result = worker.process_session(session)
+                    if mode is None:
+                        self.assertEqual(result, 1)
+                        self.assertFalse(any(name == "asr" for name, _ in commands))
+                        continue  # Missing legacy consent must never become an API upload.
+                    self.assertEqual(result, 0)
                 command = next(command for name, command in commands if name == "asr")
                 expected = "api_asr.py" if mode == "api" else "asr_engine.py"
                 self.assertEqual(Path(command[1]).name, expected)

@@ -1645,7 +1645,7 @@ internal struct RecorderDockSpring {
 }
 
 internal sealed class RecorderPanel : Form {
-    public readonly Label Heading = new Label();
+    public readonly LinkLabel Heading = new LinkLabel { LinkArea = new LinkArea(0, 0), LinkBehavior = LinkBehavior.HoverUnderline, TabStop = false };
     public readonly Label Time = new Label();
     public readonly Label Detail = new Label();
     public readonly LinkLabel AudioFile = new LinkLabel();
@@ -1658,7 +1658,6 @@ internal sealed class RecorderPanel : Form {
     public readonly RecorderActionButton QuickNoteButton = new RecorderActionButton { QuickAction = "note", Visible = false };
     public readonly RecorderActionButton StartButton = new RecorderActionButton { QuickAction = "record", Visible = false };
     public readonly RecorderActionButton SettingsButton = new RecorderActionButton { QuickAction = "settings", Visible = false };
-    public readonly RecorderActionButton RetryButton = new RecorderActionButton { QuickAction = "retry", Visible = false };
     public readonly PictureBox BrandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom };
     public readonly Label BrandTitle = new Label();
     public readonly RecordingLevelIndicator AudioLevel = new RecordingLevelIndicator();
@@ -1676,7 +1675,7 @@ internal sealed class RecorderPanel : Form {
     bool processingBusy;
     bool settingResult;
     Panel dockContent;
-    bool sharedDock, dockExpanded, dockPinned, dockLeft, dockUp, dockPositioning, dockMoving, dockSuppressHover, dockDisposing;
+    bool sharedDock, dockExpanded, dockLeft, dockUp, dockPositioning, dockMoving, dockSuppressHover, dockDisposing;
     int dockEdge; // -1: left working edge, +1: right working edge; only chosen on release.
     bool dockRetryAvailable, dockRetryBusy, dockPositionInitialized, dockPointerInside;
     Control dockDragControl;
@@ -1744,6 +1743,8 @@ internal sealed class RecorderPanel : Form {
         Heading.SetBounds(10, 50, 74, 14);
         Heading.Font = recordingHeadingFont;
         Heading.ForeColor = Color.FromArgb(72, 103, 135);
+        Heading.LinkColor = Color.FromArgb(42, 94, 150);
+        Heading.ActiveLinkColor = Color.FromArgb(25, 63, 110);
         Heading.AutoEllipsis = true;
         Heading.TextAlign = ContentAlignment.MiddleCenter;
         Detail.Visible = false;
@@ -1797,22 +1798,20 @@ internal sealed class RecorderPanel : Form {
         QuickNoteButton.AccessibleName = QuickNoteButton.Text = "速记便签";
         StartButton.AccessibleName = StartButton.Text = "开始录制";
         SettingsButton.AccessibleName = SettingsButton.Text = "设置";
-        RetryButton.AccessibleName = RetryButton.Text = "重试转写";
-        DevicesTip.SetToolTip(RetryButton, "重试这场转写\n原录音和恢复资料保持不变");
         DevicesTip.InitialDelay = 400; DevicesTip.ReshowDelay = 100; DevicesTip.AutoPopDelay = 15000;
         SetQuickActionHotkeys("Ctrl+Alt+J", "Ctrl+Alt+L");
         DevicesTip.SetToolTip(StopButton, "结束整个记录 · Ctrl+Alt+L");
         DevicesTip.SetToolTip(Time, "本场会议时长；拖动可移动浮窗");
         DevicesTip.SetToolTip(AudioLevel, "麦克风或电脑声音的实际输入音量");
         DevicesTip.SetToolTip(CollapseButton, "关闭浮窗，录音和转写继续；从托盘可恢复");
-        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton, QuickNoteButton, StartButton, SettingsButton, RetryButton, BrandMark, BrandTitle });
-        RetryButton.Click += delegate {
-            if (!dockRetryAvailable || dockRetryBusy) return;
-            dockRetryBusy = true; RetryButton.Enabled = false;
+        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton, QuickNoteButton, StartButton, SettingsButton, BrandMark, BrandTitle });
+        Heading.LinkClicked += delegate {
+            if (!showingAttention || !dockRetryAvailable || dockRetryBusy) return;
+            dockRetryBusy = true; UpdateRetryLink();
             try { if (RetryRequested != null) RetryRequested(); }
-            finally { dockRetryBusy = false; RetryButton.Enabled = dockRetryAvailable; }
+            finally { dockRetryBusy = false; UpdateRetryLink(); }
         };
-        CollapseButton.Click += delegate { if (sharedDock) { dockPinned = false; dockSuppressHover = true; SetDockExpanded(false); ScheduleDockLeave(); } else Hide(); };
+        CollapseButton.Click += delegate { if (sharedDock) { dockSuppressHover = true; SetDockExpanded(false); ScheduleDockLeave(); } else Hide(); };
         foreach (Control surface in new Control[] { this, Time, Heading, Detail, AudioLevel, BrandTitle, BrandMark }) ObserveDockDrag(surface);
         Heading.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text); };
         Detail.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text + "\n" + Detail.Text); };
@@ -1840,10 +1839,9 @@ internal sealed class RecorderPanel : Form {
         dockLeave.Tick += delegate {
             dockLeave.Stop();
             dockEnter.Stop();
-            bool menuOpen = ContextMenuStrip != null && ContextMenuStrip.Visible;
-            foreach (var link in new[] { AudioFile, TranscriptFile }) if (link.ContextMenuStrip != null && link.ContextMenuStrip.Visible) menuOpen = true;
             if (!DockContainsPointer()) dockSuppressHover = false;
-            if (!dockPinned && !dockMoving && !menuOpen && !DockContainsPointer() && Control.MouseButtons == MouseButtons.None) SetDockExpanded(false);
+            // Leaving only rearms hover after an explicit collapse. Never fold
+            // an expanded surface underneath the user or an open menu.
         };
         dockAnimation.Tick += delegate {
             if (!RecorderMotionPreferences.Enabled) { SnapDockMotion(); PositionSharedDock(); return; }
@@ -1882,13 +1880,11 @@ internal sealed class RecorderPanel : Form {
         return new Rectangle(dockLeft ? dockAnchor.X + DockUnit - w : dockAnchor.X, dockUp ? dockAnchor.Y + DockUnit - h : dockAnchor.Y, w, h).Contains(Cursor.Position);
     }
     void ScheduleDockLeave() { if (sharedDock && !dockDisposing && !IsDisposed) { dockEnter.Stop(); dockLeave.Start(); } }
-    internal void ToggleDockPinned() {
+    internal void ExpandDockFromLogo() {
         if (!sharedDock || dockMoving) return;
-        dockPinned = !dockPinned;
-        dockSuppressHover = !dockPinned;
-        dockEnter.Stop(); dockLeave.Stop(); SetDockExpanded(dockPinned);
+        ExpandDockPinned();
     }
-    internal void ExpandDockPinned() { dockPinned = true; dockSuppressHover = false; dockEnter.Stop(); dockLeave.Stop(); SetDockExpanded(true); }
+    internal void ExpandDockPinned() { dockSuppressHover = false; dockEnter.Stop(); dockLeave.Stop(); SetDockExpanded(true); }
     internal void SetDockExpanded(bool expanded) {
         if (!sharedDock || dockMoving) return;
         if (expanded) dockLeave.Stop(); else dockEnter.Stop();
@@ -1906,7 +1902,7 @@ internal sealed class RecorderPanel : Form {
         UpdateProcessingAnimation();
     }
     double DockLogoTargetX { get { return 8; } }
-    double DockTargetWidth { get { return dockExpanded ? showingQuickActions && !showingAttention ? 160 : 186 : dockEdge != 0 ? 6 : 40; } }
+    double DockTargetWidth { get { return dockExpanded ? 186 : dockEdge != 0 ? 6 : 40; } }
     double DockTargetHeight { get { return dockExpanded && (!showingQuickActions || showingAttention) ? 68 : dockEdge != 0 && !dockExpanded ? 36 : 40; } }
     void ReleaseDockSnapshot() { if (dockSnapshot != null) { dockSnapshot.Dispose(); dockSnapshot = null; } }
     void SnapDockMotion() {
@@ -1932,7 +1928,7 @@ internal sealed class RecorderPanel : Form {
     }
     void CaptureDockSnapshot(bool tools) {
         ReleaseDockSnapshot();
-        Size full = PanelBounds(0, 0, tools ? 160 : 186, tools ? 40 : 68).Size;
+        Size full = PanelBounds(0, 0, 186, tools ? 40 : 68).Size;
         dockContent.Size = full; LayoutSharedContent(full);
         dockSnapshot = new Bitmap(full.Width, full.Height);
         // Drawing the transparent parent also captures the old rounded
@@ -1940,15 +1936,13 @@ internal sealed class RecorderPanel : Form {
         using (var graphics = Graphics.FromImage(dockSnapshot)) {
             graphics.Clear(BackColor);
             foreach (Control control in dockContent.Controls) {
-                bool visible = control == BrandTitle || control == CollapseButton ? !tools
+                bool visible = control == CollapseButton ? true : control == BrandTitle ? !tools
                     : control == QuickNoteButton || control == StartButton || control == SettingsButton ? showingQuickActions
                     : control == Time || control == AudioLevel || control == MicrophoneButton || control == StopButton ? showingRecording
                     : control == Heading ? showingRecording || !showingQuickActions || showingAttention
                     : control == Detail ? !showingRecording && !showingQuickActions
                     : control == AudioFile || control == TranscriptFile ? resultSession != null : false;
                 if (sharedDock && control == BrandTitle && (showingRecording || showingAttention)) visible = false;
-                if (control == RetryButton) visible = showingAttention && dockRetryAvailable;
-                if (showingAttention && dockRetryAvailable && control == StartButton) visible = false;
                 if (!visible || control.Width < 1 || control.Height < 1) continue;
                 using (var bitmap = new Bitmap(control.Width, control.Height)) {
                     control.DrawToBitmap(bitmap, control.ClientRectangle);
@@ -1961,7 +1955,7 @@ internal sealed class RecorderPanel : Form {
     int DockUnit { get { return (int)Math.Round(40 * fontDpi / 96.0); } }
     void NotifyDockState(string state) {
         if (!sharedDock) return;
-        string tip = "verbit · " + (state == "recording" ? "录音中" : state == "result" ? "会议文件" : Heading.Text) + "\n悬停预览；点击固定或收起；拖动可移动";
+        string tip = "verbit · " + (state == "recording" ? "录音中" : state == "result" ? "会议文件" : Heading.Text) + "\n悬停展开；点击箭头收起；拖动可移动";
         if (DevicesTip.GetToolTip(BrandMark) != tip) DevicesTip.SetToolTip(BrandMark, tip);
         if (dockState != state) {
             dockState = state;
@@ -1974,7 +1968,7 @@ internal sealed class RecorderPanel : Form {
         dockPositioning = true;
         try {
             bool toolsOnly = showingQuickActions && !showingAttention;
-            Size full = PanelBounds(0, 0, toolsOnly ? 160 : 186, toolsOnly ? 40 : 68).Size;
+            Size full = PanelBounds(0, 0, 186, toolsOnly ? 40 : 68).Size;
             int width = Math.Max(1, (int)Math.Round(dockWidth.Value * fontDpi / 96.0));
             int height = Math.Max(1, (int)Math.Round(dockHeight.Value * fontDpi / 96.0));
             Rectangle work = Screen.FromPoint(dockAnchor).WorkingArea;
@@ -1993,17 +1987,12 @@ internal sealed class RecorderPanel : Form {
             dockContent.Visible = dockExpanded && !dockAnimation.Enabled;
             BrandMark.Visible = !dockAnimation.Enabled && !(dockEdge != 0 && !dockExpanded);
             BrandTitle.Visible = !toolsOnly && !showingRecording && !showingAttention;
-            CollapseButton.Visible = !toolsOnly;
+            CollapseButton.Visible = true;
             if (!dockAnimation.Enabled) {
                 int pad = Math.Max(4, DockUnit / 5), offset = dockLeft ? width - DockUnit : 0;
                 int top = dockUp ? height - DockUnit : 0;
                 BrandMark.SetBounds(offset + pad, top + pad, DockUnit - pad * 2, DockUnit - pad * 2);
-                if (toolsOnly) {
-                    int first = dockLeft ? 0 : DockUnit;
-                    QuickNoteButton.Bounds = PanelBounds(first * 96 / fontDpi + 4, 4, 32, 32);
-                    StartButton.Bounds = new Rectangle(QuickNoteButton.Left + DockUnit, QuickNoteButton.Top, QuickNoteButton.Width, QuickNoteButton.Height);
-                    SettingsButton.Bounds = new Rectangle(StartButton.Left + DockUnit, StartButton.Top, StartButton.Width, StartButton.Height);
-                }
+
             }
             // Only relayout on geometry/profile changes; status polling must not
             // move native controls or recreate tooltip handles.
@@ -2070,7 +2059,7 @@ internal sealed class RecorderPanel : Form {
     }
     void LayoutPanelContent() {
         if (sharedDock && dockContent != null) {
-            LayoutSharedContent(PanelBounds(0, 0, showingQuickActions && !showingAttention ? 160 : 186, showingQuickActions && !showingAttention ? 40 : 68).Size);
+            LayoutSharedContent(PanelBounds(0, 0, 186, showingQuickActions && !showingAttention ? 40 : 68).Size);
             PositionSharedDock(); return;
         }
         Time.Bounds = PanelBounds(10, 30, 55, 22);
@@ -2086,12 +2075,16 @@ internal sealed class RecorderPanel : Form {
             SetArtifact(AudioFile, "录音", AudioFile.Tag as string, resultRoot, 25);
             SetArtifact(TranscriptFile, "转录", TranscriptFile.Tag as string, resultRoot, 45);
         }
-        if (sharedDock) { LayoutSharedContent(PanelBounds(0, 0, showingQuickActions && !showingAttention ? 160 : 186, showingQuickActions && !showingAttention ? 40 : 68).Size); PositionSharedDock(); }
+        if (sharedDock) { LayoutSharedContent(PanelBounds(0, 0, 186, showingQuickActions && !showingAttention ? 40 : 68).Size); PositionSharedDock(); }
     }
     void LayoutSharedContent(Size full) {
         if (!sharedDock || dockContent == null) return;
         bool tools = showingQuickActions && !showingAttention;
-        if (tools) { LayoutQuickActions(false); return; }
+        if (tools) {
+            LayoutQuickActions(false);
+            CollapseButton.Bounds = PanelBounds(dockLeft ? 4 : 160, 8, 22, 22);
+            CollapseButton.CollapseToRight = dockLeft; return;
+        }
         int header = dockUp ? 28 : 0, row = dockUp ? 0 : 34;
         BrandTitle.Bounds = PanelBounds(dockLeft ? 32 : 40, header + 8, 112, 22);
         BrandTitle.Visible = !showingRecording && !showingAttention;
@@ -2104,10 +2097,6 @@ internal sealed class RecorderPanel : Form {
         if (showingAttention) {
             Heading.Bounds = PanelBounds(dockLeft ? 32 : 40, header + 8, 116, 22);
             LayoutQuickActions(true);
-            QuickNoteButton.Top = StartButton.Top = SettingsButton.Top = PanelBounds(0, row + 2, 0, 0).Top;
-            RetryButton.Bounds = StartButton.Bounds;
-            RetryButton.Visible = dockRetryAvailable;
-            StartButton.Visible = !dockRetryAvailable;
         } else if (showingRecording) Heading.Bounds = PanelBounds(10, row + 6, 74, 20);
         else {
             Heading.Bounds = PanelBounds(40, row, 136, 16);
@@ -2120,7 +2109,7 @@ internal sealed class RecorderPanel : Form {
     }
     void ObserveDockDrag(Control surface) {
         surface.MouseDown += delegate(object sender, MouseEventArgs e) {
-            if (e.Button != MouseButtons.Left) return;
+            if (e.Button != MouseButtons.Left || surface == Heading && Heading.LinkArea.Length > 0) return;
             dockPressPoint = surface.PointToScreen(e.Location); dockPressWasLogo = surface == BrandMark;
             dockDidDrag = false; dockDragControl = surface; surface.Capture = true; dockEnter.Stop(); dockLeave.Stop();
         };
@@ -2135,23 +2124,28 @@ internal sealed class RecorderPanel : Form {
         surface.MouseUp += delegate(object sender, MouseEventArgs e) {
             if (e.Button != MouseButtons.Left || dockDragControl != surface) return;
             surface.Capture = false; dockDragControl = null;
-            if (!dockDidDrag && dockPressWasLogo) ToggleDockPinned();
+            if (!dockDidDrag && dockPressWasLogo) ExpandDockFromLogo();
             ScheduleDockLeave();
         };
         surface.MouseCaptureChanged += delegate { if (!surface.Capture && !dockDidDrag && dockDragControl == surface) dockDragControl = null; };
     }
     internal void SetRetryAvailable(bool available) {
         if (dockRetryAvailable == available) return;
-        dockRetryAvailable = available; RetryButton.Enabled = available && !dockRetryBusy;
-        RetryButton.Visible = showingAttention && available;
-        if (showingAttention) StartButton.Visible = !available;
-        if (dockAnimation.Enabled) CaptureDockSnapshot(showingQuickActions && !showingAttention);
+        dockRetryAvailable = available; UpdateRetryLink();
+    }
+    void UpdateRetryLink() {
+        bool enabled = showingAttention && dockRetryAvailable && !dockRetryBusy;
+        LinkArea area = new LinkArea(0, enabled ? Heading.Text.Length : 0);
+        if (!Heading.LinkArea.Equals(area)) Heading.LinkArea = area;
+        Heading.TabStop = enabled;
+        Heading.AccessibleDescription = enabled ? "点击状态文字重试转写；原录音保留" : "";
     }
     public void ShowRecording(string microphone, string system) {
         SetProcessingBusy(false);
         HideArtifacts();
         showingRecording = true;
         showingAttention = false;
+        UpdateRetryLink();
         SetQuickActionsVisible(false);
         bookmarkFeedbackUntil = DateTime.MinValue;
         recordingPaused = false;
@@ -2194,10 +2188,12 @@ internal sealed class RecorderPanel : Form {
         string devices = "麦克风：" + micName + "\n麦克风输入：" + micState + "\n电脑声音：" + systemName + "\n电脑声音输入：" + systemState;
         if (!string.IsNullOrEmpty(deviceWarning)) devices += "\n" + deviceWarning;
         string action = recordingPaused ? "点击切换麦克风；恢复整场后生效" : microphonePaused ? "点击开启麦克风，电脑声音继续录制" : "点击关闭麦克风，电脑声音继续录制";
-        DevicesTip.SetToolTip(MicrophoneButton, devices + "\n" + action);
-        DevicesTip.SetToolTip(AudioLevel, devices);
-        DevicesTip.SetToolTip(Heading, devices);
-        MicrophoneButton.AccessibleName = MicrophoneButton.Text = "麦克风输入：" + micState + "；" + (microphonePaused ? "开启麦克风" : "关闭麦克风");
+        string micTip = devices + "\n" + action;
+        if (DevicesTip.GetToolTip(MicrophoneButton) != micTip) DevicesTip.SetToolTip(MicrophoneButton, micTip);
+        if (DevicesTip.GetToolTip(AudioLevel) != devices) DevicesTip.SetToolTip(AudioLevel, devices);
+        if (DevicesTip.GetToolTip(Heading) != devices) DevicesTip.SetToolTip(Heading, devices);
+        string name = "麦克风输入：" + micState + "；" + (microphonePaused ? "开启麦克风" : "关闭麦克风");
+        if (MicrophoneButton.Text != name) MicrophoneButton.AccessibleName = MicrophoneButton.Text = name;
     }
     public void SetMicPaused(bool paused) {
         microphonePaused = paused;
@@ -2243,10 +2239,10 @@ internal sealed class RecorderPanel : Form {
     void LayoutQuickActions(bool compact) {
         var actions = new[] { QuickNoteButton, StartButton, SettingsButton };
         if (sharedDock && !compact) {
-            for (int i = 0; i < actions.Length; i++) actions[i].Bounds = PanelBounds((dockLeft ? 0 : 40) + 4 + i * 40, 4, 32, 32);
+            for (int i = 0; i < actions.Length; i++) actions[i].Bounds = PanelBounds((dockLeft ? 32 : 40) + 4 + i * 36, 4, 32, 32);
             return;
         }
-        int size = compact ? 24 : 32, top = compact ? 42 : 28;
+        int size = compact ? 24 : 32, top = sharedDock ? (dockUp ? 2 : 36) : compact ? 42 : 28;
         for (int i = 0; i < actions.Length; i++)
             actions[i].Bounds = PanelBounds(18 + (compact ? 4 : 0) + i * 59, top, size, size);
     }
@@ -2258,8 +2254,7 @@ internal sealed class RecorderPanel : Form {
     void SetQuickActionsVisible(bool visible) {
         showingQuickActions = visible;
         QuickNoteButton.Visible = SettingsButton.Visible = visible;
-        StartButton.Visible = visible && !(showingAttention && dockRetryAvailable);
-        RetryButton.Visible = visible && showingAttention && dockRetryAvailable;
+        StartButton.Visible = visible;
     }
     public void ShowProcessing(string title, string detail) {
         ShowTextState(title, detail, false, false);
@@ -2284,8 +2279,9 @@ internal sealed class RecorderPanel : Form {
         Detail.Text = detail;
         Heading.AccessibleName = title;
         Detail.AccessibleName = detail;
+        UpdateRetryLink();
         MicrophoneButton.Enabled = StopButton.Enabled = false;
-        string tip = title + "\n" + detail;
+        string tip = title + "\n" + detail + (showingAttention && dockRetryAvailable ? "\n点击状态文字重试转写；录制按钮始终用于新录音" : "");
         if (DevicesTip.GetToolTip(Heading) != tip) DevicesTip.SetToolTip(Heading, tip);
         if (DevicesTip.GetToolTip(Detail) != tip) DevicesTip.SetToolTip(Detail, tip);
         if (!settingResult) NotifyDockState(quickActions ? attention ? "attention" : "ready" : "working");
@@ -2506,7 +2502,7 @@ internal sealed class RecorderPanel : Form {
         dockLogoX.Snap(8+(logo.X-(before.Left+(dockLeft?Width-DockUnit:0)))*96.0/fontDpi);
         dockLogoY.Snap(8+(logo.Y-(before.Top+(dockUp?Height-DockUnit:0)))*96.0/fontDpi);
         if (dockSnapshot != null) CaptureDockSnapshot(showingQuickActions && !showingAttention);
-        if (dockEdge != 0) { dockPinned = false; dockSuppressHover = true; }
+        if (dockEdge != 0) { dockSuppressHover = true; }
     }
     protected override void OnDpiChanged(DpiChangedEventArgs e) {
         if (sharedDock && dockMoving) {
@@ -2517,7 +2513,7 @@ internal sealed class RecorderPanel : Form {
             Bounds = new Rectangle(e.SuggestedRectangle.Location, new Size((int)Math.Round(dockWidth.Value * fontDpi / 96.0), (int)Math.Round(dockHeight.Value * fontDpi / 96.0)));
             dockAnchor = new Point(Left + (int)Math.Round(dockDragOffset.X * fontDpi / 96f), Top + (int)Math.Round(dockDragOffset.Y * fontDpi / 96f));
             bool tools = showingQuickActions && !showingAttention;
-            dockContent.Size = PanelBounds(0, 0, tools ? 160 : 186, tools ? 40 : 68).Size;
+            dockContent.Size = PanelBounds(0, 0, 186, tools ? 40 : 68).Size;
             if (dockSnapshot != null) CaptureDockSnapshot(tools);
             else BrandMark.Bounds = new Rectangle((dockLeft ? Width - DockUnit : 0) + (int)Math.Round(8 * fontDpi / 96.0), (dockUp ? Height-DockUnit : 0)+(int)Math.Round(8 * fontDpi / 96.0), (int)Math.Round(24 * fontDpi / 96.0), (int)Math.Round(24 * fontDpi / 96.0));
             if (dockLogo == null || dockLogo.Width < DockUnit) { if (dockLogo != null) dockLogo.Dispose(); dockLogo = MeetingBrand.LogoBitmap(DockUnit); }
@@ -2740,9 +2736,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly SilenceMonitor silence = new SilenceMonitor();
     SessionCatalog catalog;
     MeetingSettingsDialog settingsDialog;
-    readonly HashSet<string> resumeAfterPreparation = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, Form> preparationPrompts = new Dictionary<string, Form>(StringComparer.OrdinalIgnoreCase);
-    Func<string, bool> localEngineReady = delegate(string root) { return LocalEngineState.Read(root).Ready; };
     DateTime lastUpdateCheck = DateTime.MinValue;
     bool checkingUpdate;
     readonly Func<string, Process> workerLauncher;
@@ -2874,32 +2868,20 @@ internal sealed class MeetingContext : ApplicationContext {
             settingsDialog.Show();
         } catch (Exception error) { Notice("无法打开设置", error.Message, ToolTipIcon.Warning); }
     }
-    void OfferLocalPreparation(string session) {
+    void OfferApiConfiguration(string session) {
         Form existing;
         if (preparationPrompts.TryGetValue(session, out existing) && !existing.IsDisposed) { existing.Activate(); return; }
-        var prompt = new LocalPreparationPrompt(delegate {
+        var prompt = new ApiConfigurationPrompt(delegate {
             if (recording != null || jobs.Exists(delegate(TranscriptionJob job) { return !job.Reported; })) {
                 Notice("录音已保留", "请在录音和后台处理结束后，从最近会议选择“配置转写…”。", ToolTipIcon.Info); return false;
             }
-            if ((string)config["transcription_mode"] != "local") return false;
             OpenSettings();
             if (settingsDialog == null || settingsDialog.IsDisposed) return false;
             settingsDialog.ShowTranscription(); return true;
         });
         preparationPrompts[session] = prompt;
-        prompt.FormClosed += delegate { preparationPrompts.Remove(session); if (!prompt.PreparationAccepted) resumeAfterPreparation.Remove(session); };
+        prompt.FormClosed += delegate { preparationPrompts.Remove(session); };
         prompt.Show();
-    }
-    void ResumePreparedTranscriptions() {
-        if (exiting || resumeAfterPreparation.Count == 0 || !localEngineReady(MeetingFiles.Home)) return;
-        foreach (string session in new List<string>(resumeAfterPreparation)) {
-            resumeAfterPreparation.Remove(session);
-            // A later explicit mode change must never turn local consent into cloud consent.
-            if ((string)config["transcription_mode"] != "local") continue;
-            if (ActiveJob(session)) continue;
-            try { var record = catalog.Get(session); if (record != null && record.CanRetry) RetrySession(session); }
-            catch (Exception failure) { MeetingFiles.Log(failure); Notice("这场录音需要检查", failure.Message, ToolTipIcon.Warning); }
-        }
     }
     string ApplySettings(MeetingSettingsSnapshot snapshot, Dictionary<string, object> next) {
         if (recording != null || jobs.Count > 0 || exiting || updating) return "请结束录音、等待后台转写或更新完成后再保存。";
@@ -3234,24 +3216,24 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void LaunchTranscriptionWorker(string session) {
         Process startedProcess = null;
-        IDisposable setupGate = null;
         bool checkingConfiguration = true;
-        bool needsLocalSetup = false;
         try {
             var record = catalog.Get(session);
             if (record == null) throw new IOException("会议资料不在当前程序的 work 中。");
             if (ActiveJob(session)) return;
             if (!record.CanRetry) throw new IOException(record.Message);
             if (workerLauncher == null) {
-                setupGate = DesktopServices.EnterModelSetupGate(MeetingFiles.Home);
+                if ((string)config["transcription_mode"] != "api") throw new IOException("已停用内置本地模型连接。请在设置 → 转写中填写音频转写 API；也可以填写你自行部署的本机 API。原模型和录音未修改。");
                 MeetingConfig.Validate(new Dictionary<string, object>(config));
-                try { MeetingConfig.CheckTranscriptionRuntime(MeetingFiles.Home, config); }
-                catch (IOException) { needsLocalSetup = true; throw; }
             }
             var metadata = MeetingFiles.ReadJson(Path.Combine(session, "session.json"));
+            if (workerLauncher == null && !MeetingArtifacts.IsNew(metadata)) {
+                checkingConfiguration = false;
+                throw new IOException("这场旧版会议不支持当前 API 入口，原文件未修改。请使用保留的 MP3 单独转写。");
+            }
             if (MeetingFiles.Text(metadata, "transcription_deferred", "").Equals("True", StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(session, "result.json"))) {
                 bool api = (string)config["transcription_mode"] == "api";
-                if (api && MessageBox.Show("这场录音将发送到：" + config["api_base_url"] + "\n模型：" + config["api_model"] + "\n是否允许这次云端转写？取消后录音保留在本机。", MeetingBrand.Name,
+                if (api && MessageBox.Show("这场录音将发送到：" + config["api_base_url"] + "\n模型：" + config["api_model"] + "\n是否允许向此接口提交本场录音？取消后录音保留在本机。", MeetingBrand.Name,
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) throw new IOException("已取消 API 提交，录音留在本机。可继续仅录音。");
                 MeetingFiles.WriteJson(Path.Combine(session, "transcription-settings.json"), new {
                     transcription_mode = config["transcription_mode"],
@@ -3275,15 +3257,7 @@ internal sealed class MeetingContext : ApplicationContext {
                 process = Process.Start(start);
             }
             else {
-                string python = Path.Combine(MeetingFiles.Home, ".venv", "Scripts", "python.exe");
-                string worker = Path.Combine(MeetingFiles.Home, "meeting_worker.py");
-                if (!File.Exists(python) || !File.Exists(worker)) throw new FileNotFoundException("转写程序未安装完整；录音已保留。");
-                var start = new ProcessStartInfo {
-                    FileName = python, Arguments = Quote(worker) + " --session " + Quote(session),
-                    WorkingDirectory = MeetingFiles.Home, UseShellExecute = false, CreateNoWindow = true
-                };
-                if ((string)config["transcription_mode"] == "api") start.EnvironmentVariables[(string)config["api_key_env"]] = MeetingConfig.ApiKeyValue((string)config["api_key_env"]);
-                process = Process.Start(start);
+                throw new IOException("这场旧版会议不支持当前 API 入口，原文件未修改。请使用保留的 MP3 单独转写。");
             }
             if (process == null) throw new IOException("未能启动转写进程。");
             startedProcess = process;
@@ -3314,9 +3288,9 @@ internal sealed class MeetingContext : ApplicationContext {
             }
             RecordLaunchFailure(session, error.Message, checkingConfiguration);
             RefreshFeedback();
-            if (checkingConfiguration && needsLocalSetup && (string)config["transcription_mode"] == "local") OfferLocalPreparation(session);
+            if (checkingConfiguration) OfferApiConfiguration(session);
             else Notice(checkingConfiguration ? "录音已保存 · 待配置转写" : "转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Warning);
-        } finally { if (setupGate != null) setupGate.Dispose(); }
+        }
     }
     void ReportJobFailure(TranscriptionJob job, string detail) {
         job.Reported = true;
@@ -3328,7 +3302,6 @@ internal sealed class MeetingContext : ApplicationContext {
         Notice("转写失败 · " + label, (string.IsNullOrEmpty(detail) ? "转写进程退出，未生成完成状态。" : detail) + " 原始资料已保留；托盘 → 最近会议 → " + label + " 检查或重试。", ToolTipIcon.Error);
     }
     void Tick() {
-        ResumePreparedTranscriptions();
         if (recording != null && !recording.Stopping) {
             panel.SetElapsed(recording.Elapsed);
             float microphonePeak = recording.MicrophonePeak, systemPeak = recording.SystemPeak;
@@ -3498,8 +3471,8 @@ internal sealed class MeetingContext : ApplicationContext {
                 if (record.State == "completed" && !record.WorkerAlive && recording == null)
                     item.DropDownItems.Add("命名这场会议…", null, delegate { PromptRename(session); });
                 if (!current && record.CanRetry) item.DropDownItems.Add(record.State == "recorded" || record.State == "recorded_warning" ? "转写这场会议…" : "重试这场转写", null, delegate { RetrySession(session); });
-                if (!current && record.CanRetry && (string)config["transcription_mode"] == "local" && record.Message.StartsWith("录音已保存 · 待配置转写"))
-                    item.DropDownItems.Add("配置转写…", null, delegate { OfferLocalPreparation(session); });
+                if (!current && record.CanRetry && record.Message.StartsWith("录音已保存 · 待配置转写"))
+                    item.DropDownItems.Add("配置转写…", null, delegate { OfferApiConfiguration(session); });
                 item.DropDownItems.Add("打开成品位置", null, delegate { OpenSessionFolder(session); });
                 if (record.CanRetry || record.State == "capture_warning" || record.State == "missing" || record.Message.Contains("清理未完成"))
                     item.DropDownItems.Add("检查恢复资料…", null, delegate { OpenFolder(session); });
@@ -3576,7 +3549,7 @@ internal sealed class MeetingContext : ApplicationContext {
         if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose(ExitThread)) return;
         if (settingsDialog != null && !settingsDialog.IsDisposed) { settingsDialog.Close(); settingsDialog = null; }
         foreach (var prompt in new List<Form>(preparationPrompts.Values)) prompt.Close();
-        preparationPrompts.Clear(); resumeAfterPreparation.Clear();
+        preparationPrompts.Clear();
         timer.Stop(); timer.Dispose();
         hotkey.Dispose();
         var sharedMenu = tray.ContextMenuStrip;

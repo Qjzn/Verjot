@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -164,7 +164,7 @@ internal static class TestRecordingProtection {
                 { "vault_root", vault }, { "hotkey", "Ctrl+Alt+Shift+F22" },
                 { "pause_hotkey", "Ctrl+Alt+Shift+F23" }, { "bookmark_hotkey", "Ctrl+Alt+Shift+F20" },
                 { "quick_note_hotkey", "Ctrl+Alt+Shift+F24" }, { "show_processing_window", true },
-                { "auto_open_completed_note", false }, { "recording_protection_seconds", 5 }, { "auto_transcribe", true }
+                { "auto_open_completed_note", false }, { "recording_protection_seconds", 5 }, { "auto_transcribe", true }, { "transcription_mode", "local" }
             };
             context = new MeetingContext(config, delegate(string session) {
                 launches++; launchedSession = session;

@@ -67,7 +67,7 @@ class NoteTests(unittest.TestCase):
         session.mkdir()
         metadata = {"start_time": "2026-10-14T15:00:00+08:00", "duration_seconds": 0.1}
         (session / "session.json").write_text(json.dumps(metadata), encoding="utf-8")
-        (vault / "config.json").write_text(json.dumps({"vault_root": str(vault)}), encoding="utf-8")
+        (vault / "config.json").write_text(json.dumps({"vault_root": str(vault), "transcription_mode": "local"}), encoding="utf-8")
         sf.write(session / "mic.wav", np.full(4800, 0.2), 48000, subtype="FLOAT")
         if merge_fails:
             (session / "system.wav").write_bytes(b"bad WAV")
@@ -491,7 +491,7 @@ class MinimalStorageTests(unittest.TestCase):
         self.metadata = {"start_time": "2026-10-14T15:00:00+08:00",
                          "duration_seconds": 0.1, "storage_mode": "minimal",
                          "audio_output_dir": str(self.output)}
-        self.config = {"vault_root": str(self.vault)}
+        self.config = {"vault_root": str(self.vault), "transcription_mode": "local"}
         (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
         (self.session / "session.json").write_text(json.dumps(self.metadata), encoding="utf-8")
         sf.write(self.session / "mic.wav", np.full(4800, 0.2), 48000, subtype="FLOAT")
