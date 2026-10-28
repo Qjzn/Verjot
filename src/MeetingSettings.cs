@@ -548,7 +548,9 @@ internal sealed class MeetingSettingsDialog : Form {
         Control[] found = Controls.Find("settingsTabs", true);
         if (found.Length == 0) return;
         var tabs = (TabControl)found[0];
-        var size = new Size(Math.Max(1, Math.Min((int)Math.Round(156 * DeviceDpi / 96f), (tabs.ClientSize.Width - 8) / 3)), (int)Math.Round(30 * DeviceDpi / 96f));
+        // The native strip reserves two pixels at either edge. Share the rest
+        // instead of capping each tab and leaving an unused trailing region.
+        var size = new Size(Math.Max(1, (tabs.ClientSize.Width - 4) / Math.Max(1, tabs.TabCount)), (int)Math.Round(30 * DeviceDpi / 96f));
         if (tabs.ItemSize != size) tabs.ItemSize = size;
     }
     protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutTabHeaders(); }

@@ -432,6 +432,8 @@ internal static class TestMeetingSettings {
                 Check(screen.WorkingArea.Contains(form.Bounds), "Settings, including save/cancel, fit the actual monitor work area");
                 Check(form.ClientSize.Width <= 501 * form.DeviceDpi / 96 && form.ClientSize.Height <= 481 * form.DeviceDpi / 96, "Settings default stays within the compact 500 x 480 logical footprint");
                 var defaultTabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
+                int rightGap = defaultTabs.ClientSize.Width - defaultTabs.GetTabRect(defaultTabs.TabCount - 1).Right;
+                Check(rightGap >= 0 && rightGap <= 4, "Settings tabs fill the available header width, leaving only the native border: " + form.DeviceDpi + " DPI, gap=" + rightGap);
                 if (form.ClientSize.Height >= 476 * form.DeviceDpi / 96)
                     Check(!defaultTabs.TabPages[0].VerticalScroll.Visible, "General settings fit without scrolling at the default compact size: " + form.DeviceDpi + " DPI, page=" + defaultTabs.TabPages[0].ClientSize + ", content=" + defaultTabs.TabPages[0].Controls[0].Bounds);
                 CheckLayout(form, Path.Combine(directory, "settings-monitor-" + index++ + "-dpi-" + form.DeviceDpi + (firstRun ? "-first-run" : "") + ".png"));
@@ -444,6 +446,8 @@ internal static class TestMeetingSettings {
                 foreach (TabPage page in tabs.TabPages) {
                     tabs.SelectedTab = page; Application.DoEvents();
                     Check(page.AutoScroll && tabs.ItemSize.Width * tabs.TabCount <= tabs.ClientSize.Width, "All settings pages remain scrollable and headers stay reachable on a short screen");
+                    rightGap = tabs.ClientSize.Width - tabs.GetTabRect(tabs.TabCount - 1).Right;
+                    Check(rightGap >= 0 && rightGap <= 4, "Tab header keeps its right edge aligned after resizing and switching pages: gap=" + rightGap);
                 }
                 var save = (Button)Field(form, "save");
                 Check(form.RectangleToScreen(form.ClientRectangle).Contains(save.RectangleToScreen(save.ClientRectangle)), "Save remains reachable after reducing available height");
