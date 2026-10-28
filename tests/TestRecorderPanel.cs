@@ -171,7 +171,7 @@ internal static class TestRecorderPanel {
                 Check(Math.Abs((panel.BrandMark.Left + panel.BrandTitle.Right) - panel.ClientSize.Width) <= 2, "The logo and name group must remain centered");
                 Check(panel.BrandMark.Image.Width >= panel.BrandMark.Width - 1 && panel.BrandMark.Image.Height >= panel.BrandMark.Height - 1, "The header must not upscale a smaller icon frame");
                 Check(typeof(RecorderPanel).GetField("BackButton") == null, "The unused return action must be removed");
-                Check(panel.CollapseButton.AccessibleName == "关闭浮窗" && panel.CollapseButton.Left > panel.BrandTitle.Right, "Close must hide only the float");
+                Check(panel.CollapseButton.AccessibleName == "收起浮窗" && panel.CollapseButton.Left > panel.BrandTitle.Right, "The collapse action must describe its actual scope");
                 foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle, panel.CollapseButton }) {
                     Check(panel.ClientRectangle.Contains(control.Bounds), "Header control must fit the 186 x 68 panel");
                     Check(control.Bottom <= panel.MicrophoneButton.Top, "Header must not overlap recording actions");

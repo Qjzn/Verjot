@@ -205,7 +205,12 @@ internal static class TestMeetingHotkeys {
             Check(!session.MicrophonePaused, "Idle pause key must not affect a recording fixture");
             Set(context, "recording", session);
             var panel = (RecorderPanel)Field(context, "panel");
-            panel.ShowRecording("mic", "output-one; output-two"); panel.Show();
+            // Match the explicit recording-start entry. Background status
+            // updates intentionally no longer reopen a collapsed dock.
+            panel.ShowRecording("mic", "output-one; output-two"); panel.ExpandDockPinned(); panel.Show();
+            var dockClock=Stopwatch.StartNew();
+            while(!panel.MicrophoneButton.Visible && dockClock.ElapsedMilliseconds<500) { Application.DoEvents(); Thread.Sleep(2); }
+            Check(panel.MicrophoneButton.Visible,"The recording-start entry exposes its microphone action before testing a click");
             var micMenu = (ToolStripMenuItem)Field(context, "pauseMicrophone");
             micMenu.Enabled = true;
             hotkey.EnablePause(true);
