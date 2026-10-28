@@ -313,26 +313,30 @@ internal sealed class QuickNoteRecentPicker : UserControl {
     readonly string[] files;
     readonly string current;
     internal QuickNoteRecentPicker(string[] names, string selected, Font font, int dpi, Size maximum) {
-        files = names; current = selected; Font = font; BackColor = Results.BackColor = Search.BackColor = Color.FromArgb(250, 250, 248);
+        files = names; current = selected; Font = font;
+        BackColor = Results.BackColor = Search.BackColor = VerbitMenuRenderer.Surface;
         Search.HandleCreated += delegate { SendMessage(Search.Handle, 0x1501, new IntPtr(1), "搜索便签名称…"); };
         VerbitMenu.AttachTextMenu(Search);
-        ForeColor = Results.ForeColor = Color.FromArgb(36, 59, 83);
-        int unit = Math.Max(1, dpi), pad = 12 * unit / 96, row = 40 * unit / 96;
-        Size = new Size(Math.Min(310 * unit / 96, maximum.Width), Math.Min((92 + 40 * Math.Min(6, Math.Max(1, files.Length))) * unit / 96, maximum.Height));
-        heading.SetBounds(pad, pad, Width - pad * 2, 24 * unit / 96);
+        ForeColor = Results.ForeColor = Search.ForeColor = VerbitMenuRenderer.Ink;
+        heading.ForeColor = empty.ForeColor = VerbitMenuRenderer.Muted;
+        int unit = Math.Max(1, dpi), pad = 8 * unit / 96, row = Math.Max(26 * unit / 96, font.Height + 8 * unit / 96);
+        Size = new Size(Math.Min(280 * unit / 96, maximum.Width), Math.Min(72 * unit / 96 + row * Math.Min(6, Math.Max(1, files.Length)), maximum.Height));
+        heading.SetBounds(pad, pad, Width - pad * 2, 20 * unit / 96);
         Search.SetBounds(pad, heading.Bottom + 4 * unit / 96, Width - pad * 2, 24 * unit / 96);
-        Results.SetBounds(pad, Search.Bottom + 10 * unit / 96, Width - pad * 2, Math.Max(row, Height - Search.Bottom - pad - 10 * unit / 96));
+        Results.SetBounds(pad, Search.Bottom + 6 * unit / 96, Width - pad * 2, Math.Max(1, Height - Search.Bottom - pad - 6 * unit / 96));
         Results.ItemHeight = row; empty.Bounds = Results.Bounds;
         Controls.AddRange(new Control[] { heading, Search, Results, empty });
         Results.DrawItem += delegate(object sender, DrawItemEventArgs e) {
             if (e.Index < 0) return;
             bool active = (e.State & DrawItemState.Selected) != 0;
-            using (var brush = new SolidBrush(active ? Color.FromArgb(226, 237, 247) : BackColor)) e.Graphics.FillRectangle(brush, e.Bounds);
+            using (var brush = new SolidBrush(VerbitMenuRenderer.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
+            if (active) using (var brush = new SolidBrush(VerbitMenuRenderer.Hover)) e.Graphics.FillRectangle(brush, Rectangle.Inflate(e.Bounds, -Math.Max(1, 2 * unit / 96), -1));
+            Color ink = active && SystemInformation.HighContrast ? SystemColors.HighlightText : VerbitMenuRenderer.Ink;
             string name = (string)Results.Items[e.Index]; bool isCurrent = String.Equals(name, current, StringComparison.OrdinalIgnoreCase);
             Rectangle text = Rectangle.Inflate(e.Bounds, -8 * unit / 96, 0);
-            if (isCurrent) { int diameter = 5 * unit / 96; using (var brush = new SolidBrush(Color.FromArgb(40, 104, 168))) e.Graphics.FillEllipse(brush, text.Left, text.Top + (text.Height - diameter) / 2, diameter, diameter); }
+            if (isCurrent) { int diameter = 5 * unit / 96; using (var brush = new SolidBrush(active && SystemInformation.HighContrast ? ink : VerbitMenuRenderer.Accent)) e.Graphics.FillEllipse(brush, text.Left, text.Top + (text.Height - diameter) / 2, diameter, diameter); }
             text.X += 13 * unit / 96; text.Width -= 13 * unit / 96;
-            TextRenderer.DrawText(e.Graphics, Path.GetFileNameWithoutExtension(name), Font, text, ForeColor, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(e.Graphics, Path.GetFileNameWithoutExtension(name), Font, text, ink, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
         };
         Results.MouseMove += delegate(object sender, MouseEventArgs e) { int index = Results.IndexFromPoint(e.Location); if (index >= 0 && Results.SelectedIndex != index) Results.SelectedIndex = index; };
         Results.MouseUp += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && Results.IndexFromPoint(e.Location) >= 0) Choose(); };
@@ -951,7 +955,7 @@ internal sealed class QuickNoteWindow : Form {
         menu.Items.Add("全选", null, delegate { editor.SelectAll(); });
         menu.Show(editor, editor.PointToClient(Cursor.Position));
     }
-    ContextMenuStrip CreateTransientMenu() {
+    VerbitMenu CreateTransientMenu() {
         SetChromeVisible(true); leaveTimer.Stop();
         var menu = new VerbitMenu(transientMenus);
         menu.Closed += delegate {
@@ -1620,7 +1624,8 @@ internal sealed class QuickNoteWindow : Form {
         CancelPreview(); leaveTimer.Stop();
         var menu = CreateTransientMenu();
         Rectangle area = Screen.FromControl(this).WorkingArea;
-        var picker = new QuickNoteRecentPicker(recentFiles.ToArray(), Path.GetFileName(notePath ?? ""), Font, DeviceDpi, new Size(Math.Min(area.Width - 8, Math.Max(220 * DeviceDpi / 96, Width - 8)), area.Height - 8));
+        menu.ApplyStyle(DeviceDpi);
+        var picker = new QuickNoteRecentPicker(recentFiles.ToArray(), Path.GetFileName(notePath ?? ""), menu.Font, DeviceDpi, new Size(Math.Min(area.Width - 8, Math.Max(220 * DeviceDpi / 96, Width - 8)), area.Height - 8));
         var host = new ToolStripControlHost(picker) { AutoSize = false, Size = picker.Size, Margin = Padding.Empty, Padding = Padding.Empty };
         menu.ShowImageMargin = menu.ShowCheckMargin = false; menu.Padding = new Padding(1); menu.Items.Add(host);
         picker.SelectFile = delegate(string name) { menu.Close(); RequestNote(name, false); editor.Focus(); };
@@ -1635,14 +1640,14 @@ internal sealed class QuickNoteWindow : Form {
         Point point = tabs == null || !tabs.Visible ? PointToScreen(new Point(0, top.Bottom)) : new Point(tabs.Left, tabs.Bottom);
         point.X = Math.Max(area.Left, Math.Min(point.X, area.Right - picker.Width - 4));
         point.Y = Math.Max(area.Top, Math.Min(point.Y, area.Bottom - picker.Height - 4));
-        menu.Show(point);
+        menu.Show(this, PointToClient(point));
     }
     void ShowTabMenu(string file, Point position) {
         CancelPreview();
         var menu = CreateTransientMenu();
         var remove = new ToolStripMenuItem("删除便签…") { Name = "deleteNote" };
         remove.Click += delegate { DeleteNote(file); };
-        menu.Items.Add(remove); menu.Show(position);
+        menu.Items.Add(remove); menu.Show(this, PointToClient(position));
     }
     void DeleteNote(string file) {
         CancelPreview(); CancelImageDrag();

@@ -915,6 +915,7 @@ internal static class TestQuickNoteEditor {
                         var menu = (ContextMenuStrip)menus.Components[0];
                         var picker = (QuickNoteRecentPicker)((ToolStripControlHost)menu.Items[0]).Control;
                         Check(menu.Visible && area.Contains(menu.Bounds) && picker.Results.Items.Count == 2, "Filename opens the bounded recent picker even with no rail space");
+                        Check(picker.Font.Unit == GraphicsUnit.Pixel && Math.Abs(picker.Font.Size - menu.Font.Size) < .01 && picker.Results.ItemHeight < 40 * window.DeviceDpi / 96, "The actual more-notes entry uses the compact shared-menu font and rows");
                         picker.Search.Text = "不存在"; Check(picker.Results.Items.Count == 0, "The recent picker filters and presents an empty result");
                         picker.Search.Text = Path.GetFileNameWithoutExtension(other.Path);
                         Check(picker.Results.Items.Count == 1 && (string)picker.Results.Items[0] == Path.GetFileName(other.Path), "Filename filtering keeps the actual destination separate from display text");

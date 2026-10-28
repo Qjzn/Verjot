@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.16',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.17',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -25,7 +25,7 @@ $taskFiles = @(
     'prepare_audio.py', 'merge_audio.py', 'audio_sources.py', 'mp3_audio.py',
     'download_models.py', 'download_torch.py', 'requirements.txt', 'requirements-api.txt',
     'Install.ps1', 'check_local_engine.py', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
-    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'NativeAudioExport.cs', 'Restore-Encoder.ps1', 'MeetingSettings.cs', 'DesktopServices.cs',
+    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'NativeAudioExport.cs', 'Restore-Encoder.ps1', 'MeetingSettings.cs', 'DesktopServices.cs', 'VerbitUpdates.cs',
     'QuickNoteStore.cs', 'QuickNoteWindow.cs', 'NativeNoteDocument.cs', 'app.manifest',
     'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png', 'assets\engine-check.wav', 'assets\engine-check-source.md',
     'documentation\changelog.md',
@@ -74,6 +74,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
 $taskActual = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | ForEach-Object { $_.FullName.Substring($taskPayload.Length + 1) } | Sort-Object)
 $taskExpected = @($taskFiles + @('ObsidianMeeting.exe', 'NAudio.dll', 'lib\NAudio.dll', 'libmp3lame.32.dll', 'libmp3lame.64.dll', 'packaging\licenses\LAME-3.100-source.tar.gz') | Sort-Object)
 if (@(Compare-Object $taskExpected $taskActual).Count) { throw 'Staged payload differs from the reviewed allowlist.' }
+$taskUpdateFiles = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | Sort-Object FullName | ForEach-Object { [ordered]@{path=$_.FullName.Substring($taskPayload.Length+1).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()} })
+[IO.File]::WriteAllText((Join-Path $taskPayload 'update-manifest.json'), ([ordered]@{version=$Version;files=$taskUpdateFiles}|ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
 $taskManifestFiles = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | Sort-Object FullName | ForEach-Object { [ordered]@{ path = $_.FullName.Substring($taskPayload.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } })
 $taskUtf8 = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $taskBuildRoot 'payload-manifest.json'), ([ordered]@{ product = 'verbit'; version = $Version; files = $taskManifestFiles; personal_config_included = $false; models_included = $false; python_environment_included = $false } | ConvertTo-Json -Depth 5), $taskUtf8)

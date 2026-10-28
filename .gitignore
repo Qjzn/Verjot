@@ -197,7 +197,9 @@
 !/documentation/new-user-validation.md
 !/documentation/clean-windows-validation.md
 !/src/DesktopServices.cs
+!/src/VerbitUpdates.cs
 !/tests/TestDesktopServices.cs
 !/tests/TestNativeApiTranscription.cs
 !/tests/TestVerbitMenus.cs
+!/tests/TestVerbitUpdates.cs
 !/documentation/changelog.md

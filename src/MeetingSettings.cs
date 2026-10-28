@@ -249,6 +249,16 @@ internal sealed class MeetingSettingsDialog : Form {
     Image githubImage;
     Label shortcutHint;
     public event Action<bool> HotkeyCaptureChanged;
+    public Func<VerbitRelease, string, string, string> InstallUpdate;
+    VerbitUpdateWindow updateWindow;
+    internal bool HasPendingChanges {
+        get {
+            foreach (var pair in inputs) if (pair.Value.Text != Convert.ToString(snapshot.Values[pair.Key], System.Globalization.CultureInfo.InvariantCulture)) return true;
+            foreach (var pair in choices) if (Choice(pair.Key) != Convert.ToString(snapshot.Values[pair.Key])) return true;
+            return startup.Checked != originalStartup || automaticUpdates.Checked != Convert.ToBoolean(snapshot.Values["check_updates"]) ||
+                autoTranscribe.Checked != Convert.ToBoolean(snapshot.Values["auto_transcribe"]) || echoFilter.Checked != Convert.ToBoolean(snapshot.Values["asr_echo_filter"]);
+        }
+    }
     readonly System.Windows.Forms.Timer engineTimer = new System.Windows.Forms.Timer { Interval = 1000 };
     Label engineTitle, engineDetail;
     public void ShowAbout() { ((TabControl)Controls.Find("settingsTabs", true)[0]).SelectedIndex = 2; }
@@ -453,17 +463,15 @@ internal sealed class MeetingSettingsDialog : Form {
         notes.LinkClicked += delegate { OpenLink(Path.Combine(MeetingFiles.Home, "documentation", "changelog.md")); }; stack.Controls.Add(notes);
         var releases = new LinkLabel { Text = "GitHub 发布与安装包", AutoSize = true, Padding = new Padding(0, 0, 0, 12) };
         releases.LinkClicked += delegate { OpenLink(DesktopServices.Repository + "/releases"); }; stack.Controls.Add(releases);
-        var status = new Label { Name = "update_status", Text = "更新需网络连接。私有仓库需在浏览器登录有权限的账号。", AutoSize = true, MaximumSize = new Size(430, 0) };
-        var check = new Button { Text = "检查更新", AutoSize = true, Name = "check_update_now" };
-        check.Click += async delegate {
-            check.Enabled = false; status.Text = "正在检查…";
-            string result;
-            try { result = await System.Threading.Tasks.Task.Run(delegate { return DesktopServices.CheckUpdates(); }); }
-            catch (Exception failure) { result = failure.Message; }
-            if (!IsDisposed) { status.Text = result; check.Enabled = true; }
+        var status = new Label { Name = "update_status", Text = "在更新窗口内下载、校验并安装，完成后重新打开 verbit。", AutoSize = true, MaximumSize = new Size(430, 0) };
+        var check = new Button { Text = "检查并更新…", AutoSize = true, Name = "check_update_now" };
+        check.Click += delegate {
+            if (updateWindow != null && !updateWindow.IsDisposed) { updateWindow.Activate(); return; }
+            updateWindow = new VerbitUpdateWindow(InstallUpdate);
+            updateWindow.Show(this);
         };
         stack.Controls.Add(check); stack.Controls.Add(status);
-        stack.Controls.Add(new Label { Text = "自动检查默认关闭，只查询版本，不上传会议内容。\n安装更新由你确认，不会在录音或转写时替换程序。", AutoSize = true, MaximumSize = new Size(430, 0), Padding = new Padding(0, 12, 0, 0) });
+        stack.Controls.Add(new Label { Text = "后台只检查版本，不上传会议内容。\n在更新窗口确认后下载安装；录音、转写或便签保存未完成时暂缓安装。", AutoSize = true, MaximumSize = new Size(430, 0), Padding = new Padding(0, 12, 0, 0) });
         page.Controls.Add(stack);
     }
     void AddField(TableLayoutPanel layout, int row, string label, string key, Dictionary<string, object> current) {

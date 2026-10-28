@@ -71,13 +71,21 @@ internal static class TestVerbitMenus {
                     menu.Items[6].PerformClick(); Check(field.SelectionLength == field.TextLength, "Select all uses the field's native selection");
                     field.Dispose(); Check(menu.IsDisposed, "Text-menu resources follow their owning field");
                 }
-                using (var hosted = new VerbitMenu()) using (var picker = new QuickNoteRecentPicker(new[] { "演示便签.md" }, "演示便签.md", owner.Font, 96, new Size(350, 450))) {
+                using (var hosted = new VerbitMenu()) {
+                    hosted.ApplyStyle(owner.DeviceDpi);
+                    using (var picker = new QuickNoteRecentPicker(new[] { "演示便签.md" }, "演示便签.md", hosted.Font, owner.DeviceDpi, new Size(350 * owner.DeviceDpi / 96, 450 * owner.DeviceDpi / 96))) {
                     hosted.Items.Add(new ToolStripControlHost(picker) { AutoSize = false, Size = picker.Size, Margin = Padding.Empty, Padding = Padding.Empty });
                     hosted.ShowImageMargin = hosted.ShowCheckMargin = false; hosted.Padding = new Padding(1);
                     var before = picker.Size; hosted.Show(owner, new Point(8, 8)); Pump();
                     Check(before == picker.Size, "Recent-note search popup retains its own layout");
+                    Check(hosted.ClientSize.Width >= picker.Width + hosted.Padding.Horizontal && hosted.Items[0].Width >= picker.Width, "Hosted popup clears the stale normal-menu width cap so the search and long names are not clipped");
                     Check(picker.Search.ContextMenuStrip is VerbitMenu, "The recent-note search field also uses the common menu");
+                    Check(picker.Font.Unit == GraphicsUnit.Pixel && Math.Abs(picker.Font.Size - 12f * owner.DeviceDpi / 96) < .01, "More-notes text uses the common menu font rather than the editor font");
+                    Check(picker.BackColor == VerbitMenuRenderer.Surface && picker.Results.ForeColor == VerbitMenuRenderer.Ink, "More-notes surface and foreground match every other menu");
+                    Check(picker.Results.ItemHeight <= 28 * owner.DeviceDpi / 96 && picker.Results.ItemHeight >= picker.Font.Height + 8 * owner.DeviceDpi / 96, "More-notes uses compact rows with complete Chinese glyphs");
+                    Capture(hosted, Path.Combine(folder, "recent-picker.png"));
                     hosted.Close();
+                    }
                 }
                 owner.Close();
             }

@@ -47,6 +47,7 @@ internal sealed class VerbitMenu : ContextMenuStrip {
         int pad = Math.Max(1, 4 * menuDpi / 96);
         // A hosted search/list popup owns its inner layout and must not be resized.
         bool hosted = menu.Items.Count == 1 && menu.Items[0] is ToolStripControlHost;
+        if (hosted) menu.MaximumSize = Size.Empty;
         if (!hosted) {
             menu.Padding = new Padding(pad);
             int width = 156 * menuDpi / 96;
@@ -224,7 +225,7 @@ internal static class DesktopServices {
     public static string Version {
         get {
             var attributes = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
-            return attributes.Length == 0 ? "0.1.0-beta.16-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+            return attributes.Length == 0 ? "0.1.0-beta.17-dev" : ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
         }
     }
     static object Shortcut(string path, Action<object> use) {
@@ -316,31 +317,11 @@ internal static class DesktopServices {
                 (release.ContainsKey("prerelease") && Equals(release["prerelease"], true)))) continue;
             if (Newer(tag, latest)) latest = tag;
         }
-        return Newer(latest, current) ? "发现新版本 " + latest + "，请打开 GitHub 发布页下载安装。升级前请结束录音、等待转写完成并退出 verbit。" : "当前没有更高版本。";
+        return Newer(latest, current) ? "发现新版本 " + latest + "，请打开设置中的更新窗口完成更新。" : "当前没有更高版本。";
     }
     public static string CheckUpdates() {
-        // No audio, paths, config, credentials or machine identifiers are sent.
-        var request = (HttpWebRequest)WebRequest.Create("https://api.github.com/repos/Qjzn/verbit/releases?per_page=20");
-        request.UserAgent = "verbit-update-check"; request.Accept = "application/vnd.github+json";
-        request.Timeout = request.ReadWriteTimeout = 10000; request.AllowAutoRedirect = false;
-        try {
-            using (var response = (HttpWebResponse)request.GetResponse())
-            using (var stream = response.GetResponseStream())
-            using (var reader = new StreamReader(stream)) {
-                char[] buffer = new char[1048577]; int count = 0, read;
-                while (count < buffer.Length && (read = reader.Read(buffer, count, buffer.Length - count)) > 0) count += read;
-                if (count > 1048576) throw new InvalidDataException("更新响应过大。");
-                return ReleaseSummary(new string(buffer, 0, count), Version);
-            }
-        } catch (WebException error) {
-            var response = error.Response as HttpWebResponse;
-            if (response != null) {
-                var status = response.StatusCode; response.Dispose();
-                if (status == HttpStatusCode.NotFound || status == HttpStatusCode.Unauthorized || status == HttpStatusCode.Forbidden)
-                    throw new IOException("无法读取 GitHub 发布信息：仓库可能仍为私有或请求受限。请用有访问权限的浏览器打开发布页；程序不会读取你的 GitHub 凭据。");
-            }
-            throw new IOException("检查更新失败，请检查网络后重试；当前版本可继续使用。", error);
-        }
+        var release = VerbitUpdateClient.Check(Version, false, System.Threading.CancellationToken.None);
+        return release == null ? "当前没有可安装的新版本。" : "发现新版本 " + release.Version + "，请打开设置的更新窗口完成更新。";
     }
 }
 

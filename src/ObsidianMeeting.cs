@@ -2303,7 +2303,7 @@ internal sealed class MeetingContext : ApplicationContext {
     string previousRecordingSession;
     string focusedSession;
     SessionRecord focusedRecord;
-    bool exiting;
+    bool exiting, updating;
     bool preserveShortRecording;
     int deviceCheckTicks;
     string StartHotkey { get { return (string)config["hotkey"]; } }
@@ -2411,6 +2411,7 @@ internal sealed class MeetingContext : ApplicationContext {
         try {
             var snapshot = MeetingSettingsSnapshot.Open(Path.Combine(MeetingFiles.Home, "config.json"));
             settingsDialog = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { return ApplySettings(snapshot, next); });
+            settingsDialog.InstallUpdate = BeginUpdate;
             settingsDialog.HotkeyCaptureChanged += delegate(bool capturing) {
                 if (capturing && (recording != null || jobs.Count > 0)) throw new InvalidOperationException("请结束录音并等待转写完成后，再录入快捷键。");
                 hotkey.SetCaptureMode(capturing);
@@ -2448,7 +2449,7 @@ internal sealed class MeetingContext : ApplicationContext {
         }
     }
     string ApplySettings(MeetingSettingsSnapshot snapshot, Dictionary<string, object> next) {
-        if (recording != null || jobs.Count > 0 || exiting) return "请结束录音并等待后台转写完成后再保存。";
+        if (recording != null || jobs.Count > 0 || exiting || updating) return "请结束录音、等待后台转写或更新完成后再保存。";
         if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose())
             return "速记正在保存，或输入法尚未完成。请确认文字已保存后再次点击保存。";
         var previous = new Dictionary<string, object>(config);
@@ -2477,7 +2478,19 @@ internal sealed class MeetingContext : ApplicationContext {
         return null;
     }
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    string BeginUpdate(VerbitRelease release, string installer, string directory) {
+        if (recording != null || jobs.Count > 0 || exiting || updating) return "请结束录音并等待转写完成后，再点击安装更新。已下载的安装包会保留。";
+        if (settingsDialog != null && settingsDialog.HasPendingChanges) return "设置有未保存的修改，请先保存设置，再进行更新。";
+        if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose()) return "速记正在保存或输入法尚未确认，请完成后再点击安装更新。";
+        try {
+            updating = true;
+            string plan = VerbitUpdateInstaller.Prepare(release, installer, directory);
+            VerbitUpdateInstaller.Launch(plan);
+            RequestExit(); return null;
+        } catch (Exception failure) { updating = false; return failure.Message; }
+    }
     void ToggleQuickNote() {
+        if (updating || exiting) return;
         try {
             if (quickNote == null || quickNote.IsDisposed) {
                 string stateRoot = Path.Combine(MeetingFiles.Home, "work", "quick-note");
@@ -2490,7 +2503,7 @@ internal sealed class MeetingContext : ApplicationContext {
     void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "verbit · " + title, message, icon); }
     void OnUi(Action action) { if (!dispatch.IsDisposed) try { dispatch.BeginInvoke(action); } catch (InvalidOperationException) { } }
     void Toggle() {
-        if (exiting) return;
+        if (exiting || updating) return;
         if (recording == null) Start(); else Stop();
     }
     void Start() {
@@ -3326,6 +3339,7 @@ internal static class Program {
     [STAThread]
     static int Main(string[] args) {
         try {
+            if (args.Length == 2 && args[0] == "--apply-update") return VerbitUpdateWindow.ApplyMode(Path.GetFullPath(args[1]));
             if (args.Length == 2 && args[0] == "--export-audio") return NativeAudioExport.Run(args[1]);
             if (args.Length == 2 && args[0] == "--transcribe-api") return NativeApiTranscription.Run(args[1]);
             if (args.Length == 2 && args[0] == "--play-uri") {

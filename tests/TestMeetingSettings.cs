@@ -142,6 +142,7 @@ internal static class TestMeetingSettings {
             Write(path, previous); snapshot = MeetingSettingsSnapshot.Open(path);
             byte[] beforeBusy = File.ReadAllBytes(path);
             var jobs = (List<TranscriptionJob>)Field(context, "jobs"); jobs.Add(new TranscriptionJob());
+            Check(((string)Call(context, "BeginUpdate", null, "unused.exe", "unused")).Contains("转写"), "Active transcription defers an update before accessing or executing an installer");
             Check(!string.IsNullOrEmpty((string)Call(context, "ApplySettings", snapshot, candidate)), "Active background job blocks apply before any rebind");
             jobs.Clear();
             Check(beforeBusy.SequenceEqual(File.ReadAllBytes(path)), "Busy apply preserves configuration");
@@ -151,6 +152,7 @@ internal static class TestMeetingSettings {
             Receive(delegate { return !editor.ReadOnly; });
             string originalNote = (string)Field(note, "notePath");
             typeof(QuickNoteWindow).GetField("composing", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(note, true);
+            Check(((string)Call(context, "BeginUpdate", null, "unused.exe", "unused")).Contains("输入法"), "An update cannot discard an unfinished IME composition");
             Check(!string.IsNullOrEmpty((string)Call(context, "ApplySettings", snapshot, candidate)), "IME composition blocks settings before closing the note or rebinding");
             Check(!note.IsDisposed && beforeBusy.SequenceEqual(File.ReadAllBytes(path)), "Composing note remains open and settings unchanged");
             typeof(QuickNoteWindow).GetField("composing", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(note, false);
@@ -391,12 +393,14 @@ internal static class TestMeetingSettings {
         using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> value) { calls++; return "测试：快捷键被占用，请更换"; })) {
             form.Show(); Application.DoEvents();
             Check(form.Text == "verbit · 设置", "Dialog displays the new product name");
+            Check(!form.HasPendingChanges, "Fresh settings do not block the updater with a false unsaved-change warning");
             Check(form.TopMost && !form.ShowInTaskbar && form.FormBorderStyle == FormBorderStyle.FixedDialog, "Settings remain a lightweight native tool window");
             foreach (string key in new[] { "vault_root", "meeting_folder", "quick_note_folder", "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey", "recording_protection_seconds" })
                 Check(Input(form, key).Visible && Input(form, key).AccessibleName.Length > 0, "Editable and labeled setting: " + key);
             Check(Input(form, "recording_protection_seconds").Text == "5", "Protection input displays the legacy-config default");
             CheckLayout(form, Path.Combine(directory, "settings-dialog.png"));
             Input(form, "hotkey").Text = "invalid";
+            Check(form.HasPendingChanges, "Unsaved settings are detectable before starting an installation");
             ((Button)form.AcceptButton).PerformClick();
             Check(calls == 0 && form.Visible, "Invalid field does not reach the parent or close the form");
             Input(form, "hotkey").Text = "Ctrl+Alt+L";
