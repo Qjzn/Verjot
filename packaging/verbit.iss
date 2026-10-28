@@ -5,7 +5,7 @@
   #error OutputDir is required. Run Build-Installer.ps1.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-beta.14"
+  #define ReleaseVersion "0.1.0-beta.15"
 #endif
 #ifndef NumericVersion
   #define NumericVersion "0.1.0.0"

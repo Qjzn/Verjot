@@ -260,43 +260,44 @@ internal sealed class MeetingSettingsDialog : Form {
         Text = firstRun ? "verbit · 首次设置" : "verbit · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = dpiFont;
-        ClientSize = new Size(560, 552); Padding = new Padding(12, 10, 12, 12);
+        ClientSize = new Size(500, 480); Padding = new Padding(8);
         BackColor = Color.White; ForeColor = Color.FromArgb(34, 46, 63);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.CenterScreen;
-        var tabs = new SettingsTabControl { Name = "settingsTabs", Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed, ItemSize = new Size(170, 34) };
+        var tabs = new SettingsTabControl { Name = "settingsTabs", Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed, ItemSize = new Size(156, 30) };
         tabs.DrawItem += delegate(object sender, DrawItemEventArgs e) {
             bool selected = e.Index == tabs.SelectedIndex;
             using (var background = new SolidBrush(selected ? Color.FromArgb(238, 245, 253) : Color.FromArgb(248, 250, 252))) e.Graphics.FillRectangle(background, e.Bounds);
             TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, selected ? Color.FromArgb(30, 91, 156) : Color.FromArgb(77, 91, 111), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             if (selected) using (var pen = new Pen(Color.FromArgb(40, 104, 168), Math.Max(2, DeviceDpi / 48f))) e.Graphics.DrawLine(pen, e.Bounds.Left + 18, e.Bounds.Bottom - 2, e.Bounds.Right - 18, e.Bounds.Bottom - 2);
         };
-        var general = new TabPage("常规") { Padding = new Padding(12), AutoScroll = true, BackColor = Color.White };
-        var models = new TabPage("转写") { Padding = new Padding(12), AutoScroll = true, BackColor = Color.White };
-        var about = new TabPage("关于与更新") { Padding = new Padding(12), AutoScroll = true, BackColor = Color.White };
+        var general = new TabPage("常规") { Padding = new Padding(8), AutoScroll = true, BackColor = Color.White };
+        var models = new TabPage("转写") { Padding = new Padding(8), AutoScroll = true, BackColor = Color.White };
+        var about = new TabPage("关于与更新") { Padding = new Padding(8), AutoScroll = true, BackColor = Color.White };
         tabs.TabPages.AddRange(new[] { general, models, about });
         var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 14 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
-        for (int row = 0; row < 14; row++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, row == 3 || row == 8 || row == 10 ? 36 : row == 11 || row == 12 ? 28 : row == 13 ? 0 : 32));
+        for (int row = 0; row < 14; row++) layout.RowStyles.Add(row == 3 || row == 8 || row == 10
+            ? new RowStyle(SizeType.AutoSize) : new RowStyle(SizeType.Absolute, row == 0 ? 36 : row == 11 || row == 12 ? 24 : row == 13 ? 0 : 26));
         var current = snapshot.Values;
         AddField(layout, 0, "保存目录", "vault_root", current);
         var browse = new Button { Text = "选择…", Dock = DockStyle.Fill, Margin = new Padding(4, 1, 0, 4) };
         browse.Click += delegate { Browse(); }; layout.Controls.Add(browse, 2, 0);
         AddField(layout, 1, "会议子文件夹", "meeting_folder", current);
         AddField(layout, 2, "速记子文件夹", "quick_note_folder", current);
-        var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 0) };
+        var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 4) };
         layout.Controls.Add(folders, 0, 3); layout.SetColumnSpan(folders, 3);
         AddField(layout, 4, "开始 / 结束", "hotkey", current);
         AddField(layout, 5, "麦克风暂停", "pause_hotkey", current);
         AddField(layout, 6, "标记重点", "bookmark_hotkey", current);
         AddField(layout, 7, "打开速记", "quick_note_hotkey", current);
-        shortcutHint = new Label { Text = "点击快捷键后按组合键，Esc 取消，保存后生效。\n麦克风暂停不影响电脑声音。", Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 0) };
+        shortcutHint = new Label { Text = "点击快捷键后按组合键，Esc 取消，保存后生效。\n麦克风暂停不影响电脑声音。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 4) };
         layout.Controls.Add(shortcutHint, 0, 8); layout.SetColumnSpan(shortcutHint, 3);
         AddField(layout, 9, "录音保护（秒）", "recording_protection_seconds", current);
-        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 0) };
+        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = Color.FromArgb(85, 101, 123), Padding = new Padding(0, 2, 0, 4) };
         layout.Controls.Add(protection, 0, 10); layout.SetColumnSpan(protection, 3);
         originalStartup = DesktopServices.StartsWithWindows;
         startup = new CheckBox { Name = "start_with_windows", Text = "登录 Windows 后启动 verbit", Checked = originalStartup, Dock = DockStyle.Fill, AccessibleName = "开机自启" };
@@ -547,7 +548,7 @@ internal sealed class MeetingSettingsDialog : Form {
         Control[] found = Controls.Find("settingsTabs", true);
         if (found.Length == 0) return;
         var tabs = (TabControl)found[0];
-        var size = new Size(Math.Max(1, Math.Min((int)Math.Round(170 * DeviceDpi / 96f), (tabs.ClientSize.Width - 8) / 3)), (int)Math.Round(34 * DeviceDpi / 96f));
+        var size = new Size(Math.Max(1, Math.Min((int)Math.Round(156 * DeviceDpi / 96f), (tabs.ClientSize.Width - 8) / 3)), (int)Math.Round(30 * DeviceDpi / 96f));
         if (tabs.ItemSize != size) tabs.ItemSize = size;
     }
     protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutTabHeaders(); }

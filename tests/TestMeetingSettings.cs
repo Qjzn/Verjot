@@ -430,6 +430,10 @@ internal static class TestMeetingSettings {
                 form.Show(); Application.DoEvents();
                 Check(Screen.FromControl(form).DeviceName == screen.DeviceName, "Settings layout fixture opens on the intended monitor");
                 Check(screen.WorkingArea.Contains(form.Bounds), "Settings, including save/cancel, fit the actual monitor work area");
+                Check(form.ClientSize.Width <= 501 * form.DeviceDpi / 96 && form.ClientSize.Height <= 481 * form.DeviceDpi / 96, "Settings default stays within the compact 500 x 480 logical footprint");
+                var defaultTabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
+                if (form.ClientSize.Height >= 476 * form.DeviceDpi / 96)
+                    Check(!defaultTabs.TabPages[0].VerticalScroll.Visible, "General settings fit without scrolling at the default compact size: " + form.DeviceDpi + " DPI, page=" + defaultTabs.TabPages[0].ClientSize + ", content=" + defaultTabs.TabPages[0].Controls[0].Bounds);
                 CheckLayout(form, Path.Combine(directory, "settings-monitor-" + index++ + "-dpi-" + form.DeviceDpi + (firstRun ? "-first-run" : "") + ".png"));
                 Console.WriteLine("Settings layout: " + screen.DeviceName + ", " + form.DeviceDpi + " DPI, first-run " + firstRun + ", client " + form.ClientSize);
                 var smallWork = new Rectangle(screen.WorkingArea.Left, screen.WorkingArea.Top, 800, 540);
