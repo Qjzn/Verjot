@@ -100,7 +100,30 @@ internal static class TestVerbitUpdates {
             VerbitUpdateInstaller.Restore(target, backup, snapshot);
             Check(File.ReadAllText(Path.Combine(target, "owned.dll")) == "old program" && !File.Exists(Path.Combine(target, "new.dll")), "Simulated partial install rolls back old bytes and removes only newly introduced program files");
             Check(File.ReadAllText(Path.Combine(target, "config.json")) == "private config", "Rollback never includes user configuration");
-            File.WriteAllText(Path.Combine(backup, "owned.dll"), "tampered backup"); Reject(delegate { VerbitUpdateInstaller.Restore(target, backup, snapshot); }, "Tampered rollback bytes rejected");
+            File.WriteAllText(Path.Combine(backup, "owned.dll"), "tampered backup");
+            File.WriteAllText(Path.Combine(target, "update-manifest.json"), "new manifest must survive rejected rollback");
+            File.WriteAllText(Path.Combine(target, "owned.dll"), "new bytes must survive rejected rollback");
+            Reject(delegate { VerbitUpdateInstaller.Restore(target, backup, snapshot); }, "Tampered rollback bytes rejected");
+            Check(File.Exists(Path.Combine(target, "update-manifest.json")) && File.ReadAllText(Path.Combine(target, "owned.dll")) == "new bytes must survive rejected rollback", "Every backup is validated before any rollback deletion or replacement");
+            string cachedInstaller = Path.Combine(root, "unexecuted-installer.exe"); File.WriteAllText(cachedInstaller, "synthetic only");
+            using (var locked = new FileStream(Path.Combine(backup, "owned.dll"), FileMode.Open, FileAccess.Read, FileShare.None)) {
+                string warning = VerbitUpdateInstaller.CleanupSuccessful(cachedInstaller, backup, snapshot);
+                Check(!string.IsNullOrEmpty(warning) && File.Exists(locked.Name), "A locked cleanup file reports a warning without turning a committed install into rollback");
+                Check(File.ReadAllText(Path.Combine(target, "owned.dll")) == "new bytes must survive rejected rollback", "Cleanup never alters installed program bytes");
+            }
+            Check(VerbitUpdateInstaller.CleanupSuccessful(cachedInstaller, backup, snapshot) == null, "Retained cleanup files can be removed after the lock is released");
+            string firstAttempt, secondAttempt;
+            var firstSnapshot = VerbitUpdateInstaller.BackupAttempt(target, root, manifestRoot, out firstAttempt);
+            File.WriteAllText(Path.Combine(firstAttempt, "owned.dll"), "failed attempt evidence");
+            var secondSnapshot = VerbitUpdateInstaller.BackupAttempt(target, root, manifestRoot, out secondAttempt);
+            Check(firstAttempt != secondAttempt && VerbitUpdateClient.Hash(Path.Combine(secondAttempt, "owned.dll")) == secondSnapshot["owned.dll"], "Retry creates a fresh validated backup rather than colliding with a failed attempt");
+            Check(File.ReadAllText(Path.Combine(firstAttempt, "owned.dll")) == "failed attempt evidence" && firstSnapshot.ContainsKey("owned.dll"), "Retry preserves earlier recovery evidence");
+            File.WriteAllText(cachedInstaller, "synthetic only");
+            using (var locked = new FileStream(cachedInstaller, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                Check(VerbitUpdateInstaller.CleanupSuccessful(cachedInstaller, secondAttempt, secondSnapshot) != null, "Installer deletion failure remains a cleanup warning after backups were removed");
+                Check(!File.Exists(Path.Combine(secondAttempt, "owned.dll")) && File.Exists(cachedInstaller) && File.ReadAllText(Path.Combine(target, "owned.dll")) == "new bytes must survive rejected rollback", "Post-commit cleanup cannot restore deleted snapshots or modify the installed version");
+            }
+            Check(VerbitUpdateInstaller.CleanupSuccessful(cachedInstaller, secondAttempt, secondSnapshot) == null, "Installer cleanup is retryable without rerunning installation");
             var start = VerbitUpdateInstaller.SetupStart("C:\\synthetic\\setup.exe", "C:\\synthetic app", "C:\\synthetic\\install.log");
             Check(!start.UseShellExecute && start.Arguments.Contains("/NORESTART") && start.Arguments.Contains("/NOCLOSEAPPLICATIONS") && start.Arguments.Contains("/NORESTARTAPPLICATIONS"), "Installer cannot reboot or force close/restart recording applications");
             // Async WinForms continuations need the same message loop as the

@@ -199,7 +199,19 @@ internal static class VerbitUpdateInstaller {
         }
         return result;
     }
+    internal static Dictionary<string, string> BackupAttempt(string root, string directory, string manifestRoot, out string backupRoot) {
+        backupRoot = Path.Combine(directory, "rollback-" + Guid.NewGuid().ToString("N"));
+        return Backup(root, backupRoot, manifestRoot);
+    }
     internal static void Restore(string root, string backup, Dictionary<string, string> files) {
+        // Reject an incomplete/tampered snapshot before deleting or replacing
+        // any installed file. Validation during restoration is too late.
+        foreach (var item in files) {
+            ProgramPath(root, item.Key);
+            string from = ProgramPath(backup, item.Key);
+            if (item.Value != null && (!File.Exists(from) || VerbitUpdateClient.Hash(from) != item.Value))
+                throw new IOException("回滚备份校验失败，请保留更新资料。");
+        }
         foreach (var item in files) {
             string to = ProgramPath(root, item.Key), from = ProgramPath(backup, item.Key);
             if (item.Value == null) { if (File.Exists(to)) File.Delete(to); continue; }
@@ -207,6 +219,18 @@ internal static class VerbitUpdateInstaller {
             Directory.CreateDirectory(Path.GetDirectoryName(to)); File.Copy(from, to, true);
             if (VerbitUpdateClient.Hash(to) != item.Value) throw new IOException("程序回滚校验失败，请保留更新资料。");
         }
+    }
+    internal static string CleanupSuccessful(string installer, string backupRoot, Dictionary<string, string> backup) {
+        bool retained = false;
+        foreach (var file in backup) {
+            try { string path = ProgramPath(backupRoot, file.Key); if (File.Exists(path)) File.Delete(path); }
+            catch (IOException) { retained = true; }
+            catch (UnauthorizedAccessException) { retained = true; }
+        }
+        try { MeetingConfig.CheckOrdinaryPath(installer); File.Delete(installer); }
+        catch (IOException) { retained = true; }
+        catch (UnauthorizedAccessException) { retained = true; }
+        return retained ? "新版已安装；少量临时资料被占用，保留在：" + Path.GetDirectoryName(backupRoot) : null;
     }
     internal static void VerifyInstalled(string root, string version) {
         string executable = ProgramPath(root, "ObsidianMeeting.exe");
@@ -274,12 +298,13 @@ internal static class VerbitUpdateInstaller {
             try { acquired = gate.WaitOne(0); } catch (AbandonedMutexException) { acquired = true; }
             if (!acquired) throw new IOException("verbit 已被重新打开，更新已停止，未替换程序。");
             bool startedInstaller = false; Dictionary<string, string> backup = null;
-            string backupRoot = Path.Combine(directory, "rollback"), log = Path.Combine(directory, "install.log");
+            // Never reuse an earlier attempt's snapshot after a failure.
+            string backupRoot = null, log = Path.Combine(directory, "install.log");
             try {
                 if (FileVersionInfo.GetVersionInfo(executable).ProductVersion != previousVersion) throw new IOException("原程序版本已变化，请重新检查更新。");
                 VerbitUpdateClient.Verify(installer, release);
                 progress("正在校验并备份程序文件…");
-                backup = Backup(target, backupRoot, directory);
+                backup = BackupAttempt(target, directory, directory, out backupRoot);
                 MeetingFiles.WriteJson(Path.Combine(directory, "rollback-files.json"), backup);
                 progress("正在安装 " + release.Version + "，请稍候…");
                 // Keep the verified installer immutable until Windows maps it.
@@ -290,10 +315,6 @@ internal static class VerbitUpdateInstaller {
                 }
                 VerifyInstalled(target, release.Version);
                 MeetingFiles.WriteJson(Path.Combine(directory, "result.json"), new { passed = true, version = release.Version });
-                // Only the owned rollback folder and downloaded installer are
-                // removed; config/models/notes/audio were never in this list.
-                foreach (var file in backup) { string path = ProgramPath(backupRoot, file.Key); if (File.Exists(path)) File.Delete(path); }
-                File.Delete(installer);
             } catch (Exception failure) {
                 if (startedInstaller && backup != null) {
                     progress("安装未完成，正在恢复旧版本…");
@@ -304,6 +325,15 @@ internal static class VerbitUpdateInstaller {
                 }
                 throw new IOException(failure.Message + "\n旧版本及个人资料保留。日志与恢复资料：" + directory, failure);
             } finally { gate.ReleaseMutex(); }
+            // Installation is committed. Cleanup must never trigger rollback:
+            // it may already have removed part of the successful snapshot.
+            string warning = CleanupSuccessful(installer, backupRoot, backup);
+            if (warning != null) {
+                try { MeetingFiles.WriteJson(Path.Combine(directory, "result.json"), new { passed = true, version = release.Version, cleanup_warning = warning }); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                progress(warning);
+            }
         }
         Process.Start(new ProcessStartInfo(executable, "--show") { UseShellExecute = false, WorkingDirectory = target });
     }
@@ -379,7 +409,8 @@ internal sealed class VerbitUpdateWindow : Form {
             details.Text = "更新仅替换程序文件，个人配置、模型、笔记及录音保留。安装期间请不要关闭电脑。";
             try {
                 await Task.Run(delegate { VerbitUpdateInstaller.Apply(plan, Report); });
-                status.Text = "更新完成，verbit 已重新打开。"; details.Text = "配置和个人资料已保留。";
+                status.Text = "更新完成，verbit 已重新打开。";
+                details.Text = MeetingFiles.Text(MeetingFiles.ReadJson(Path.Combine(Path.GetDirectoryName(plan), "result.json")), "cleanup_warning", "配置和个人资料已保留。");
             } catch (Exception error) {
                 status.Text = "更新未完成"; details.Text = error.Message;
                 action.Text = "打开 verbit"; action.Visible = true;
