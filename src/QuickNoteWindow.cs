@@ -501,6 +501,8 @@ internal sealed class QuickNoteWindow : Form {
     readonly Dictionary<string, NoteView> views = new Dictionary<string, NoteView>(StringComparer.OrdinalIgnoreCase);
     readonly List<string> recentFiles = new List<string>();
     QuickNoteTabs tabs;
+    internal Action Minimized;
+    bool noteMinimized;
     QuickNoteInputBox previewEditor;
     NativeNoteDocument previewDocument;
     string requestedFile, hoverFile, previewFile, lastSavedFile;
@@ -611,8 +613,7 @@ internal sealed class QuickNoteWindow : Form {
         LayoutFormatBar();
         formatBar.Paint += delegate(object sender, PaintEventArgs e) { using (var pen = new Pen(Color.FromArgb(226, 230, 233))) e.Graphics.DrawLine(pen, 12, 0, formatBar.Width - 12, 0); };
         Controls.Add(body); Controls.Add(status); Controls.Add(formatBar); Controls.Add(top);
-        // Keep the top-level HWND geometry stable. Replacing the window
-        // Region on pointer entry/exit forces a full native repaint.
+        // Chrome is clipped on leave; the editor's geometry never changes.
         top.Dock = body.Dock = formatBar.Dock = status.Dock = DockStyle.None;
         nativeDocument = new NativeNoteDocument(editor, null);
         editor.ImagePointer = HandleImagePointer;
@@ -627,7 +628,7 @@ internal sealed class QuickNoteWindow : Form {
         };
         pin.Click += delegate { TopMost = !TopMost; pin.Pinned = TopMost; pin.AccessibleName = TopMost ? "取消置顶" : "置顶"; tips.SetToolTip(pin, pin.AccessibleName); pin.Invalidate(); SaveWindowState(); };
         newButton.Click += delegate { NewNote(); };
-        hideButton.Click += delegate { CancelPreview(); RememberView(); SaveWindowState(); HideTabs(); WindowState = FormWindowState.Minimized; };
+        hideButton.Click += delegate { MinimizeNote(); };
         closeButton.Click += delegate { TryHide(); };
         // The verified native prototype uses Windows caption dragging. Keep
         // this path and leave the user's DragFullWindows setting untouched.
@@ -707,6 +708,7 @@ internal sealed class QuickNoteWindow : Form {
     }
     public void Toggle() {
         if (IsDisposed) return;
+        if (noteMinimized) { noteMinimized = false; SetChromeVisible(true); Show(); Activate(); editor.Focus(); return; }
         if (WindowState == FormWindowState.Minimized) { WindowState = FormWindowState.Normal; Show(); Activate(); editor.Focus(); return; }
         if (Visible) { TryHide(); return; }
         try {
@@ -715,6 +717,12 @@ internal sealed class QuickNoteWindow : Form {
             else if (!dirty && !workerBusy) RequestNote(Path.GetFileName(notePath), false);
             Show(); Activate(); editor.Focus(); UpdateChromeForPointer(Cursor.Position);
         } catch (Exception error) { if (note == null) editor.ReadOnly = true; SetStatus("无法载入速记：" + error.Message, true); Show(); Activate(); }
+    }
+    void MinimizeNote() {
+        if (IsComposing) return;
+        CancelPreview(); CancelImageDrag(); RememberView(); SaveWindowState(); HideTabs();
+        noteMinimized = true; Hide(); Flush();
+        if (Minimized != null) Minimized();
     }
     public bool FlushAndClose() { return FlushAndClose(null); }
     public bool FlushAndClose(Action onReady) {
@@ -1367,32 +1375,25 @@ internal sealed class QuickNoteWindow : Form {
         top.Bounds = new Rectangle(area.Left, area.Top, area.Width, top.Height);
         formatBar.Bounds = new Rectangle(area.Left, area.Bottom - formatBar.Height, area.Width, formatBar.Height);
         status.Bounds = new Rectangle(area.Left, formatBar.Top - status.Height, area.Width, status.Height);
-        body.Bounds = chromeVisible ? Rectangle.FromLTRB(area.Left, top.Bottom, area.Right, statusShown ? status.Top : formatBar.Top) : area;
+        body.Bounds = Rectangle.FromLTRB(area.Left, top.Bottom, area.Right, statusShown ? status.Top : formatBar.Top);
         top.Visible = formatBar.Visible = chromeVisible;
         status.Visible = chromeVisible && statusShown;
+        UpdateChromeClip();
+    }
+    void UpdateChromeClip() {
+        Region old = Region;
+        Region = chromeVisible ? null : new Region(body.Bounds);
+        if (old != null) old.Dispose();
+        Invalidate();
     }
     void SetChromeVisible(bool visible) {
         if (chromeVisible == visible) return;
         if (!visible) { tips.Hide(status); foreach (Control c in top.Controls) tips.Hide(c); foreach (Control c in formatBar.Controls) tips.Hide(c); }
-        // Reclaim the hidden bands in one layout, without changing the HWND
-        // shape or animating RichEdit's bounds on every frame. Suppress native
-        // intermediate paints and restore scroll without changing selection.
-        bool redraw = editor.IsHandleCreated && editor.Visible;
-        bool previewRedraw = previewEditor != null && previewEditor.IsHandleCreated && previewEditor.Visible;
-        Point position = QuickNoteScrollBar.Position(editor);
-        Point previewPosition = previewRedraw ? QuickNoteScrollBar.Position(previewEditor) : Point.Empty;
-        if (redraw) SendMessage(editor.Handle, 0xb, IntPtr.Zero, IntPtr.Zero);
-        if (previewRedraw) SendMessage(previewEditor.Handle, 0xb, IntPtr.Zero, IntPtr.Zero);
-        SuspendLayout(); body.SuspendLayout();
-        try {
-            chromeVisible = visible; LayoutChrome();
-        } finally {
-            body.ResumeLayout(true); ResumeLayout(true);
-            QuickNoteScrollBar.SetPosition(editor, position);
-            if (previewRedraw) QuickNoteScrollBar.SetPosition(previewEditor, previewPosition);
-            if (redraw) { SendMessage(editor.Handle, 0xb, new IntPtr(1), IntPtr.Zero); editor.Invalidate(); }
-            if (previewRedraw) { SendMessage(previewEditor.Handle, 0xb, new IntPtr(1), IntPtr.Zero); previewEditor.Invalidate(); }
-        }
+        // One clip change, no editor resize/scroll reset or animation loop.
+        chromeVisible = visible;
+        top.Visible = formatBar.Visible = visible; status.Visible = visible && statusShown;
+        if (!visible) HideTabs();
+        UpdateChromeClip();
     }
     void UpdateChromeForPointer(Point screen) {
         bool held = statusError || imageDragCp >= 0 || editor.Capture;
@@ -1400,7 +1401,7 @@ internal sealed class QuickNoteWindow : Form {
             var menu = component as ContextMenuStrip; if (menu != null && menu.Visible) held = true;
         }
         SetChromeVisible(held || Visible && WindowState == FormWindowState.Normal &&
-            (Bounds.Contains(screen) || tabs != null && tabs.Visible && tabs.Bounds.Contains(screen)));
+            ((chromeVisible ? ClientRectangle : body.Bounds).Contains(PointToClient(screen)) || tabs != null && tabs.Visible && tabs.Bounds.Contains(screen)));
     }
     void LayoutEditors() {
         if (viewport == null) return;
@@ -1691,7 +1692,9 @@ internal sealed class QuickNoteWindow : Form {
         });
     }
     protected override void OnPaint(PaintEventArgs e) {
-        base.OnPaint(e); using (var border = new Pen(Color.FromArgb(211, 219, 225))) e.Graphics.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
+        base.OnPaint(e);
+        Rectangle edge = chromeVisible ? ClientRectangle : body.Bounds;
+        using (var border = new Pen(Color.FromArgb(211, 219, 225))) e.Graphics.DrawRectangle(border, edge.Left, edge.Top, edge.Width - 1, edge.Height - 1);
     }
     protected override void WndProc(ref Message message) {
         if (message.Msg == 0x231) {

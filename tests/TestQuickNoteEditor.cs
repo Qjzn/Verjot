@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -645,12 +645,16 @@ internal static class TestQuickNoteEditor {
         }
         string minimizedFile, minimizedState = Path.Combine(root, "minimized-state");
         using (var minimized = new QuickNoteWindow(store, minimizedState)) {
+            int minimizations = 0; minimized.Minimized = delegate { minimizations++; };
             minimized.Toggle(); Settled(minimized); Call(minimized, "NewNote"); Settled(minimized);
             minimizedFile = (string)Field(minimized, "notePath"); Append(minimized, "最小化前的新输入");
             Call((Control)Field(minimized, "editor"), "OnMouseEnter", EventArgs.Empty);
             ((Button)Field(minimized, "hideButton")).PerformClick(); Autosaved(minimized);
-            Check(minimized.WindowState == FormWindowState.Minimized && File.ReadAllText(minimizedFile) == "最小化前的新输入", "Minimizing retains and asynchronously saves new input");
-            Check(minimized.FlushAndClose(), "Exit from minimized state saves last-document navigation");
+            Check(!minimized.Visible && minimizations == 1 && minimized.WindowState == FormWindowState.Normal && File.ReadAllText(minimizedFile) == "最小化前的新输入", "Minimizing saves input and signals the shared dock without creating another floating form");
+            minimized.Toggle();
+            Check(minimized.Visible && minimized.ReadMarkdown() == "最小化前的新输入", "The existing shortcut restores the same minimized note");
+            ((Button)Field(minimized, "hideButton")).PerformClick();
+            Check(minimizations == 2 && minimized.FlushAndClose(), "Repeated minimization reuses the shared dock and exit saves last-document navigation");
         }
         using (var reopened = new QuickNoteWindow(store, minimizedState)) {
             reopened.Toggle(); Settled(reopened);
@@ -679,9 +683,9 @@ internal static class TestQuickNoteEditor {
             Rectangle editorBounds = editor.RectangleToScreen(editor.ClientRectangle);
             editor.Select(1, 2); Point scroll = QuickNoteScrollBar.Position(editor);
             Call(window, "UpdateChromeForPointer", new Point(-10000, -10000));
-            Check(!top.Visible && !bottom.Visible && window.Region == null, "Leaving hides navigation without replacing the native window shape");
+            Check(!top.Visible && !bottom.Visible && window.Region != null, "Leaving clips navigation and hides its vacant bands");
             Rectangle concealedBounds = editor.RectangleToScreen(editor.ClientRectangle);
-            Check(concealedBounds.Top < editorBounds.Top && concealedBounds.Height > editorBounds.Height && concealedBounds.Width == editorBounds.Width, "Chrome conceal expands the image document vertically without changing its wrapping width");
+            Check(concealedBounds == editorBounds, "Concealing chrome keeps image content at the same screen position and size");
             Check(editor.SelectionStart == 1 && editor.SelectionLength == 2 && QuickNoteScrollBar.Position(editor) == scroll, "Chrome conceal preserves selection and effective scroll in an image document");
             Call(editor, "OnMouseEnter", EventArgs.Empty); Pump(30);
             Check(top.Visible && bottom.Visible && window.Region == null, "Entering text reveals controls without requiring a click");
@@ -842,10 +846,11 @@ internal static class TestQuickNoteEditor {
             input.Text = "清空后重新输入"; Pump(40);
             Check(((Rectangle)Call(bar, "Thumb", Call(bar, "Info"))).IsEmpty, "Typing a short line after clearing overflow keeps the scrollbar hidden");
             var body = (Control)Field(window, "body");
-            Rectangle expandedArea = window.DisplayRectangle, windowBounds = window.Bounds;
+            Rectangle documentArea = body.Bounds, windowBounds = window.Bounds;
+            Rectangle textArea = input.RectangleToScreen(input.ClientRectangle);
             Call(window, "SetChromeVisible", false);
-            Check(body.Bounds == expandedArea, "Hidden navigation returns both toolbar bands to the document viewport");
-            Check(input.RectangleToScreen(input.ClientRectangle).Top - window.Top <= (int)Math.Ceiling(20 * window.DeviceDpi / 96f), "Hidden document has only the normal top inset");
+            Check(body.Bounds == documentArea && input.RectangleToScreen(input.ClientRectangle) == textArea, "Hiding navigation must not move or resize the document on screen");
+            Check(window.Region != null && window.Region.IsVisible(documentArea.Left + 1, documentArea.Top + 1) && !window.Region.IsVisible(window.Width / 2, 10), "Hidden toolbar bands leave no visible blank surface");
             using (var picture = new Bitmap(window.Width, window.Height)) {
                 using (Graphics graphics = Graphics.FromImage(picture)) {
                     IntPtr dc = graphics.GetHdc();
@@ -863,8 +868,8 @@ internal static class TestQuickNoteEditor {
             for (int i = 0; i < 30; i++) { Call(window, "SetChromeVisible", false); Call(window, "SetChromeVisible", true); }
             clock.Stop();
             Console.WriteLine("Hover transitions=60; regionChanges=" + regionChanges + "; editorLayouts=" + editorLayouts + "; elapsed_ms=" + clock.Elapsed.TotalMilliseconds.ToString("F2"));
-            Check(regionChanges == 0, "Hover must not replace the native top-level window region");
-            Check(input.Bounds == bounds && editorLayouts <= 60, "Each visibility transition lays out the document at most once and restores visible geometry");
+            Check(regionChanges == 60, "Each hover transition changes the clip once without animation frames");
+            Check(input.Bounds == bounds && editorLayouts == 0, "Navigation visibility never lays out the native editor");
             Check(window.Bounds == windowBounds, "Reclaiming toolbar space never resizes or moves the top-level window");
             int layoutsAfterTransitions = editorLayouts;
             for (int i = 0; i < 60; i++) Call(window, "SetChromeVisible", true);

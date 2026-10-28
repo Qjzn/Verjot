@@ -238,9 +238,11 @@ internal static class TestMeetingExperience {
             Check(!panel.Visible, "Disabled auto-processing window must remain hidden");
             Check(((NotifyIcon)Field(context, "tray")).Text.Contains("23/80"), "Tray must expose progress without relying on balloons");
             panel.Show(); panel.CollapseButton.PerformClick(); Call(context, "Tick");
-            Check(!panel.Visible, "Progress updates must respect a collapsed panel");
+            var settle = System.Diagnostics.Stopwatch.StartNew();
+            while (settle.ElapsedMilliseconds < 250) { Application.DoEvents(); Thread.Sleep(5); }
+            Check(panel.Visible && !panel.Detail.Visible && !panel.CollapseButton.Visible, "Progress updates must retain only the shared Logo after collapse");
             Application.DoEvents(); // Drain the monitor DPI message after first showing the hidden panel.
-            Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Processing must remain 186 x 68; actual=" + panel.ClientSize + "; dpi=" + panel.DeviceDpi);
+            Check(panel.ClientSize == new Size((int)Math.Round(40 * panel.DeviceDpi / 96.0), (int)Math.Round(40 * panel.DeviceDpi / 96.0)), "Collapsed processing must retain the shared Logo size; actual=" + panel.ClientSize + "; dpi=" + panel.DeviceDpi);
             string b = Fixture("20261014-120001", "recorded");
             Call(context, "SaveLastSession", b, null);
             Set(context, "recording", FakeActiveRecording(b));

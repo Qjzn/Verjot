@@ -164,6 +164,7 @@
 !/tests/TestQuickNoteResponsiveness.cs
 !/tests/TestQuickNoteStore.cs
 !/tests/TestRecorderMotion.cs
+!/tests/TestRecorderDockMorph.cs
 !/tests/TestRecorderPanel.cs
 !/tests/TestRecordingProtection.cs
 !/tests/TestRecordingExport.cs

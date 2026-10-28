@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -1624,6 +1624,22 @@ internal sealed class RecordingLevelIndicator : Control {
     protected override void Dispose(bool disposing) { if (disposing) { animation.Stop(); animation.Dispose(); frameClock.Stop(); } base.Dispose(disposing); }
 }
 
+// Exact critically damped spring: retain velocity on interruption, never
+// integrate with a fixed frame count or restart a pre-recorded easing curve.
+internal struct RecorderDockSpring {
+    internal double Value, Velocity;
+    internal RecorderDockSpring(double value) { Value = value; Velocity = 0; }
+    internal void Snap(double target) { Value = target; Velocity = 0; }
+    internal bool Step(double target, double frequency, double seconds, bool normalized = false) {
+        double offset = Value - target, carried = Velocity + frequency * offset;
+        double decay = Math.Exp(-frequency * Math.Max(0, seconds));
+        Value = target + (offset + carried * seconds) * decay;
+        Velocity = (Velocity - frequency * carried * seconds) * decay;
+        if (Math.Abs(Value - target) < (normalized ? .001 : .12) && Math.Abs(Velocity) < (normalized ? .03 : 4)) { Snap(target); return true; }
+        return false;
+    }
+}
+
 internal sealed class RecorderPanel : Form {
     public readonly Label Heading = new Label();
     public readonly Label Time = new Label();
@@ -1631,6 +1647,7 @@ internal sealed class RecorderPanel : Form {
     public readonly LinkLabel AudioFile = new LinkLabel();
     public readonly LinkLabel TranscriptFile = new LinkLabel();
     public event Action<string, bool> ArtifactRequested;
+    internal event Action LogoNoteRequested;
     public readonly RecorderActionButton MicrophoneButton = new RecorderActionButton();
     public readonly RecorderActionButton StopButton = new RecorderActionButton { EndsRecording = true };
     public readonly RecorderActionButton CollapseButton = new RecorderActionButton { CollapsesWindow = true };
@@ -1652,6 +1669,24 @@ internal sealed class RecorderPanel : Form {
     readonly System.Windows.Forms.Timer processingAnimation = new System.Windows.Forms.Timer { Interval = 33 };
     readonly Stopwatch processingClock = new Stopwatch();
     bool processingBusy;
+    bool settingResult;
+    Panel dockContent;
+    bool sharedDock, dockExpanded, dockPinned, dockLeft, dockPositioning, dockMoving, dockSuppressHover, dockDisposing;
+    float dockProgress;
+    RecorderDockSpring dockWidth = new RecorderDockSpring(40), dockHeight = new RecorderDockSpring(40);
+    RecorderDockSpring dockRadius = new RecorderDockSpring(20), dockReveal = new RecorderDockSpring(0);
+    RecorderDockSpring dockLogoX = new RecorderDockSpring(8), dockLogoY = new RecorderDockSpring(8), dockLogoSize = new RecorderDockSpring(24);
+    Bitmap dockSnapshot;
+    Image dockLogo;
+    bool dockToolsSnapshot;
+    Size panelRegionSize;
+    float panelRegionRadius;
+    string dockState;
+    Point dockAnchor;
+    PointF dockDragOffset;
+    int dockLastTick;
+    readonly System.Windows.Forms.Timer dockAnimation = new System.Windows.Forms.Timer { Interval = 16 };
+    readonly System.Windows.Forms.Timer dockLeave = new System.Windows.Forms.Timer { Interval = 220 };
     string resultSession;
     string resultRoot;
     public bool AllowClose;
@@ -1756,17 +1791,184 @@ internal sealed class RecorderPanel : Form {
         DevicesTip.SetToolTip(AudioLevel, "麦克风或电脑声音的实际输入音量");
         DevicesTip.SetToolTip(CollapseButton, "关闭浮窗，录音和转写继续；从托盘可恢复");
         Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton, QuickNoteButton, StartButton, SettingsButton, BrandMark, BrandTitle });
-        CollapseButton.Click += delegate { Hide(); };
+        CollapseButton.Click += delegate { if (sharedDock) { dockPinned = false; dockSuppressHover = true; SetDockExpanded(false); ScheduleDockLeave(); } else Hide(); };
         MouseDown += Drag;
         Time.MouseDown += Drag;
         Heading.MouseDown += Drag;
         AudioLevel.MouseDown += Drag;
         BrandTitle.MouseDown += Drag;
-        BrandMark.MouseDown += Drag;
+        BrandMark.MouseDown += delegate(object sender, MouseEventArgs e) {
+            Point before = dockAnchor; Drag(sender, e);
+            if (sharedDock && e.Button == MouseButtons.Left && dockAnchor == before && LogoNoteRequested != null) LogoNoteRequested();
+        };
         Heading.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text); };
         Detail.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text + "\n" + Detail.Text); };
         SetMicPaused(false);
         ResumeLayout(false);
+    }
+    internal void EnableSharedDock() {
+        if (sharedDock) return;
+        sharedDock = true; dockAnchor = Location;
+        // Reuse this very HWND and its existing controls for every state.
+        // A hidden content parent prevents status polling from exposing tools
+        // over the collapsed logo or repeatedly flashing child tooltips.
+        dockContent = new Panel { BackColor = Color.Transparent, Visible = false };
+        var children = new List<Control>(); foreach (Control c in Controls) if (c != BrandMark) children.Add(c);
+        foreach (Control c in children) { c.BackColor = BackColor; dockContent.Controls.Add(c); }
+        BrandMark.BackColor = BackColor;
+        Controls.Add(dockContent); BrandMark.BringToFront();
+        DevicesTip.SetToolTip(CollapseButton, "收起为 Logo，录音和转写继续");
+        ObserveDockHover(this);
+        if (ContextMenuStrip != null) ContextMenuStrip.Closed += delegate { ScheduleDockLeave(); };
+        foreach (var link in new[] { AudioFile, TranscriptFile })
+            if (link.ContextMenuStrip != null) link.ContextMenuStrip.Closed += delegate { ScheduleDockLeave(); };
+        dockLeave.Tick += delegate {
+            dockLeave.Stop();
+            bool menuOpen = ContextMenuStrip != null && ContextMenuStrip.Visible;
+            foreach (var link in new[] { AudioFile, TranscriptFile }) if (link.ContextMenuStrip != null && link.ContextMenuStrip.Visible) menuOpen = true;
+            if (!Bounds.Contains(Cursor.Position)) dockSuppressHover = false;
+            if (!dockPinned && !dockMoving && !menuOpen && !Bounds.Contains(Cursor.Position)) SetDockExpanded(false);
+        };
+        dockAnimation.Tick += delegate {
+            if (!RecorderMotionPreferences.Enabled) { SnapDockMotion(); PositionSharedDock(); return; }
+            int now = Environment.TickCount;
+            double seconds = Math.Max(0, unchecked(now - dockLastTick)) / 1000.0; dockLastTick = now;
+            bool tools = showingQuickActions && !showingAttention;
+            double width = dockExpanded ? tools ? 160 : 186 : 40;
+            double height = dockExpanded && !tools ? 68 : 40;
+            double radius = dockExpanded && !tools ? 12 : 20;
+            double frequency = dockExpanded ? 38 : 46;
+            bool settled = dockWidth.Step(width, frequency, seconds);
+            settled &= dockHeight.Step(height, frequency, seconds);
+            settled &= dockRadius.Step(radius, frequency, seconds);
+            settled &= dockReveal.Step(dockExpanded ? 1 : 0, frequency, seconds, true);
+            settled &= dockLogoX.Step(DockLogoTargetX, frequency, seconds);
+            settled &= dockLogoY.Step(dockExpanded && !tools ? 4 : 8, frequency, seconds);
+            settled &= dockLogoSize.Step(dockExpanded && !tools ? 16 : 24, frequency, seconds);
+            dockProgress = (float)Math.Max(0, Math.Min(1, dockReveal.Value));
+            if (settled) { dockProgress = dockExpanded ? 1 : 0; dockAnimation.Stop(); }
+            PositionSharedDock();
+            if (settled) ReleaseDockSnapshot();
+        };
+        PositionSharedDock();
+    }
+    void ObserveDockHover(Control control) {
+        control.MouseEnter += delegate { if (dockDisposing) return; dockLeave.Stop(); if (!dockSuppressHover) SetDockExpanded(true); };
+        control.MouseLeave += delegate { ScheduleDockLeave(); };
+        foreach (Control child in control.Controls) ObserveDockHover(child);
+    }
+    void ScheduleDockLeave() { if (sharedDock && !dockDisposing && !IsDisposed) dockLeave.Start(); }
+    internal void SetDockExpanded(bool expanded) {
+        if (!sharedDock || dockMoving) return;
+        bool changed = dockExpanded != expanded;
+        dockExpanded = expanded;
+        if (expanded && changed && !dockAnimation.Enabled) {
+            Rectangle work = Screen.FromPoint(dockAnchor).WorkingArea;
+            int needed = PanelBounds(0, 0, 186, 68).Width;
+            dockLeft = work.Right - dockAnchor.X < needed && dockAnchor.X - work.Left >= needed - DockUnit;
+        } else if (!expanded && changed) {
+            foreach (Control c in dockContent.Controls) DevicesTip.Hide(c);
+        }
+        RetargetDockMotion();
+        UpdateProcessingAnimation();
+    }
+    double DockLogoTargetX { get { return !dockExpanded || showingQuickActions && !showingAttention ? 8 : dockLeft ? -83 : 63; } }
+    void ReleaseDockSnapshot() { if (dockSnapshot != null) { dockSnapshot.Dispose(); dockSnapshot = null; } }
+    void SnapDockMotion() {
+        bool tools = showingQuickActions && !showingAttention;
+        dockWidth.Snap(dockExpanded ? tools ? 160 : 186 : 40);
+        dockHeight.Snap(dockExpanded && !tools ? 68 : 40);
+        dockRadius.Snap(dockExpanded && !tools ? 12 : 20);
+        dockReveal.Snap(dockExpanded ? 1 : 0); dockProgress = dockExpanded ? 1 : 0;
+        dockLogoX.Snap(DockLogoTargetX); dockLogoY.Snap(dockExpanded && !tools ? 4 : 8); dockLogoSize.Snap(dockExpanded && !tools ? 16 : 24);
+        dockAnimation.Stop(); ReleaseDockSnapshot();
+    }
+    void RetargetDockMotion() {
+        if (dockMoving) return;
+        if (!Visible || !RecorderMotionPreferences.Enabled) { SnapDockMotion(); PositionSharedDock(); return; }
+        bool tools = showingQuickActions && !showingAttention;
+        double width = dockExpanded ? tools ? 160 : 186 : 40, height = dockExpanded && !tools ? 68 : 40;
+        if (!dockAnimation.Enabled && dockWidth.Value == width && dockHeight.Value == height && dockProgress == (dockExpanded ? 1 : 0) && dockLogoX.Value == DockLogoTargetX) return;
+        // One full-size content raster per transition, never per frame. Native
+        // text/buttons return at rest; they are not re-laid-out at every size.
+        if (!dockAnimation.Enabled || dockToolsSnapshot != tools) CaptureDockSnapshot(tools);
+        if (!dockAnimation.Enabled) dockLastTick = Environment.TickCount;
+        dockAnimation.Start(); PositionSharedDock();
+    }
+    void CaptureDockSnapshot(bool tools) {
+        ReleaseDockSnapshot();
+        Size full = PanelBounds(0, 0, tools ? 160 : 186, tools ? 40 : 68).Size;
+        dockContent.Size = full; LayoutBrandHeader(); if (tools) LayoutQuickActions(false);
+        dockSnapshot = new Bitmap(full.Width, full.Height);
+        // Drawing the transparent parent also captures the old rounded
+        // form underneath. Compose only the state's native children.
+        using (var graphics = Graphics.FromImage(dockSnapshot)) {
+            graphics.Clear(BackColor);
+            foreach (Control control in dockContent.Controls) {
+                bool visible = control == BrandTitle || control == CollapseButton ? !tools
+                    : control == QuickNoteButton || control == StartButton || control == SettingsButton ? showingQuickActions
+                    : control == Time || control == AudioLevel || control == MicrophoneButton || control == StopButton ? showingRecording
+                    : control == Heading ? showingRecording || !showingQuickActions || showingAttention
+                    : control == Detail ? !showingRecording && !showingQuickActions
+                    : control == AudioFile || control == TranscriptFile ? resultSession != null : false;
+                if (!visible || control.Width < 1 || control.Height < 1) continue;
+                using (var bitmap = new Bitmap(control.Width, control.Height)) {
+                    control.DrawToBitmap(bitmap, control.ClientRectangle);
+                    graphics.DrawImageUnscaled(bitmap, control.Location);
+                }
+            }
+        }
+        dockToolsSnapshot = tools;
+    }
+    int DockUnit { get { return (int)Math.Round(40 * fontDpi / 96.0); } }
+    void NotifyDockState(string state) {
+        if (!sharedDock) return;
+        string tip = "verbit · " + (state == "recording" ? "录音中" : state == "result" ? "会议文件" : Heading.Text) + "\n悬停展开；点击 Logo 打开速记";
+        if (DevicesTip.GetToolTip(BrandMark) != tip) DevicesTip.SetToolTip(BrandMark, tip);
+        if (dockState != state) {
+            dockState = state; dockPinned = state == "recording" || state == "working";
+            SetDockExpanded(dockPinned || Visible && Bounds.Contains(Cursor.Position));
+        }
+        RetargetDockMotion();
+        PositionSharedDock();
+    }
+    void PositionSharedDock() {
+        if (!sharedDock || dockContent == null || dockPositioning || dockMoving) return;
+        dockPositioning = true;
+        try {
+            bool toolsOnly = showingQuickActions && !showingAttention;
+            Size full = PanelBounds(0, 0, toolsOnly ? 160 : 186, toolsOnly ? 40 : 68).Size;
+            int width = Math.Max(DockUnit, (int)Math.Round(dockWidth.Value * fontDpi / 96.0));
+            int height = Math.Max(DockUnit, (int)Math.Round(dockHeight.Value * fontDpi / 96.0));
+            Rectangle work = Screen.FromPoint(dockAnchor).WorkingArea;
+            dockAnchor.X = Math.Max(work.Left, Math.Min(work.Right - DockUnit, dockAnchor.X));
+            dockAnchor.Y = Math.Max(work.Top, Math.Min(work.Bottom - DockUnit, dockAnchor.Y));
+            int x = dockLeft ? dockAnchor.X + DockUnit - width : dockAnchor.X;
+            x = Math.Max(work.Left, Math.Min(work.Right - width, x));
+            if (MaximumSize != Size.Empty) MaximumSize = Size.Empty;
+            Size minimum = new Size(DockUnit, DockUnit);
+            if (MinimumSize != minimum) MinimumSize = minimum;
+            Rectangle target = new Rectangle(x, Math.Min(work.Bottom - height, dockAnchor.Y), width, height);
+            if (Bounds != target) Bounds = target;
+            dockContent.Bounds = new Rectangle(Point.Empty, full);
+            dockContent.Visible = dockExpanded && !dockAnimation.Enabled;
+            BrandMark.Visible = !dockAnimation.Enabled;
+            BrandTitle.Visible = CollapseButton.Visible = !toolsOnly;
+            if (!dockAnimation.Enabled && (dockProgress < 1 || toolsOnly)) {
+                int pad = Math.Max(4, DockUnit / 5), offset = dockLeft ? width - DockUnit : 0;
+                BrandMark.SetBounds(offset + pad, pad, DockUnit - pad * 2, DockUnit - pad * 2);
+                if (toolsOnly) {
+                    int first = dockLeft ? 0 : DockUnit;
+                    QuickNoteButton.Bounds = PanelBounds(first * 96 / fontDpi + 4, 4, 32, 32);
+                    StartButton.Bounds = new Rectangle(QuickNoteButton.Left + DockUnit, QuickNoteButton.Top, QuickNoteButton.Width, QuickNoteButton.Height);
+                    SettingsButton.Bounds = new Rectangle(StartButton.Left + DockUnit, StartButton.Top, StartButton.Width, StartButton.Height);
+                }
+            } else if (!dockAnimation.Enabled) LayoutBrandHeader();
+            if (dockLogo == null || dockLogo.Width < DockUnit) {
+                if (dockLogo != null) dockLogo.Dispose(); dockLogo = MeetingBrand.LogoBitmap(DockUnit);
+            }
+            UpdatePanelRegion(); BrandMark.BringToFront(); UpdateProcessingAnimation(); Invalidate();
+        } finally { dockPositioning = false; }
     }
     void RefreshBrandBitmap() {
         int pixels = Math.Max(1, Math.Min(BrandMark.Width, BrandMark.Height));
@@ -1775,13 +1977,15 @@ internal sealed class RecorderPanel : Form {
         if (previous != null) previous.Dispose();
     }
     void LayoutBrandHeader() {
+        if (sharedDock && showingQuickActions && !showingAttention) return;
         float scale = fontDpi / 96f;
         int iconSize = (int)Math.Round(16 * scale);
         int titleWidth = (int)Math.Round(40 * scale);
         int gap = (int)Math.Round(4 * scale);
-        int left = (ClientSize.Width - iconSize - gap - titleWidth) / 2;
-        BrandMark.SetBounds(left, (int)Math.Round(4 * scale), iconSize, iconSize);
+        int left = ((sharedDock ? PanelBounds(0, 0, 186, 68).Width : ClientSize.Width) - iconSize - gap - titleWidth) / 2;
         BrandTitle.SetBounds(left + iconSize + gap, (int)Math.Round(3 * scale), titleWidth, (int)Math.Round(18 * scale));
+        if (!sharedDock || dockProgress == 1 && !dockAnimation.Enabled)
+            BrandMark.SetBounds(left, (int)Math.Round(4 * scale), iconSize, iconSize);
     }
     static Font DpiFont(string family, float points, int dpi) {
         return new Font(family, points * dpi / 72f, FontStyle.Regular, GraphicsUnit.Pixel);
@@ -1807,7 +2011,7 @@ internal sealed class RecorderPanel : Form {
         AudioFile.Font = TranscriptFile.Font = artifactFont;
         BrandTitle.Font = brandFont;
         Size size = new Size((int)Math.Round(186 * fontDpi / 96.0), (int)Math.Round(68 * fontDpi / 96.0));
-        if (ClientSize != size || MinimumSize != size || MaximumSize != size) {
+        if (!sharedDock && (ClientSize != size || MinimumSize != size || MaximumSize != size)) {
             MinimumSize = MaximumSize = Size.Empty;
             ClientSize = size;
             MinimumSize = MaximumSize = size;
@@ -1833,6 +2037,7 @@ internal sealed class RecorderPanel : Form {
             SetArtifact(AudioFile, "录音", AudioFile.Tag as string, resultRoot, 25);
             SetArtifact(TranscriptFile, "转录", TranscriptFile.Tag as string, resultRoot, 45);
         }
+        if (sharedDock) PositionSharedDock();
     }
     void Drag(object sender, MouseEventArgs e) {
         if (e.Button != MouseButtons.Left) return;
@@ -1843,6 +2048,7 @@ internal sealed class RecorderPanel : Form {
         SetProcessingBusy(false);
         HideArtifacts();
         showingRecording = true;
+        showingAttention = false;
         SetQuickActionsVisible(false);
         bookmarkFeedbackUntil = DateTime.MinValue;
         recordingPaused = false;
@@ -1861,6 +2067,7 @@ internal sealed class RecorderPanel : Form {
         LayoutPanelContent();
         AudioLevel.SetRecording(true);
         SetMicPaused(false);
+        NotifyDockState("recording");
         Invalidate();
     }
     public void SetInputLevels(float microphone, float system) {
@@ -1932,6 +2139,10 @@ internal sealed class RecorderPanel : Form {
     }
     void LayoutQuickActions(bool compact) {
         var actions = new[] { QuickNoteButton, StartButton, SettingsButton };
+        if (sharedDock && !compact) {
+            for (int i = 0; i < actions.Length; i++) actions[i].Bounds = PanelBounds((dockLeft ? 0 : 40) + 4 + i * 40, 4, 32, 32);
+            return;
+        }
         int size = compact ? 24 : 32, top = compact ? 42 : 28;
         for (int i = 0; i < actions.Length; i++)
             actions[i].Bounds = PanelBounds(18 + (compact ? 4 : 0) + i * 59, top, size, size);
@@ -1972,6 +2183,7 @@ internal sealed class RecorderPanel : Form {
         string tip = title + "\n" + detail;
         if (DevicesTip.GetToolTip(Heading) != tip) DevicesTip.SetToolTip(Heading, tip);
         if (DevicesTip.GetToolTip(Detail) != tip) DevicesTip.SetToolTip(Detail, tip);
+        if (!settingResult) NotifyDockState(quickActions ? attention ? "attention" : "ready" : "working");
         Invalidate();
     }
     public void ShowWorking(string title, string detail) {
@@ -1989,12 +2201,14 @@ internal sealed class RecorderPanel : Form {
     }
     public void ShowResult(string session, string audio, string note, string root) {
         if (!showingRecording && !processingBusy && resultSession == session && (AudioFile.Tag as string) == audio && (TranscriptFile.Tag as string) == note) return;
-        ShowProcessing("", "");
+        settingResult = true;
+        try { ShowProcessing("", ""); } finally { settingResult = false; }
         Heading.Visible = Detail.Visible = false;
         resultSession = session;
         resultRoot = root;
         SetArtifact(AudioFile, "录音", audio, root, 25);
         SetArtifact(TranscriptFile, "转录", note, root, 45);
+        NotifyDockState("result");
     }
     void SetArtifact(LinkLabel link, string kind, string path, string root, int top) {
         bool available = !string.IsNullOrEmpty(path);
@@ -2028,13 +2242,14 @@ internal sealed class RecorderPanel : Form {
         UpdateProcessingAnimation();
     }
     void UpdateProcessingAnimation() {
-        bool animate = processingBusy && Visible && RecorderMotionPreferences.Enabled;
+        bool animate = processingBusy && Visible && (!sharedDock || dockExpanded && !dockAnimation.Enabled) && RecorderMotionPreferences.Enabled;
         processingAnimation.Enabled = animate;
         if (animate) processingClock.Start(); else processingClock.Stop();
         Invalidate();
     }
     protected override void OnVisibleChanged(EventArgs e) {
         base.OnVisibleChanged(e);
+        if (sharedDock && !Visible) { dockLeave.Stop(); SnapDockMotion(); PositionSharedDock(); }
         if (processingAnimation != null) UpdateProcessingAnimation();
     }
     static System.Drawing.Drawing2D.GraphicsPath Rounded(RectangleF bounds, float radius) {
@@ -2049,8 +2264,15 @@ internal sealed class RecorderPanel : Form {
     }
     protected override void OnSizeChanged(EventArgs e) {
         base.OnSizeChanged(e);
+        UpdatePanelRegion();
+    }
+    float PanelRadius { get { return sharedDock ? (float)Math.Min(Math.Min(ClientSize.Width, ClientSize.Height) / 2.0, dockRadius.Value * fontDpi / 96.0) : ClientSize.Height / 6f; } }
+    void UpdatePanelRegion() {
         if (ClientSize.Width < 1 || ClientSize.Height < 1) return;
-        using (var path = Rounded(new RectangleF(0, 0, ClientSize.Width, ClientSize.Height), ClientSize.Height / 6f)) {
+        float radius = Math.Max(1, PanelRadius);
+        if (Region != null && panelRegionSize == ClientSize && panelRegionRadius == radius) return;
+        panelRegionSize = ClientSize; panelRegionRadius = radius;
+        using (var path = Rounded(new RectangleF(0, 0, ClientSize.Width, ClientSize.Height), radius)) {
             var previous = Region;
             Region = new Region(path);
             if (previous != null) previous.Dispose();
@@ -2060,11 +2282,14 @@ internal sealed class RecorderPanel : Form {
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using (var path = Rounded(new RectangleF(.5f, .5f, ClientSize.Width - 1, ClientSize.Height - 1), ClientSize.Height / 6f))
+        if (sharedDock && dockSnapshot != null && (dockAnimation.Enabled || dockMoving)) PaintDockMorph(g);
+        using (var path = Rounded(new RectangleF(.5f, .5f, ClientSize.Width - 1, ClientSize.Height - 1), Math.Max(1, PanelRadius - .5f)))
         using (var pen = new Pen(Color.FromArgb(224, 231, 240), 1)) g.DrawPath(pen, path);
-        if (processingBusy) {
+        if (processingBusy && (!sharedDock || dockExpanded && !dockAnimation.Enabled)) {
             float scaleX = ClientSize.Width / 186f, scaleY = ClientSize.Height / 68f;
-            float left = 14 * scaleX, width = 158 * scaleX, y = 62 * scaleY;
+            // Detail occupies logical rows 45..63. Keep the activity strip
+            // below that native child control, which paints over the form.
+            float left = 14 * scaleX, width = 158 * scaleX, y = 65 * scaleY;
             using (var track = new Pen(Color.FromArgb(232, 239, 247), 2 * scaleY)) g.DrawLine(track, left, y, left + width, y);
             float travel = width - 30 * scaleX;
             float phase = RecorderMotionPreferences.Enabled ? (float)(processingClock.Elapsed.TotalMilliseconds % 1500 / 1500) : .5f;
@@ -2074,6 +2299,31 @@ internal sealed class RecorderPanel : Form {
                 ink.StartCap = ink.EndCap = System.Drawing.Drawing2D.LineCap.Round;
                 g.DrawLine(ink, left + offset, y, left + offset + 30 * scaleX, y);
             }
+        }
+        if (sharedDock && dockProgress == 0) {
+            float size = Math.Max(2, 3 * fontDpi / 96f);
+            Color color = showingAttention ? Color.FromArgb(187, 114, 32) : showingRecording ? Color.FromArgb(216, 57, 69) : Color.FromArgb(40, 104, 168);
+            using (var brush = new SolidBrush(color)) g.FillEllipse(brush, (Width - size) / 2, Height - size - 3, size, size);
+        }
+    }
+    void PaintDockMorph(Graphics graphics) {
+        float scale = fontDpi / 96f, progress = dockProgress;
+        float alpha = Math.Max(0, Math.Min(1, (progress - .3f) / .7f));
+        alpha = alpha * alpha * (3 - 2 * alpha);
+        if (dockSnapshot != null && alpha > 0) {
+            using (var attributes = new System.Drawing.Imaging.ImageAttributes()) {
+                var matrix = new System.Drawing.Imaging.ColorMatrix(); matrix.Matrix33 = alpha;
+                attributes.SetColorMatrix(matrix);
+                int x = dockLeft ? Width - dockSnapshot.Width : 0;
+                // Keep text at native resolution; only reveal/cross-fade it.
+                graphics.DrawImage(dockSnapshot, new Rectangle(x, 0, dockSnapshot.Width, dockSnapshot.Height), 0, 0, dockSnapshot.Width, dockSnapshot.Height, GraphicsUnit.Pixel, attributes);
+            }
+        }
+        float xLogo = (dockLeft ? Width - DockUnit : 0) + (float)dockLogoX.Value * scale;
+        float yLogo = (float)dockLogoY.Value * scale, size = (float)dockLogoSize.Value * scale;
+        if (dockLogo != null) {
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(dockLogo, new RectangleF(xLogo, yLogo, size, size));
         }
     }
     protected override void OnFormClosing(FormClosingEventArgs e) {
@@ -2085,8 +2335,52 @@ internal sealed class RecorderPanel : Form {
         RestoreDpiFonts();
         Rectangle work = Screen.FromPoint(Cursor.Position).WorkingArea;
         Location = new Point(Math.Max(work.Left, work.Right - Width - 24), Math.Max(work.Top, work.Bottom - Height - 24));
+        if (sharedDock) { dockAnchor = Location; PositionSharedDock(); }
+    }
+    protected override void OnLocationChanged(EventArgs e) {
+        base.OnLocationChanged(e);
+        if (sharedDock && !dockPositioning && !dockMoving) dockAnchor = new Point(dockLeft ? Right - DockUnit : Left, Top);
+    }
+    protected override void WndProc(ref Message message) {
+        if (sharedDock && message.Msg == 0x231) {
+            dockMoving = true; dockLeave.Stop(); dockAnimation.Stop();
+            dockDragOffset = new PointF((dockAnchor.X - Left) * 96f / fontDpi, (dockAnchor.Y - Top) * 96f / fontDpi);
+        }
+        base.WndProc(ref message);
+        if (sharedDock && message.Msg == 0x232) {
+            dockMoving = false;
+            dockAnchor = new Point(Left + (int)Math.Round(dockDragOffset.X * fontDpi / 96f), Top + (int)Math.Round(dockDragOffset.Y * fontDpi / 96f));
+            dockLastTick = Environment.TickCount; RetargetDockMotion(); PositionSharedDock(); ScheduleDockLeave();
+        }
     }
     protected override void OnDpiChanged(DpiChangedEventArgs e) {
+        if (sharedDock && dockMoving) {
+            // During an actual native move Windows' new-monitor rectangle is
+            // authoritative. Never restore the old screen's logo anchor.
+            e.Cancel = true; base.OnDpiChanged(e); ApplyDpiLayout(e.DeviceDpiNew);
+            MinimumSize = new Size(DockUnit, DockUnit); MaximumSize = Size.Empty;
+            Bounds = new Rectangle(e.SuggestedRectangle.Location, new Size((int)Math.Round(dockWidth.Value * fontDpi / 96.0), (int)Math.Round(dockHeight.Value * fontDpi / 96.0)));
+            dockAnchor = new Point(Left + (int)Math.Round(dockDragOffset.X * fontDpi / 96f), Top + (int)Math.Round(dockDragOffset.Y * fontDpi / 96f));
+            bool tools = showingQuickActions && !showingAttention;
+            dockContent.Size = PanelBounds(0, 0, tools ? 160 : 186, tools ? 40 : 68).Size;
+            if (dockSnapshot != null) CaptureDockSnapshot(tools);
+            else if (!dockExpanded || tools) BrandMark.Bounds = new Rectangle((dockLeft ? Width - DockUnit : 0) + (int)Math.Round(8 * fontDpi / 96.0), (int)Math.Round(8 * fontDpi / 96.0), (int)Math.Round(24 * fontDpi / 96.0), (int)Math.Round(24 * fontDpi / 96.0));
+            if (dockLogo == null || dockLogo.Width < DockUnit) { if (dockLogo != null) dockLogo.Dispose(); dockLogo = MeetingBrand.LogoBitmap(DockUnit); }
+            UpdatePanelRegion(); Invalidate(); return;
+        }
+        if (sharedDock) {
+            // The dock owns its physical anchor and logical target size.
+            // A queued Windows suggested rectangle can refer to the old
+            // expanded panel and move a freshly dragged logo back a monitor.
+            Point anchor = dockAnchor; e.Cancel = true;
+            dockPositioning = true;
+            try { base.OnDpiChanged(e); } finally { dockPositioning = false; dockAnchor = anchor; }
+            ReleaseDockSnapshot(); ApplyDpiLayout(e.DeviceDpiNew);
+            if (dockAnimation.Enabled) {
+                dockAnimation.Stop(); RetargetDockMotion();
+            } else PositionSharedDock();
+            return;
+        }
         base.OnDpiChanged(e);
         // Re-align after Windows/WinForms finish rounding the scaled child bounds.
         if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(delegate { if (!IsDisposed) RestoreDpiFonts(); }));
@@ -2094,6 +2388,8 @@ internal sealed class RecorderPanel : Form {
     protected override bool ShowWithoutActivation { get { return true; } }
     protected override void Dispose(bool disposing) {
         if (disposing) {
+            dockDisposing = true;
+            dockAnimation.Dispose(); dockLeave.Dispose(); ReleaseDockSnapshot(); if (dockLogo != null) dockLogo.Dispose();
             processingAnimation.Dispose(); processingClock.Stop();
             foreach (var link in new LinkLabel[] { AudioFile, TranscriptFile }) if (link.ContextMenuStrip != null) link.ContextMenuStrip.Dispose();
             if (BrandMark.Image != null) BrandMark.Image.Dispose();
@@ -2370,13 +2666,15 @@ internal sealed class MeetingContext : ApplicationContext {
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, delegate { RequestExit(); });
         tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "verbit · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
-        tray.DoubleClick += delegate { RefreshFeedback(); panel.Show(); panel.Activate(); };
+        tray.DoubleClick += delegate { ShowPanel(); };
         panel.StopButton.Click += delegate { Stop(); };
         panel.MicrophoneButton.Click += delegate { ToggleMicrophone(); };
         panel.ArtifactRequested += LocateArtifactForSession;
         panel.QuickNoteButton.Click += delegate { ToggleQuickNote(); };
+        panel.LogoNoteRequested += ToggleQuickNote;
         panel.StartButton.Click += delegate { Toggle(); };
         panel.SettingsButton.Click += delegate { OpenSettings(); };
+        panel.EnableSharedDock();
         panel.SetQuickActionHotkeys(QuickNoteHotkey, StartHotkey);
         panel.Time.Text = "00:00";
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束整个记录 · " + StartHotkey);
@@ -2388,7 +2686,7 @@ internal sealed class MeetingContext : ApplicationContext {
         if (hotkey.QuickNoteWarning.Length != 0)
             dispatch.BeginInvoke(new Action(delegate { Notice("速记快捷键不可用", hotkey.QuickNoteWarning + " 可从托盘打开速记便签。", ToolTipIcon.Warning); }));
     }
-    public void ShowPanel() { RefreshFeedback(); panel.Show(); panel.Activate(); }
+    public void ShowPanel() { RefreshFeedback(); panel.SetDockExpanded(true); panel.Show(); panel.Activate(); }
     async void MaybeCheckUpdates() {
         if (exiting || checkingUpdate || !Convert.ToBoolean(config["check_updates"]) || DateTime.UtcNow - lastUpdateCheck < TimeSpan.FromHours(24)) return;
         lastUpdateCheck = DateTime.UtcNow; checkingUpdate = true;
@@ -2496,6 +2794,7 @@ internal sealed class MeetingContext : ApplicationContext {
                 string stateRoot = Path.Combine(MeetingFiles.Home, "work", "quick-note");
                 var store = new QuickNoteStore(MeetingFiles.VaultRoot(config), (string)config["quick_note_folder"], stateRoot);
                 quickNote = new QuickNoteWindow(store, stateRoot);
+                quickNote.Minimized = delegate { panel.Show(); };
             }
             quickNote.Toggle();
         } catch (Exception error) { MeetingFiles.Log(error); Notice("无法打开速记便签", error.Message, ToolTipIcon.Warning); }
@@ -2715,7 +3014,7 @@ internal sealed class MeetingContext : ApplicationContext {
         try { focusedRecord = catalog.Get(session); }
         catch (Exception error) { MeetingFiles.Log(error); focusedRecord = null; }
         RefreshFeedback();
-        if (show) { panel.Show(); panel.Activate(); }
+        if (show) { panel.SetDockExpanded(true); panel.Show(); panel.Activate(); }
     }
     void RecordLaunchFailure(string session, string detail, bool configuration = false) {
         try {

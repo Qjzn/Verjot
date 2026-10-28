@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 
 internal static class TestRecorderPanel {
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
     static int assertions;
     static void Check(bool condition, string message) {
         assertions++;
@@ -20,10 +21,14 @@ internal static class TestRecorderPanel {
         Check(field != null, "Microphone input feedback is unavailable");
         return (bool)field.GetValue(button);
     }
-    static void Snapshot(RecorderPanel panel, string filename) {
+    static void Snapshot(RecorderPanel panel, string filename, bool native = false) {
         Application.DoEvents();
         using (var bitmap = new Bitmap(panel.ClientSize.Width, panel.ClientSize.Height)) {
-            panel.DrawToBitmap(bitmap, panel.ClientRectangle);
+            if (native) using (Graphics graphics = Graphics.FromImage(bitmap)) {
+                IntPtr dc = graphics.GetHdc();
+                try { Check(PrintWindow(panel.Handle, dc, 0), "Native shared-window capture succeeds"); }
+                finally { graphics.ReleaseHdc(dc); }
+            } else panel.DrawToBitmap(bitmap, panel.ClientRectangle);
             bitmap.Save(filename, System.Drawing.Imaging.ImageFormat.Png);
         }
     }
@@ -78,12 +83,79 @@ internal static class TestRecorderPanel {
         }
         Check(failures.Count == 0, String.Join("\n", failures.ToArray()));
     }
+    static void Pump(int milliseconds) {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < milliseconds) { Application.DoEvents(); System.Threading.Thread.Sleep(5); }
+    }
+    static void SettleDock(RecorderPanel panel) {
+        var timer = (System.Windows.Forms.Timer)typeof(RecorderPanel).GetField("dockAnimation", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        do { Pump(5); } while (timer.Enabled && clock.ElapsedMilliseconds < 450);
+        Check(!timer.Enabled, "Shared dock settles without a lingering timer (native scheduling allowance: 450 ms)");
+    }
+    static void CheckSharedDock(string output) {
+        string motion = RecorderMotionPreferences.Mode; RecorderMotionPreferences.Mode = "on";
+        try {
+            foreach (var screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
+                Console.WriteLine("SHARED enable " + screen.DeviceName);
+                panel.EnableSharedDock(); panel.ShowStatus("verbit已就绪", "ready"); panel.Show(); Pump(80);
+                Console.WriteLine("SHARED shown " + panel.Bounds);
+                panel.Location = new Point(screen.WorkingArea.Left + 80, screen.WorkingArea.Top + 80);
+                Console.WriteLine("SHARED move=" + panel.Location + "; anchor=" + typeof(RecorderPanel).GetField("dockAnchor", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel));
+                Pump(80);
+                Console.WriteLine("SHARED settled=" + panel.Location + "; actual=" + Screen.FromControl(panel).DeviceName + "; dpi=" + panel.DeviceDpi);
+                Check(Screen.FromControl(panel).DeviceName == screen.DeviceName, "Shared dock must remain on the monitor it was moved to");
+                int unit = (int)Math.Round(40 * panel.DeviceDpi / 96.0); IntPtr handle = panel.Handle;
+                Check(panel.ClientSize == new Size(unit, unit), "Shared idle window defaults to logo only at actual monitor DPI");
+                Check(!panel.QuickNoteButton.Visible && !panel.BrandTitle.Visible, "Collapsed shared window hides all duplicate branding and tools");
+                panel.SetDockExpanded(true); SettleDock(panel);
+                Console.WriteLine("SHARED expanded " + panel.Bounds + "; target=" + typeof(RecorderPanel).GetField("dockExpanded", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; progress=" + typeof(RecorderPanel).GetField("dockProgress", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; tools=" + panel.QuickNoteButton.Visible + "/" + panel.StartButton.Visible + "/" + panel.SettingsButton.Visible);
+                Check(panel.Width == unit * 4 && panel.Height == unit && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "The very same shared window expands to a clean single row of existing actions");
+                Snapshot(panel, Path.Combine(output, "shared-idle-" + panel.DeviceDpi + ".png"), true);
+                int logoResizes = 0, actionMoves = 0;
+                panel.BrandMark.SizeChanged += delegate { logoResizes++; };
+                panel.QuickNoteButton.LocationChanged += delegate { actionMoves++; };
+                for (int i = 0; i < 5; i++) panel.ShowStatus("verbit已就绪", "ready");
+                Check(logoResizes == 0 && actionMoves == 0, "Repeated idle polling must not resize the logo or move hovered actions");
+                Check(panel.Handle == handle && typeof(RecorderPanel).Assembly.GetType("QuickNoteCompact") == null, "No independent minimized-note form remains in the application");
+                panel.ShowRecording("Synthetic microphone", "Synthetic system"); SettleDock(panel);
+                Check(panel.Handle == handle && panel.MicrophoneButton.Visible && panel.StopButton.Visible && panel.Time.Visible, "Recording reuses the same window and restores the original capture controls");
+                Snapshot(panel, Path.Combine(output, "shared-recording-" + panel.DeviceDpi + ".png"), true);
+                panel.ShowWorking("正在本地转写", "识别文字"); SettleDock(panel);
+                var animation = (System.Windows.Forms.Timer)typeof(RecorderPanel).GetField("dockAnimation", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel);
+                Check(panel.Handle == handle && panel.Detail.Visible && panel.Heading.Visible && !animation.Enabled, "Processing keeps the shared content and settles its expansion timer");
+                using (var bitmap = new Bitmap(panel.Width, panel.Height)) {
+                    panel.DrawToBitmap(bitmap, panel.ClientRectangle); int blue = 0, y = (int)Math.Round(65 * panel.DeviceDpi / 96.0);
+                    for (int x = 0; x < bitmap.Width; x++) { Color pixel = bitmap.GetPixel(x, y); if (pixel.B > pixel.R + 12) blue++; }
+                    Check(blue > 5, "The shared content parent must not cover the transcription activity strip");
+                    bitmap.Save(Path.Combine(output, "shared-working-" + panel.DeviceDpi + ".png"));
+                }
+                panel.CollapseButton.PerformClick(); SettleDock(panel);
+                Check(panel.Visible && panel.Width == unit && panel.Height == unit, "Collapse returns an active shared window to the Logo rather than creating or hiding another window");
+                for (int i = 0; i < 5; i++) panel.ShowWorking("正在本地转写", "识别文字");
+                Check(panel.Width == unit && !animation.Enabled, "Background status polling never reopens a manually collapsed working window");
+                panel.ShowAttention("转写失败 · 可重试", "原录音和恢复资料保留"); panel.SetDockExpanded(true); SettleDock(panel);
+                Check(panel.Handle == handle && panel.Heading.Text.Contains("失败") && panel.QuickNoteButton.Visible, "Failure feedback and actions reuse the same shared window");
+                Snapshot(panel, Path.Combine(output, "shared-attention-" + panel.DeviceDpi + ".png"), true);
+                panel.ShowResult("synthetic", "C:\\Demo\\verbit.mp3", "C:\\Demo\\verbit.md", "C:\\Demo"); panel.SetDockExpanded(true); SettleDock(panel);
+                Check(panel.AudioFile.Visible && panel.TranscriptFile.Visible && panel.Handle == handle, "Result paths remain available on the single shared window");
+                panel.SetDockExpanded(false); SettleDock(panel);
+                panel.Location = new Point(screen.WorkingArea.Right - unit - 4, screen.WorkingArea.Bottom - unit - 4);
+                Point anchor = panel.Location; panel.SetDockExpanded(true); SettleDock(panel);
+                Check(screen.WorkingArea.Contains(panel.Bounds), "Right/bottom edge expansion stays entirely on the actual screen");
+                panel.SetDockExpanded(false); SettleDock(panel);
+                Check(panel.Location == anchor, "Repeated edge expansion returns to the original Logo anchor without creeping");
+                panel.AllowClose = true; panel.Close();
+            }
+        } finally { RecorderMotionPreferences.Mode = motion; }
+    }
     [STAThread]
     static int Main(string[] args) {
         try {
             Application.EnableVisualStyles();
             string output = args.Length > 0 ? Path.GetFullPath(args[0]) : AppDomain.CurrentDomain.BaseDirectory;
             Directory.CreateDirectory(output);
+            if (Array.IndexOf(args, "--shared-only") >= 0) { CheckSharedDock(output); Console.WriteLine("PASS shared dock assertions=" + assertions); return 0; }
             if (Array.IndexOf(args, "--screen-matrix") >= 0) { CheckMonitorMatrix(output); Console.WriteLine("PASS monitor matrix: " + assertions); return 0; }
             CheckMonitorMatrix(Path.Combine(output, "dpi-matrix"));
             using (var panel = new RecorderPanel()) {
@@ -196,6 +268,7 @@ internal static class TestRecorderPanel {
                 panel.AllowClose = true;
                 panel.Close();
             }
+            CheckSharedDock(output);
             Console.WriteLine("PASS: " + assertions + " synthetic panel assertions; no audio capture");
             return 0;
         } catch (Exception error) {

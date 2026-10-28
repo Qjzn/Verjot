@@ -127,6 +127,7 @@ internal static class TestCompletionFeedback {
             Set(context, "artifactLocator", new Action<string>(delegate(string path) { located = path; }));
             var resultPanel = (RecorderPanel)Field(context, "panel");
             Call(context, "FocusSession", a, true);
+            Pump(220);
             var aLink = (LinkLabel)Field(resultPanel, "AudioFile");
             // The exact displayed session travels with the action even if the
             // controller's latest pointer changes to another same-second meeting.
@@ -134,6 +135,7 @@ internal static class TestCompletionFeedback {
             Call(aLink, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(aLink.Links[0]));
             Check(located == audioA, "Result action must locate displayed A, never latest same-second B");
             Call(context, "FocusSession", b, true);
+            Pump(220);
             var bLink = (LinkLabel)Field(resultPanel, "TranscriptFile");
             Call(bLink, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(bLink.Links[0]));
             Check(located == noteB, "Transcript action must locate the exact note for B");
@@ -142,9 +144,11 @@ internal static class TestCompletionFeedback {
             Check(located == null && bLink.Visible && !bLink.Enabled && bLink.Text.Contains("已移除") &&
                 ((LinkLabel)Field(resultPanel, "AudioFile")).Enabled, "Deleted transcript must disable its stale link while retaining the actual recording destination");
             Call(context, "FocusSession", a, true);
+            Pump(220);
             Check(((LinkLabel)Field(resultPanel, "AudioFile")).Visible, "A valid earlier meeting must remain directly reachable");
             File.Delete(audioA); located = null;
             Call(context, "FocusSession", a, true);
+            Pump(220);
             var removedAudio = (LinkLabel)Field(resultPanel, "AudioFile");
             var retainedNote = (LinkLabel)Field(resultPanel, "TranscriptFile");
             Check(removedAudio.Visible && !removedAudio.Enabled && removedAudio.Text.Contains("已移除") && retainedNote.Visible && retainedNote.Enabled,
