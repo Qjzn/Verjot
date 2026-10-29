@@ -128,34 +128,40 @@ internal static class TestCompletionFeedback {
             var resultPanel = (RecorderPanel)Field(context, "panel");
             Call(context, "FocusSession", a, true);
             Pump(220);
-            var aLink = (LinkLabel)Field(resultPanel, "AudioFile");
+            var catalog = (SessionCatalog)Field(context, "catalog");
+            Call(context, "AudioReceipt", catalog.Get(a));
+            var receipt = (RecorderNotice)Field(context, "receipt");
+            Check(receipt.Visible && receipt.LocationText.Text == audioA, "The shared dock exposes the published destination in its transient notice");
             // The exact displayed session travels with the action even if the
             // controller's latest pointer changes to another same-second meeting.
             Set(context, "focusedSession", b);
-            Call(aLink, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(aLink.Links[0]));
+            receipt.ActivateNotice();
             Check(located == audioA, "Result action must locate displayed A, never latest same-second B");
             Call(context, "FocusSession", b, true);
             Pump(220);
-            var bLink = (LinkLabel)Field(resultPanel, "TranscriptFile");
-            Call(bLink, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(bLink.Links[0]));
+            Call(context, "LocateArtifactForSession", b, false);
             Check(located == noteB, "Transcript action must locate the exact note for B");
             File.Delete(noteB); located = null;
-            Call(bLink, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(bLink.Links[0]));
-            Check(located == null && bLink.Visible && !bLink.Enabled && bLink.Text.Contains("已移除") &&
-                ((LinkLabel)Field(resultPanel, "AudioFile")).Enabled, "Deleted transcript must disable its stale link while retaining the actual recording destination");
+            Call(context, "LocateArtifactForSession", b, false);
+            Check(located == null && !resultPanel.AudioFile.Visible && !resultPanel.TranscriptFile.Visible,
+                "A deleted transcript is rejected without restoring permanent result links in the shared dock");
+            Call(context, "OpenSessionFolder", b);
+            Check(located == audioB, "The remaining recording is still reachable through the recent-meeting destination action");
             Call(context, "FocusSession", a, true);
             Pump(220);
-            Check(((LinkLabel)Field(resultPanel, "AudioFile")).Visible, "A valid earlier meeting must remain directly reachable");
+            Check(resultPanel.QuickNoteButton.Visible && resultPanel.StartButton.Visible && resultPanel.SettingsButton.Visible,
+                "An earlier meeting preserves the shared dock's common actions instead of permanent paths");
+            Call(context, "AudioReceipt", catalog.Get(a));
             File.Delete(audioA); located = null;
+            receipt.ActivateNotice();
+            Check(located == null, "A recording deleted after its notice appeared must be revalidated at click time");
             Call(context, "FocusSession", a, true);
             Pump(220);
-            var removedAudio = (LinkLabel)Field(resultPanel, "AudioFile");
-            var retainedNote = (LinkLabel)Field(resultPanel, "TranscriptFile");
-            Check(removedAudio.Visible && !removedAudio.Enabled && removedAudio.Text.Contains("已移除") && retainedNote.Visible && retainedNote.Enabled,
-                "Transcript-only result keeps its file destination in the lightweight float");
-            Call(removedAudio, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(removedAudio.Links[0]));
-            Check(located == null, "Disabled removed audio must not invoke an artifact action");
-            Call(retainedNote, "OnLinkClicked", new LinkLabelLinkClickedEventArgs(retainedNote.Links[0]));
+            Check(!resultPanel.AudioFile.Visible && !resultPanel.TranscriptFile.Visible && resultPanel.StartButton.Visible,
+                "Transcript-only completion keeps the shared dock compact and ready to record");
+            Call(context, "LocateArtifactForSession", a, true);
+            Check(located == null, "An explicit removed-audio action must not invoke an artifact locator");
+            Call(context, "OpenSessionFolder", a);
             Check(located == noteA, "Remaining transcript must stay reachable after audio deletion");
             Console.WriteLine("Completion feedback: " + assertions + " assertions passed; synthetic files only, no audio or external file opening."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
