@@ -1695,6 +1695,7 @@ internal sealed class RecorderPanel : Form {
     RecorderDockSpring dockEdgeShift = new RecorderDockSpring(0), dockEdgeShiftY = new RecorderDockSpring(0);
     RecorderDockSpring dockLogoX = new RecorderDockSpring(8), dockLogoY = new RecorderDockSpring(8), dockLogoSize = new RecorderDockSpring(24);
     Bitmap dockSnapshot;
+    bool dockRetireQueued;
     Image dockLogo;
     int dockLogoDpi;
     bool dockToolsSnapshot;
@@ -1905,7 +1906,7 @@ internal sealed class RecorderPanel : Form {
     double DockLogoTargetY { get { return dockExpanded && dockUp ? 8 - 28 : 8; } }
     double DockTargetWidth { get { return dockExpanded ? 186 : dockEdge != 0 ? 6 : 40; } }
     double DockTargetHeight { get { return dockExpanded ? 68 : dockEdge != 0 && !dockExpanded ? 36 : 40; } }
-    void ReleaseDockSnapshot() { if (dockSnapshot != null) { dockSnapshot.Dispose(); dockSnapshot = null; } }
+    void ReleaseDockSnapshot() { dockRetireQueued = false; if (dockSnapshot != null) { dockSnapshot.Dispose(); dockSnapshot = null; } }
     void SnapDockMotion() {
         dockWidth.Snap(DockTargetWidth);
         dockHeight.Snap(DockTargetHeight);
@@ -2409,10 +2410,17 @@ internal sealed class RecorderPanel : Form {
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         if (sharedDock && dockSnapshot != null) {
             PaintDockMorph(g);
-            // Retire the raster only after the last frame was actually
-            // painted. Do not force synchronous Update from inside layout:
-            // native DPI/print messages can reenter that in-progress frame.
-            if (!dockAnimation.Enabled && !dockMoving) ReleaseDockSnapshot();
+            // BufferedGraphics presents after OnPaint returns. Retire on the
+            // next UI turn, never dispose the raster while that buffered frame
+            // or a cross-process WM_PRINT still owns its drawing context.
+            if (!dockAnimation.Enabled && !dockMoving && !dockRetireQueued) {
+                Bitmap painted = dockSnapshot; dockRetireQueued = true;
+                BeginInvoke(new Action(delegate {
+                    if (!Object.ReferenceEquals(dockSnapshot, painted)) return;
+                    dockRetireQueued = false;
+                    if (!dockAnimation.Enabled && !dockMoving) ReleaseDockSnapshot();
+                }));
+            }
         }
         using (var path = Rounded(new RectangleF(.5f, .5f, ClientSize.Width - 1, ClientSize.Height - 1), Math.Max(1, PanelRadius - .5f)))
         using (var pen = new Pen(VerbitUi.Border, 1)) g.DrawPath(pen, path);

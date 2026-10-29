@@ -67,12 +67,15 @@ internal static class TestRecorderDockMorph {
         }
     }
     static void ExternalCapture(RecorderPanel panel) {
+        Pump(50); // Capture a presented native tree, not just a stopped timer.
+        Console.WriteLine("External capture begin: mode="+RecorderMotionPreferences.Mode+"; bounds="+panel.Bounds);
         var start=new ProcessStartInfo(Application.ExecutablePath,"--capture-window "+panel.Handle.ToInt64()+" "+panel.Width+" "+panel.Height) {UseShellExecute=false,CreateNoWindow=true};
         using(var child=Process.Start(start)) {
             var clock=Stopwatch.StartNew();
             while(!child.HasExited && clock.ElapsedMilliseconds<5000) Pump(2);
             if(!child.HasExited) { child.Kill(); child.WaitForExit(); throw new InvalidOperationException("Owned capture fixture timed out"); }
             Check(child.ExitCode==0,"External-process PrintWindow retains visible Logo pixels rather than a blank white surface; code="+child.ExitCode);
+            Console.WriteLine("External capture passed");
         }
     }
     static Point CapsuleAtLogo(RecorderPanel panel) {
