@@ -29,7 +29,9 @@ internal static class VerbitUi {
         button.MinimumSize = new Size(76, 28); button.Cursor = Cursors.Hand;
     }
     internal static void ToolBackground(Graphics graphics, Rectangle bounds, Color background, Color highlight, float amount, int dpi) {
-        graphics.Clear(background);
+        // Owner-drawn list rows share a surface. Clear only this component's
+        // bounds, so an incremental hover repaint cannot erase its neighbours.
+        using (var brush = new SolidBrush(background)) graphics.FillRectangle(brush, bounds);
         if (amount <= 0) return;
         Color color = Color.FromArgb((int)(background.R + (highlight.R - background.R) * amount),
             (int)(background.G + (highlight.G - background.G) * amount), (int)(background.B + (highlight.B - background.B) * amount));
@@ -116,7 +118,12 @@ internal sealed class VerbitMenu : ContextMenuStrip {
         int pad = Math.Max(1, 4 * menuDpi / 96);
         // A hosted search/list popup owns its inner layout and must not be resized.
         bool hosted = menu.Items.Count == 1 && menu.Items[0] is ToolStripControlHost;
-        if (hosted) menu.MaximumSize = Size.Empty;
+        if (hosted) {
+            // The native menu layout reserves an extra command/arrow gutter
+            // even with image margins disabled. A hosted picker owns every pixel.
+            menu.AutoSize = false; menu.MinimumSize = menu.MaximumSize = Size.Empty;
+            menu.ClientSize = new Size(menu.Items[0].Width + menu.Padding.Horizontal, menu.Items[0].Height + menu.Padding.Vertical);
+        }
         if (!hosted) {
             menu.Padding = new Padding(pad);
             int width = 156 * menuDpi / 96;

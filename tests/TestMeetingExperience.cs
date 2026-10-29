@@ -340,6 +340,12 @@ internal static class TestMeetingExperience {
             menu.Close();
             var audioRecord = ((SessionCatalog)Field(context, "catalog")).Get(audioOnly);
             Check(audioRecord.State == "audio_only" && !audioRecord.NeedsAttention && !audioRecord.CanRetry, "Audio-only completion must be quiet and non-retryable");
+            located = null; Call(context, "AudioReceipt", audioRecord);
+            var receipt = (RecorderNotice)Field(context, "receipt");
+            Check(receipt.Visible && receipt.LocationText.Text == keptAudio, "Completion receipt displays the exact published file of its own meeting");
+            receipt.ActivateNotice(); Check(located == keptAudio, "Completion receipt locates the exact original meeting even when another meeting is focused");
+            Call(context, "AudioReceipt", audioRecord); File.Delete(keptAudio); located = null;
+            receipt.ActivateNotice(); Check(located == null, "A file deleted after the receipt appeared is revalidated rather than opening another meeting");
             File.Delete(keptNote);
             File.Delete(keptAudio);
             Check(OpenRecent(menu, recent, "Native transcript-only fixture") == null, "Deleting the remaining transcript must remove that meeting from the actual recent menu");

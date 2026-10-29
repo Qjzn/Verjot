@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -176,6 +177,9 @@ internal sealed class QuickNoteTabs : Form {
     internal bool IsRevealed { get { return targetReveal == 1; } }
     readonly Timer animation = new Timer { Interval = 16 };
     readonly ToolTip tip = new ToolTip { ShowAlways = true };
+    Size fileTipSize;
+    Font fileTipFont;
+    int fileTipDpi;
     string[] files = new string[0];
     string current;
     int hovered = -1;
@@ -187,6 +191,15 @@ internal sealed class QuickNoteTabs : Form {
         BackColor = TransparencyKey = Color.Fuchsia;
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
         AccessibleName = "最近便签标签";
+        tip.OwnerDraw = true; tip.UseAnimation = tip.UseFading = false;
+        tip.Popup += delegate(object sender, PopupEventArgs e) { e.ToolTipSize = fileTipSize; };
+        tip.Draw += delegate(object sender, DrawToolTipEventArgs e) {
+            e.Graphics.Clear(VerbitUi.Surface);
+            using (var border = new Pen(VerbitUi.Border)) e.Graphics.DrawRectangle(border, 0, 0, e.Bounds.Width - 1, e.Bounds.Height - 1);
+            TextRenderer.DrawText(e.Graphics, e.ToolTipText, fileTipFont,
+                new Rectangle(8, 6, Math.Max(1, e.Bounds.Width - 16), Math.Max(1, e.Bounds.Height - 12)), VerbitUi.Ink,
+                TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+        };
         animation.Tick += delegate {
             int now = Environment.TickCount; float amount = 1 - (float)Math.Exp(-Math.Max(1, unchecked(now - lastTick)) / 36.0); lastTick = now;
             reveal += (targetReveal - reveal) * amount;
@@ -221,25 +234,36 @@ internal sealed class QuickNoteTabs : Form {
         base.OnMouseMove(e); int index = Hit(e.Location); if (index == hovered) return;
         tip.Hide(this); hovered = index; Animate();
         if (HoverFile != null) HoverFile(index >= 0 && index < files.Length ? files[index] : null);
-        if (index >= 0 && index < files.Length) ShowFileTip(files[index] + (files[index] == current ? "\n当前便签" : "\n悬停预览 · 点击切换"));
+        if (index >= 0 && index < files.Length) ShowFileTip(files[index]);
     }
     internal void ShowFileTip(string text) {
         if (hovered < 0 || !Visible) return;
+        if (fileTipFont == null || fileTipDpi != DeviceDpi) {
+            if (fileTipFont != null) fileTipFont.Dispose();
+            fileTipDpi = DeviceDpi;
+            fileTipFont = new Font("Microsoft YaHei UI", 12f * DeviceDpi / 96, FontStyle.Regular, GraphicsUnit.Pixel);
+        }
+        int gap = Math.Max(4, 6 * DeviceDpi / 96);
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        int available = OnRight ? area.Right - Right - gap : Left - area.Left - gap;
+        if (available < 36 * DeviceDpi / 96) { tip.Hide(this); return; }
         // Bound very long names without omitting characters. Native screen
         // clamping must not move a huge tooltip back over the hover target.
-        var wrapped = new StringBuilder(); int column = 0;
-        foreach (char c in text) {
-            if (column >= 24 && !Char.IsLowSurrogate(c)) { wrapped.Append('\n'); column = 0; }
-            wrapped.Append(c); column = c == '\n' ? 0 : column + 1;
+        int lineWidth = Math.Min(260 * DeviceDpi / 96, available - 16);
+        var wrapped = new StringBuilder(); string line = "";
+        for (int i = 0; i < text.Length; i++) {
+            string token = Char.IsHighSurrogate(text[i]) && i + 1 < text.Length && Char.IsLowSurrogate(text[i + 1]) ? text.Substring(i++, 2) : text[i].ToString();
+            if (token == "\n") { wrapped.Append('\n'); line = ""; continue; }
+            if (line.Length > 0 && TextRenderer.MeasureText(line + token, fileTipFont).Width > lineWidth) { wrapped.Append('\n'); line = ""; }
+            wrapped.Append(token); line += token;
         }
-        string label = wrapped.ToString(); Size size = TextRenderer.MeasureText(label, SystemFonts.StatusFont);
-        int gap = 12 * DeviceDpi / 96;
-        Rectangle area = Screen.FromControl(this).WorkingArea;
-        Size padded = new Size(size.Width + 32, size.Height + 20);
+        string label = wrapped.ToString(); Size size = TextRenderer.MeasureText(label, fileTipFont);
+        Size padded = new Size(size.Width + 16, size.Height + 12); fileTipSize = padded;
         Rectangle note = Owner == null ? Rectangle.Empty : Owner.Bounds;
         int rowY = Math.Max(area.Top, Math.Min(Top + hovered * Row, area.Bottom - padded.Height));
-        Point[] candidates = { new Point(Left - gap - padded.Width, rowY), new Point(note.Left, note.Top - gap - padded.Height),
-            new Point(note.Right + gap, rowY), new Point(note.Left, note.Bottom + gap) };
+        // Follow the rail's actual side, never jump across the whole note to
+        // an unrelated header/footer. The full name is also available in More.
+        Point[] candidates = { new Point(OnRight ? Right + gap : Left - gap - padded.Width, rowY) };
         foreach (Point point in candidates) {
             Rectangle candidate = new Rectangle(point, padded);
             if (!area.Contains(candidate) || candidate.IntersectsWith(note) || candidate.IntersectsWith(Bounds)) continue;
@@ -297,42 +321,127 @@ internal sealed class QuickNoteTabs : Form {
             TextRenderer.DrawText(e.Graphics, i == files.Length ? "更多…" : Path.GetFileNameWithoutExtension(files[i]), Font, label, Color.FromArgb(36, 59, 83), color, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
         }
     }
-    protected override void Dispose(bool disposing) { if (disposing) { animation.Dispose(); tip.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { animation.Dispose(); tip.Dispose(); if (fileTipFont != null) fileTipFont.Dispose(); } base.Dispose(disposing); }
+}
+
+internal sealed class QuickNoteRecentList : ListBox {
+    internal Action Scrolled;
+    protected override void WndProc(ref Message m) {
+        base.WndProc(ref m);
+        if (Scrolled != null && (m.Msg == 0x115 || m.Msg == 0x20a || m.Msg == 0x197 || m.Msg == 0x100)) Scrolled();
+    }
+}
+
+// Clip the native list's scrollbar, keeping its keyboard, wheel and selection
+// behavior. This small overlay has no idle timer and never touches RichEdit.
+internal sealed class QuickNoteRecentScrollBar : Control {
+    internal ListBox Target;
+    bool hover, dragging;
+    int dragOffset;
+    internal QuickNoteRecentScrollBar() {
+        AccessibleName = "便签列表滚动条"; AccessibleRole = AccessibleRole.ScrollBar;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+    }
+    internal Rectangle ThumbBounds {
+        get {
+            if (Target == null || Target.ItemHeight <= 0) return Rectangle.Empty;
+            int page = Math.Max(1, Target.ClientSize.Height / Target.ItemHeight), count = Target.Items.Count;
+            if (count <= page || Height <= 0) return Rectangle.Empty;
+            int height = Math.Min(Height, Math.Max(20 * DeviceDpi / 96, Height * page / count));
+            int top = (int)((long)Math.Min(count - page, Target.TopIndex) * (Height - height) / (count - page));
+            int width = Math.Max(3, (hover || dragging ? 5 : 3) * DeviceDpi / 96);
+            return new Rectangle((Width - width) / 2, top, width, height);
+        }
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        e.Graphics.Clear(BackColor); Rectangle r = ThumbBounds; if (r.IsEmpty) return;
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var pen = new Pen(hover || dragging ? VerbitUi.Muted : Color.FromArgb(188, 194, 200), r.Width)) {
+            pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            e.Graphics.DrawLine(pen, r.Left + r.Width / 2f, r.Top + r.Width / 2f, r.Left + r.Width / 2f, r.Bottom - r.Width / 2f);
+        }
+    }
+    protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+    protected override void OnMouseDown(MouseEventArgs e) {
+        base.OnMouseDown(e); if (e.Button != MouseButtons.Left) return;
+        Rectangle thumb = ThumbBounds; if (thumb.IsEmpty) return;
+        dragOffset = thumb.Contains(e.Location) ? e.Y - thumb.Top : thumb.Height / 2;
+        dragging = Capture = true; ScrollTo(e.Y);
+    }
+    protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (dragging) ScrollTo(e.Y); }
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); dragging = Capture = false; Invalidate(); }
+    protected override void OnMouseCaptureChanged(EventArgs e) { base.OnMouseCaptureChanged(e); if (!Capture) { dragging = false; Invalidate(); } }
+    void ScrollTo(int y) {
+        Rectangle thumb = ThumbBounds; if (thumb.IsEmpty) return;
+        int page = Math.Max(1, Target.ClientSize.Height / Target.ItemHeight), span = Math.Max(1, Height - thumb.Height);
+        Target.TopIndex = (int)((long)Math.Max(0, Math.Min(span, y - dragOffset)) * (Target.Items.Count - page) / span);
+        Invalidate();
+    }
 }
 
 internal sealed class QuickNoteRecentPicker : UserControl {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, string text);
-    internal readonly TextBox Search = new TextBox { BorderStyle = BorderStyle.FixedSingle, AccessibleName = "查找便签文件名" };
-    internal readonly ListBox Results = new ListBox { BorderStyle = BorderStyle.None, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, AccessibleName = "最近便签，方向键选择，回车打开" };
+    internal readonly TextBox Search = new TextBox { BorderStyle = BorderStyle.None, AccessibleName = "查找便签文件名" };
+    internal readonly QuickNoteRecentList Results = new QuickNoteRecentList { BorderStyle = BorderStyle.None, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, AccessibleName = "最近便签，方向键选择，回车打开" };
+    internal readonly QuickNoteRecentScrollBar ListScroll = new QuickNoteRecentScrollBar();
+    readonly QuickNoteChromePanel searchFrame = new QuickNoteChromePanel();
+    readonly Panel viewport = new Panel();
     internal Action<string> SelectFile;
     internal Action<string, Point> FileMenu;
     internal Action ClosePopup;
     readonly Label heading = new Label { Text = "最近便签", AutoSize = false };
+    readonly Label count = new Label { TextAlign = ContentAlignment.MiddleRight };
     readonly Label empty = new Label { Text = "没有匹配的便签", TextAlign = ContentAlignment.MiddleCenter };
     readonly string[] files;
     readonly string current;
     internal QuickNoteRecentPicker(string[] names, string selected, Font font, int dpi, Size maximum) {
-        files = names; current = selected; Font = font;
+        files = names; current = selected; AutoScaleMode = AutoScaleMode.None; Font = Search.Font = font;
         BackColor = Results.BackColor = Search.BackColor = VerbitMenuRenderer.Surface;
         Search.HandleCreated += delegate { SendMessage(Search.Handle, 0x1501, new IntPtr(1), "搜索便签名称…"); };
         VerbitMenu.AttachTextMenu(Search);
         ForeColor = Results.ForeColor = Search.ForeColor = VerbitMenuRenderer.Ink;
-        heading.ForeColor = empty.ForeColor = VerbitMenuRenderer.Muted;
-        int unit = Math.Max(1, dpi), pad = 8 * unit / 96, row = Math.Max(26 * unit / 96, font.Height + 8 * unit / 96);
-        Size = new Size(Math.Min(280 * unit / 96, maximum.Width), Math.Min(72 * unit / 96 + row * Math.Min(6, Math.Max(1, files.Length)), maximum.Height));
-        heading.SetBounds(pad, pad, Width - pad * 2, 20 * unit / 96);
-        Search.SetBounds(pad, heading.Bottom + 4 * unit / 96, Width - pad * 2, 24 * unit / 96);
-        Results.SetBounds(pad, Search.Bottom + 6 * unit / 96, Width - pad * 2, Math.Max(1, Height - Search.Bottom - pad - 6 * unit / 96));
-        Results.ItemHeight = row; empty.Bounds = Results.Bounds;
-        Controls.AddRange(new Control[] { heading, Search, Results, empty });
+        heading.ForeColor = VerbitMenuRenderer.Ink; count.ForeColor = empty.ForeColor = VerbitMenuRenderer.Muted;
+        int unit = Math.Max(1, dpi), pad = Math.Max(6, 10 * unit / 96), gap = Math.Max(4, 6 * unit / 96);
+        int row = Math.Max(28 * unit / 96, font.Height + 8 * unit / 96), header = Math.Max(20 * unit / 96, font.Height);
+        int searchHeight = Math.Max(30 * unit / 96, font.Height + 12 * unit / 96);
+        int desiredWidth = 220 * unit / 96;
+        foreach (string file in files) desiredWidth = Math.Max(desiredWidth,
+            TextRenderer.MeasureText(Path.GetFileNameWithoutExtension(file), font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width + 50 * unit / 96);
+        Size = new Size(Math.Min(Math.Min(280 * unit / 96, desiredWidth), maximum.Width), Math.Min(pad * 2 + header + gap * 2 + searchHeight + row * Math.Min(6, Math.Max(1, files.Length)), maximum.Height));
+        heading.SetBounds(pad, pad, Math.Max(1, Width - pad * 2 - 44 * unit / 96), header);
+        count.SetBounds(heading.Right, pad, 44 * unit / 96, header);
+        searchFrame.SetBounds(pad, heading.Bottom + gap, Math.Max(1, Width - pad * 2), searchHeight);
+        Search.SetBounds(pad, (searchHeight - Search.PreferredHeight) / 2, Math.Max(1, searchFrame.Width - pad * 2), Search.PreferredHeight);
+        searchFrame.BackColor = BackColor; searchFrame.Controls.Add(Search);
+        searchFrame.Paint += delegate(object sender, PaintEventArgs e) {
+            Rectangle r = new Rectangle(0, 0, searchFrame.Width - 1, searchFrame.Height - 1); int radius = 6 * unit / 96;
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath()) using (var pen = new Pen(Search.Focused ? VerbitUi.Accent : VerbitUi.Border)) {
+                path.AddArc(r.Left, r.Top, radius * 2, radius * 2, 180, 90); path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90);
+                path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddArc(r.Left, r.Bottom - radius * 2, radius * 2, radius * 2, 90, 90); path.CloseFigure();
+                e.Graphics.DrawPath(pen, path);
+            }
+        };
+        Search.GotFocus += delegate { searchFrame.Invalidate(); }; Search.LostFocus += delegate { searchFrame.Invalidate(); };
+        int barWidth = Math.Max(8, 10 * unit / 96);
+        viewport.SetBounds(pad, searchFrame.Bottom + gap, Math.Max(1, Width - pad * 2 - barWidth), Math.Max(1, Height - searchFrame.Bottom - gap - pad));
+        Results.SetBounds(0, 0, viewport.Width + SystemInformation.VerticalScrollBarWidth + 2, viewport.Height);
+        Results.ItemHeight = row; viewport.Controls.Add(Results);
+        ListScroll.SetBounds(viewport.Right, viewport.Top, barWidth, viewport.Height); ListScroll.BackColor = BackColor; ListScroll.Target = Results;
+        Results.Scrolled = delegate { ListScroll.Invalidate(); };
+        Results.SelectedIndexChanged += delegate { ListScroll.Invalidate(); };
+        empty.Bounds = new Rectangle(viewport.Location, new Size(viewport.Width + barWidth, viewport.Height));
+        Controls.AddRange(new Control[] { heading, count, searchFrame, viewport, ListScroll, empty });
         Results.DrawItem += delegate(object sender, DrawItemEventArgs e) {
             if (e.Index < 0) return;
             bool active = (e.State & DrawItemState.Selected) != 0;
             using (var brush = new SolidBrush(VerbitMenuRenderer.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
-            if (active) using (var brush = new SolidBrush(VerbitMenuRenderer.Hover)) e.Graphics.FillRectangle(brush, Rectangle.Inflate(e.Bounds, -Math.Max(1, 2 * unit / 96), -1));
+            Rectangle rowBounds = new Rectangle(0, e.Bounds.Top, viewport.Width, e.Bounds.Height);
+            if (active) VerbitUi.ToolBackground(e.Graphics, Rectangle.Inflate(rowBounds, 0, -2 * unit / 96), VerbitMenuRenderer.Surface, VerbitMenuRenderer.Hover, 1, unit);
             Color ink = active && SystemInformation.HighContrast ? SystemColors.HighlightText : VerbitMenuRenderer.Ink;
             string name = (string)Results.Items[e.Index]; bool isCurrent = String.Equals(name, current, StringComparison.OrdinalIgnoreCase);
-            Rectangle text = Rectangle.Inflate(e.Bounds, -8 * unit / 96, 0);
+            Rectangle text = Rectangle.Inflate(rowBounds, -8 * unit / 96, 0);
             if (isCurrent) { int diameter = 5 * unit / 96; using (var brush = new SolidBrush(active && SystemInformation.HighContrast ? ink : VerbitMenuRenderer.Accent)) e.Graphics.FillEllipse(brush, text.Left, text.Top + (text.Height - diameter) / 2, diameter, diameter); }
             text.X += 13 * unit / 96; text.Width -= 13 * unit / 96;
             TextRenderer.DrawText(e.Graphics, Path.GetFileNameWithoutExtension(name), Font, text, ink, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
@@ -356,7 +465,7 @@ internal sealed class QuickNoteRecentPicker : UserControl {
         foreach (string file in files) if (file.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) Results.Items.Add(file);
         int selected = Results.Items.IndexOf(current); Results.SelectedIndex = Results.Items.Count == 0 ? -1 : Math.Max(0, selected);
         Results.EndUpdate(); empty.Visible = Results.Items.Count == 0; Results.Visible = !empty.Visible;
-        heading.Text = "最近便签 · " + Results.Items.Count;
+        count.Text = Results.Items.Count.ToString(CultureInfo.InvariantCulture); ListScroll.Invalidate();
     }
 }
 

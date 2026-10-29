@@ -6,6 +6,11 @@ using System.Windows.Forms;
 
 // Synthetic menus on a private desktop; no clipboard, input injection or audio.
 internal static class TestVerbitMenus {
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, uint operation);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
     static int assertions;
     static void Check(bool value, string message) { assertions++; if (!value) throw new Exception(message); }
     static void Pump() { Application.DoEvents(); System.Threading.Thread.Sleep(25); Application.DoEvents(); }
@@ -14,10 +19,66 @@ internal static class TestVerbitMenus {
             strip.DrawToBitmap(bitmap, new Rectangle(Point.Empty, strip.Size)); bitmap.Save(file);
         }
     }
+    static void CaptureHosted(ToolStrip strip, string file) {
+        // DrawToBitmap paints native children beyond a clipping panel. Capture
+        // the presented HWND to verify that the old list scrollbar is clipped.
+        using (var bitmap = new Bitmap(strip.Width, strip.Height)) using (var graphics = Graphics.FromImage(bitmap)) {
+            IntPtr dc = graphics.GetHdc();
+            try { Check(PrintWindow(strip.Handle, dc, 0), "Hosted recent picker native capture succeeds"); }
+            finally { graphics.ReleaseHdc(dc); }
+            bitmap.Save(file);
+        }
+    }
+    static int Ink(Bitmap bitmap, Rectangle area) {
+        int count = 0;
+        for (int y = area.Top; y < area.Bottom; y++) for (int x = area.Left; x < area.Right; x++) {
+            Color pixel = bitmap.GetPixel(x, y);
+            if (pixel.R < 150 && pixel.G < 160 && pixel.B < 180) count++;
+        }
+        return count;
+    }
+    static void CheckPresentedRows(QuickNoteRecentPicker picker, string file) {
+        // Copy the current native pixels without asking PrintWindow/DrawToBitmap
+        // to repaint every row, which would mask incremental selection damage.
+        int width = picker.Results.Parent.ClientSize.Width, height = picker.Results.ClientSize.Height;
+        using (var bitmap = new Bitmap(width, height)) using (var graphics = Graphics.FromImage(bitmap)) {
+            IntPtr source = GetDC(picker.Results.Handle), target = graphics.GetHdc();
+            try { Check(BitBlt(target, 0, 0, width, height, source, 0, 0, 0x00CC0020), "Presented list pixels can be captured without repaint"); }
+            finally { graphics.ReleaseHdc(target); ReleaseDC(picker.Results.Handle, source); }
+            int row = picker.Results.ItemHeight, top = picker.Results.TopIndex;
+            int visible = Math.Min(height / row, picker.Results.Items.Count - top);
+            for (int i = 0; i < visible; i++)
+                Check(Ink(bitmap, new Rectangle(24 * picker.DeviceDpi / 96, i * row, width - 24 * picker.DeviceDpi / 96, row)) > 0,
+                    "Visible row retains text after " + Path.GetFileNameWithoutExtension(file) + ": " + (top + i));
+            bitmap.Save(file);
+        }
+    }
+    static void CheckPartialPainting() {
+        foreach (int dpi in new[] { 96, 120, 144, 192, 240, 288 })
+        using (var font = new Font("Microsoft YaHei UI", 12f * dpi / 96, FontStyle.Regular, GraphicsUnit.Pixel))
+        using (var picker = new QuickNoteRecentPicker(new[] { "第一份记录.md", "第二份记录.md", "第三份记录.md", "第四份记录.md", "第五份记录.md", "第六份记录.md" }, "第三份记录.md", font, dpi, new Size(900, 1000))) {
+            int width = picker.Results.Parent.Width, row = picker.Results.ItemHeight;
+            using (var bitmap = new Bitmap(width, row * 6)) using (var graphics = Graphics.FromImage(bitmap)) {
+                MethodInfo draw = typeof(ListBox).GetMethod("OnDrawItem", BindingFlags.Instance | BindingFlags.NonPublic);
+                graphics.Clear(Color.White);
+                for (int i = 0; i < 6; i++) draw.Invoke(picker.Results, new object[] { new DrawItemEventArgs(graphics, font, new Rectangle(0, i * row, width, row), i, DrawItemState.None) });
+                for (int selected = 0; selected < 6; selected++) using (var before = (Bitmap)bitmap.Clone()) {
+                    var area = new Rectangle(0, selected * row, width, row);
+                    draw.Invoke(picker.Results, new object[] { new DrawItemEventArgs(graphics, font, area, selected, DrawItemState.Selected) });
+                    bool unchanged = true;
+                    for (int y = 0; y < bitmap.Height && unchanged; y++) if (y < area.Top || y >= area.Bottom)
+                        for (int x = 0; x < width; x++) if (before.GetPixel(x, y) != bitmap.GetPixel(x, y)) { unchanged = false; break; }
+                    Check(unchanged, "Partial selected-row drawing preserves every other pixel at " + dpi + "; row=" + selected);
+                    for (int i = 0; i < 6; i++) Check(Ink(bitmap, new Rectangle(24 * dpi / 96, i * row, width - 24 * dpi / 96, row)) > 0, "All row text remains after partial redraw at " + dpi);
+                }
+            }
+        }
+    }
     [STAThread] static int Main(string[] args) {
         try {
             Application.EnableVisualStyles();
             string folder = args[0];
+            CheckPartialPainting();
             using (var owner = new Form { Text = "verbit synthetic menu fixture", Size = new Size(800, 600) }) {
                 owner.Show(); Pump();
                 foreach (int dpi in new[] { 96, 120, 144, 192, 240, 288 }) using (var menu = new VerbitMenu()) {
@@ -71,20 +132,75 @@ internal static class TestVerbitMenus {
                     menu.Items[6].PerformClick(); Check(field.SelectionLength == field.TextLength, "Select all uses the field's native selection");
                     field.Dispose(); Check(menu.IsDisposed, "Text-menu resources follow their owning field");
                 }
-                using (var hosted = new VerbitMenu()) {
+                foreach (var screen in Screen.AllScreens) using (var hosted = new VerbitMenu()) {
+                    owner.Location = new Point(screen.WorkingArea.Left + 20, screen.WorkingArea.Top + 20); Pump();
                     hosted.ApplyStyle(owner.DeviceDpi);
-                    using (var picker = new QuickNoteRecentPicker(new[] { "演示便签.md" }, "演示便签.md", hosted.Font, owner.DeviceDpi, new Size(350 * owner.DeviceDpi / 96, 450 * owner.DeviceDpi / 96))) {
+                    var noteNames = new string[41]; noteNames[0] = "演示便签.md";
+                    for (int i = 1; i < noteNames.Length; i++) noteNames[i] = "便签列表验证-" + i + ".md";
+                    using (var picker = new QuickNoteRecentPicker(noteNames, "演示便签.md", hosted.Font, owner.DeviceDpi, new Size(350 * owner.DeviceDpi / 96, 450 * owner.DeviceDpi / 96))) {
                     hosted.Items.Add(new ToolStripControlHost(picker) { AutoSize = false, Size = picker.Size, Margin = Padding.Empty, Padding = Padding.Empty });
                     hosted.ShowImageMargin = hosted.ShowCheckMargin = false; hosted.Padding = new Padding(1);
                     var before = picker.Size; hosted.Show(owner, new Point(8, 8)); Pump();
                     Check(before == picker.Size, "Recent-note search popup retains its own layout");
                     Check(hosted.ClientSize.Width >= picker.Width + hosted.Padding.Horizontal && hosted.Items[0].Width >= picker.Width, "Hosted popup clears the stale normal-menu width cap so the search and long names are not clipped");
+                    Check(hosted.ClientSize.Width <= picker.Width + hosted.Padding.Horizontal + 1,
+                        "Hosted picker has no reserved right command gutter: menu=" + hosted.ClientSize + "; picker=" + picker.Size);
+                    Check(picker.Width <= 280 * owner.DeviceDpi / 96, "Picker width follows compact filename measure rather than a fixed wide sheet");
                     Check(picker.Search.ContextMenuStrip is VerbitMenu, "The recent-note search field also uses the common menu");
                     Check(picker.Font.Unit == GraphicsUnit.Pixel && Math.Abs(picker.Font.Size - 12f * owner.DeviceDpi / 96) < .01, "More-notes text uses the common menu font rather than the editor font");
                     Check(picker.BackColor == VerbitMenuRenderer.Surface && picker.Results.ForeColor == VerbitMenuRenderer.Ink, "More-notes surface and foreground match every other menu");
+                    Console.WriteLine("Recent dpi=" + owner.DeviceDpi + "; picker=" + picker.Size + "; viewport=" + picker.Results.Parent.Bounds + "; list=" + picker.Results.Bounds + "; bar=" + picker.ListScroll.Bounds + "; font=" + picker.Font);
                     Check(picker.Results.ItemHeight <= 28 * owner.DeviceDpi / 96 && picker.Results.ItemHeight >= picker.Font.Height + 8 * owner.DeviceDpi / 96, "More-notes uses compact rows with complete Chinese glyphs");
-                    Capture(hosted, Path.Combine(folder, "recent-picker.png"));
+                    CaptureHosted(hosted, Path.Combine(folder, "recent-picker.png"));
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-open-" + owner.DeviceDpi + ".png"));
+                    for (int hover = 0; hover < 6; hover++) {
+                        typeof(Control).GetMethod("OnMouseMove", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(picker.Results,
+                            new object[] { new MouseEventArgs(MouseButtons.None, 0, 30, hover * picker.Results.ItemHeight + picker.Results.ItemHeight / 2, 0) });
+                        Pump();
+                        Check(picker.Results.SelectedIndex == hover, "Hover selects its real native row");
+                        CheckPresentedRows(picker, Path.Combine(folder, "presented-hover-" + owner.DeviceDpi + "-" + hover + ".png"));
+                    }
+                    SendMessage(picker.Results.Handle, 0x100, new IntPtr((int)Keys.Up), IntPtr.Zero); Pump();
+                    Check(picker.Results.SelectedIndex == 4, "Native keyboard selection still changes the selected row");
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-keyboard-" + owner.DeviceDpi + ".png"));
+                    SendMessage(picker.Results.Handle, 0x115, new IntPtr(1), IntPtr.Zero); Pump();
+                    Check(picker.Results.TopIndex > 0, "Native line scroll moves the list");
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-line-scroll-" + owner.DeviceDpi + ".png"));
+                    int wheelBefore = picker.Results.TopIndex;
+                    SendMessage(picker.Results.Handle, 0x20a, new IntPtr(-120 << 16), IntPtr.Zero); Pump();
+                    Check(picker.Results.TopIndex > wheelBefore, "Native wheel scrolling moves the list");
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-wheel-" + owner.DeviceDpi + ".png"));
+                    Check(!picker.ListScroll.ThumbBounds.IsEmpty && picker.ListScroll.Width <= 10 * owner.DeviceDpi / 96, "Overflow exposes a small dedicated scrollbar hit area");
+                    Rectangle thumbBefore = picker.ListScroll.ThumbBounds;
+                    typeof(Control).GetMethod("OnMouseDown", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(picker.ListScroll,
+                        new object[] { new MouseEventArgs(MouseButtons.Left, 1, picker.ListScroll.Width / 2, picker.ListScroll.Height - 2, 0) });
+                    typeof(Control).GetMethod("OnMouseUp", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(picker.ListScroll,
+                        new object[] { new MouseEventArgs(MouseButtons.Left, 1, picker.ListScroll.Width / 2, picker.ListScroll.Height - 2, 0) }); Pump();
+                    Check(picker.Results.TopIndex > 0 && picker.ListScroll.ThumbBounds.Top > thumbBefore.Top, "The slim scrollbar scrolls the real native list");
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-thumb-" + owner.DeviceDpi + ".png"));
+                    CaptureHosted(hosted, Path.Combine(folder, "recent-picker-overflow-" + owner.DeviceDpi + ".png"));
+                    picker.Search.Text = "演示"; Pump();
+                    Check(picker.Results.Items.Count == 1 && picker.Results.TopIndex == 0 && picker.ListScroll.ThumbBounds.IsEmpty, "Filtering clears stale scroll range and hides an unnecessary thumb");
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-filter-" + owner.DeviceDpi + ".png"));
+                    picker.Search.Text = "没有此名称"; Pump();
+                    Check(picker.Results.Items.Count == 0 && picker.ListScroll.ThumbBounds.IsEmpty, "Empty search results never retain an old scrollbar");
+                    picker.Search.Text = ""; Pump();
+                    Check(picker.Results.Items.Count == noteNames.Length, "Clearing search restores all filenames");
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-filter-clear-" + owner.DeviceDpi + ".png"));
+                    hosted.Close(); hosted.Show(owner, new Point(8, 8)); Pump();
+                    CheckPresentedRows(picker, Path.Combine(folder, "presented-reopen-" + owner.DeviceDpi + ".png"));
                     hosted.Close();
+                    }
+                    using (var freshMenu = new VerbitMenu()) {
+                        freshMenu.ApplyStyle(owner.DeviceDpi);
+                        using (var freshPicker = new QuickNoteRecentPicker(noteNames, noteNames[2], freshMenu.Font, owner.DeviceDpi, new Size(350 * owner.DeviceDpi / 96, 450 * owner.DeviceDpi / 96))) {
+                            freshMenu.ShowImageMargin = freshMenu.ShowCheckMargin = false; freshMenu.Padding = new Padding(1);
+                            freshMenu.Items.Add(new ToolStripControlHost(freshPicker) { AutoSize = false, Size = freshPicker.Size, Margin = Padding.Empty, Padding = Padding.Empty });
+                            freshMenu.Show(owner, new Point(8, 8)); Pump();
+                            Check(freshPicker.Results.Items.Count == noteNames.Length && freshPicker.Search.Text == "", "Recreating the popup restores all files and a fresh search");
+                            CheckPresentedRows(freshPicker, Path.Combine(folder, "presented-recreated-" + owner.DeviceDpi + ".png"));
+                            freshMenu.Close();
+                        }
                     }
                 }
                 owner.Close();

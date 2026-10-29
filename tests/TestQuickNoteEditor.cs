@@ -588,7 +588,26 @@ internal static class TestQuickNoteEditor {
             NativeRectangle tipBounds; GetWindowRect(railTipHandle, out tipBounds);
             Check(IsWindowVisible(railTipHandle) && !Rectangle.FromLTRB(tipBounds.Left, tipBounds.Top, tipBounds.Right, tipBounds.Bottom).IntersectsWith(rail.Bounds), "Real tab tooltip displays the full filename outside the entire hover rail");
             Check(!Rectangle.FromLTRB(tipBounds.Left, tipBounds.Top, tipBounds.Right, tipBounds.Bottom).IntersectsWith(window.Bounds), "Tab filename tooltip never covers the note content or header");
+            int tipGap = rail.OnRight ? tipBounds.Left - rail.Right : rail.Left - tipBounds.Right;
+            Check(tipGap >= 0 && tipGap <= 8 * rail.DeviceDpi / 96, "Filename tooltip stays beside its actual rail rather than jumping across the note; gap=" + tipGap + "; rail=" + rail.Bounds + "; tip=" + Rectangle.FromLTRB(tipBounds.Left, tipBounds.Top, tipBounds.Right, tipBounds.Bottom) + "; right=" + rail.OnRight + "; dpi=" + rail.DeviceDpi);
             Rectangle screen = Screen.FromControl(window).WorkingArea;
+            Point beforeRightRail = window.Location;
+            Call(rail, "OnMouseLeave", EventArgs.Empty);
+            window.Location = new Point(screen.Left + 8, screen.Top + 120); Call(window, "PositionTabs");
+            Call(rail, "OnMouseMove", new MouseEventArgs(MouseButtons.None, 0, rail.Width / 2, targetRow * (36 * rail.DeviceDpi / 96) + 10, 0)); Pump(80);
+            GetWindowRect(railTipHandle, out tipBounds);
+            Rectangle rightTip = Rectangle.FromLTRB(tipBounds.Left, tipBounds.Top, tipBounds.Right, tipBounds.Bottom);
+            Check(rail.OnRight && IsWindowVisible(railTipHandle), "A left-edge note shows the full filename on the right of its right-side rail");
+            var filenameFont = (Font)Field(rail, "fileTipFont");
+            Check(filenameFont.Unit == GraphicsUnit.Pixel && Math.Abs(filenameFont.Size - 12f * rail.DeviceDpi / 96) < .01,
+                "Filename tooltip uses the shared compact menu role without system-font DPI inflation");
+            Check(rightTip.Left - rail.Right >= 0 && rightTip.Left - rail.Right <= 8 * rail.DeviceDpi / 96
+                && screen.Contains(rightTip) && !rightTip.IntersectsWith(window.Bounds), "Right-side tooltip is close, on screen, and never crosses the note");
+            using (var frame = new Bitmap(rightTip.Width, rightTip.Height)) using (var graphics = Graphics.FromImage(frame)) {
+                IntPtr dc = graphics.GetHdc(); try { Check(PrintWindow(railTipHandle, dc, 0), "Capture actual filename tooltip"); } finally { graphics.ReleaseHdc(dc); }
+                frame.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tab-tooltip-right.png"));
+            }
+            Call(rail, "OnMouseLeave", EventArgs.Empty); window.Location = beforeRightRail; Call(window, "PositionTabs");
             foreach (Point edge in new[] { new Point(screen.Left, screen.Top + 100), new Point(screen.Right - window.Width, screen.Top + 100) }) {
                 window.Location = edge; Call(window, "PositionTabs"); Call(rail, "ShowFileTip", "完整文件名.md\n悬停预览 · 点击切换"); Pump(30);
                 GetWindowRect(railTipHandle, out tipBounds);

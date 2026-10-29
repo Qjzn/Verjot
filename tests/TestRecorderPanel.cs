@@ -8,6 +8,7 @@ internal static class TestRecorderPanel {
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetWindowLong(IntPtr window, int index);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     static int assertions;
     static void Check(bool condition, string message) {
         assertions++;
@@ -120,6 +121,7 @@ internal static class TestRecorderPanel {
                 int unit = (int)Math.Round(40 * panel.DeviceDpi / 96.0); IntPtr handle = panel.Handle;
                 Check(panel.ClientSize == new Size(unit, unit), "Shared idle window defaults to logo only at actual monitor DPI");
                 Check(!panel.QuickNoteButton.Visible && !panel.BrandTitle.Visible, "Collapsed shared window hides all duplicate branding and tools");
+                Check(!panel.CloseButton.Visible, "Logo-only form does not expose the expanded close button");
                 Check(SetWindowPos(handle, new IntPtr(-2), 0, 0, 0, 0, 0x13), "Isolated fixture can simulate lost native topmost state");
                 Check((GetWindowLong(handle,-20)&8)!=0,"The shared dock restores a lost native topmost band immediately on the position event");
                 panel.SetDockExpanded(true); SettleDock(panel);
@@ -127,6 +129,13 @@ internal static class TestRecorderPanel {
                 Console.WriteLine("SHARED expanded " + panel.Bounds + "; target=" + typeof(RecorderPanel).GetField("dockExpanded", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; progress=" + typeof(RecorderPanel).GetField("dockProgress", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; tools=" + panel.QuickNoteButton.Visible + "/" + panel.StartButton.Visible + "/" + panel.SettingsButton.Visible);
                 Check(panel.Width == (int)Math.Round(186*panel.DeviceDpi/96.0) && panel.Height == (int)Math.Round(68*panel.DeviceDpi/96.0) && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "The shared window expands to a brand header and common actions");
                 Snapshot(panel, Path.Combine(output, "shared-idle-" + panel.DeviceDpi + ".png"), true);
+                Check(panel.CloseButton.Visible && panel.CloseButton.ActionIcon == "close", "Expanded header retains an independent X close action");
+                Check(panel.CloseButton.Parent.ClientRectangle.Contains(panel.CloseButton.Bounds)
+                    && !panel.CloseButton.Bounds.IntersectsWith(panel.BrandTitle.Bounds), "Close action fits header without covering centered name");
+                panel.CloseButton.PerformClick(); Pump(60);
+                Check(!panel.Visible && !panel.IsDisposed && panel.Handle == handle, "X hides the floating window without destroying it");
+                panel.Show(); panel.SetDockExpanded(true); SettleDock(panel);
+                Check(panel.Visible && panel.CloseButton.Visible && panel.Handle == handle, "Show entry restores the same floating window after X");
                 int logoResizes = 0, actionMoves = 0;
                 panel.BrandMark.SizeChanged += delegate { logoResizes++; };
                 panel.QuickNoteButton.LocationChanged += delegate { actionMoves++; };
@@ -135,6 +144,11 @@ internal static class TestRecorderPanel {
                 Check(panel.Handle == handle && typeof(RecorderPanel).Assembly.GetType("QuickNoteCompact") == null, "No independent minimized-note form remains in the application");
                 panel.ShowRecording("Synthetic microphone", "Synthetic system"); SettleDock(panel);
                 Check(panel.Handle == handle && panel.MicrophoneButton.Visible && panel.StopButton.Visible && panel.Time.Visible, "Recording reuses the same window and restores the original capture controls");
+                int stopClicks = 0; panel.StopButton.Click += delegate { stopClicks++; };
+                panel.CloseButton.PerformClick(); Pump(60);
+                Check(!panel.Visible && !panel.IsDisposed && stopClicks == 0, "X during recording hides UI without invoking stop");
+                panel.Show(); panel.SetDockExpanded(true); SettleDock(panel);
+                Check(panel.MicrophoneButton.Visible && panel.StopButton.Visible, "Recording controls survive hide and restore");
                 Snapshot(panel, Path.Combine(output, "shared-recording-" + panel.DeviceDpi + ".png"), true);
                 panel.ShowWorking("正在本地转写", "识别文字"); SettleDock(panel);
                 var animation = (System.Windows.Forms.Timer)typeof(RecorderPanel).GetField("dockAnimation", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel);
@@ -153,7 +167,9 @@ internal static class TestRecorderPanel {
                 Check(panel.Handle == handle && panel.Heading.Text.Contains("失败") && panel.QuickNoteButton.Visible, "Failure feedback and actions reuse the same shared window");
                 Snapshot(panel, Path.Combine(output, "shared-attention-" + panel.DeviceDpi + ".png"), true);
                 panel.ShowResult("synthetic", "C:\\Demo\\verbit.mp3", "C:\\Demo\\verbit.md", "C:\\Demo"); panel.SetDockExpanded(true); SettleDock(panel);
-                Check(panel.AudioFile.Visible && panel.TranscriptFile.Visible && panel.Handle == handle, "Result paths remain available on the single shared window");
+                Check(!panel.AudioFile.Visible && !panel.TranscriptFile.Visible && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible && panel.Handle == handle,
+                    "Completed shared panel retains common actions without permanent path labels");
+                Check(panel.QuickNoteButton.Bottom <= panel.QuickNoteButton.Parent.Height - (int)Math.Round(8 * panel.DeviceDpi / 96.0), "Shared actions have an eight-logical-pixel bottom breathing space");
                 panel.SetDockExpanded(false); SettleDock(panel);
                 panel.Location = new Point(screen.WorkingArea.Right - unit - 4, screen.WorkingArea.Bottom - unit - 4);
                 panel.SetDockExpanded(true); SettleDock(panel);
@@ -175,6 +191,7 @@ internal static class TestRecorderPanel {
             Application.EnableVisualStyles();
             string output = args.Length > 0 ? Path.GetFullPath(args[0]) : AppDomain.CurrentDomain.BaseDirectory;
             Directory.CreateDirectory(output);
+            CheckNotice(output);
             if (Array.IndexOf(args, "--shared-only") >= 0) { CheckSharedDock(output); Console.WriteLine("PASS shared dock assertions=" + assertions); return 0; }
             if (Array.IndexOf(args, "--screen-matrix") >= 0) { CheckMonitorMatrix(output); Console.WriteLine("PASS monitor matrix: " + assertions); return 0; }
             CheckMonitorMatrix(Path.Combine(output, "dpi-matrix"));
@@ -295,6 +312,42 @@ internal static class TestRecorderPanel {
         } catch (Exception error) {
             Console.Error.WriteLine(error);
             return 1;
+        }
+    }
+    static void CheckNotice(string output) {
+        using (var notice = new RecorderNotice()) using (var editor = new Form()) {
+            editor.Show(); editor.Activate(); Pump(20);
+            int clicks = 0;
+            foreach (Screen screen in Screen.AllScreens) {
+                int dpi = 96;
+                using (var probe = new Form { AutoScaleMode = AutoScaleMode.None, StartPosition = FormStartPosition.Manual }) {
+                    probe.Show(); probe.Location = new Point(screen.WorkingArea.Left + 60, screen.WorkingArea.Top + 60); Pump(80); dpi = probe.DeviceDpi;
+                }
+                Rectangle anchor = new Rectangle(screen.WorkingArea.Right - 190, screen.WorkingArea.Top + 4, 186, 68);
+                IntPtr focused = GetForegroundWindow();
+                notice.Present("录音已保存，点击查看", "C:\\会议记录\\verbit202610291235.mp3", delegate { clicks++; }, anchor, dpi); Pump(50);
+                Check(GetForegroundWindow() == focused, "Showing a receipt never changes native foreground focus");
+                Check(notice.ClientSize == new Size((int)Math.Round(320 * notice.DeviceDpi / 96.0), (int)Math.Round(64 * notice.DeviceDpi / 96.0))
+                    && notice.Caption.Font.Unit == GraphicsUnit.Pixel && Math.Abs(notice.Caption.Font.Size - 12f * notice.DeviceDpi / 96f) < .01,
+                    "Receipt size and pixel typography match the actual monitor after native DPI delivery");
+                Check(screen.WorkingArea.Contains(notice.Bounds), "Receipt stays within actual monitor work area");
+                Check(!notice.Bounds.IntersectsWith(anchor), "Receipt chooses below a top-edge panel rather than covering its controls");
+                Check(notice.Caption.Bottom < notice.LocationText.Top && notice.LocationText.Bottom < notice.ClientSize.Height, "Both receipt lines have clear spacing and fit at actual monitor DPI");
+                Check(notice.PendingDismiss && notice.ShowInTaskbar == false && notice.TopMost, "Receipt is transient and has no taskbar window");
+                using (var bitmap = new Bitmap(notice.Width, notice.Height)) {
+                    using (var graphics = Graphics.FromImage(bitmap)) { IntPtr dc = graphics.GetHdc(); try { Check(PrintWindow(notice.Handle, dc, 0), "Receipt native capture"); } finally { graphics.ReleaseHdc(dc); } }
+                    bitmap.Save(Path.Combine(output, "receipt-" + dpi + ".png"));
+                }
+                notice.ActivateNotice(); Check(clicks > 0 && !notice.Visible && !notice.PendingDismiss, "Click hides receipt, stops timer and dispatches the exact saved action");
+            }
+            IntPtr handle = notice.Handle;
+            notice.Present("转写失败，点击重试", "接口超时，录音已保留", delegate { clicks++; }, editor.Bounds, editor.DeviceDpi);
+            Pump(1600);
+            notice.Present("录音已保存，点击查看", "D:\\新会议\\verbit.mp3", delegate { clicks += 10; }, editor.Bounds, editor.DeviceDpi);
+            Pump(1600); Check(notice.Visible && notice.Handle == handle, "A new receipt restarts the three-second lifetime on the same window");
+            int before = clicks; Pump(1550);
+            Check(!notice.Visible && !notice.PendingDismiss && clicks == before, "Three-second dismissal performs no file, retry or focus action and stops its timer");
+            editor.Close();
         }
     }
 }

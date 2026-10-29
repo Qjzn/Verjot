@@ -1653,6 +1653,90 @@ internal sealed class RecorderBrandLabel : Label {
         base.Dispose(disposing);
     }
 }
+// A single reusable, non-activating receipt. Its timer runs only while shown;
+// it does not reopen the dock or take focus from the user's current editor.
+internal sealed class RecorderNotice : Form {
+    internal readonly Label Caption = new Label { TextAlign = ContentAlignment.MiddleLeft };
+    internal readonly Label LocationText = new ReceiptPathLabel();
+    readonly System.Windows.Forms.Timer dismiss = new System.Windows.Forms.Timer { Interval = 3000 };
+    readonly ToolTip tip = new ToolTip();
+    Font noticeFont;
+    int noticeDpi;
+    Action clicked;
+    sealed class ReceiptPathLabel : Label {
+        protected override void OnPaint(PaintEventArgs e) {
+            e.Graphics.Clear(BackColor);
+            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
+                TextFormatFlags.PathEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+    }
+    internal bool PendingDismiss { get { return dismiss.Enabled; } }
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams { get { var p = base.CreateParams; p.ExStyle |= 0x08000080; return p; } }
+    internal RecorderNotice() {
+        FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; AutoScaleMode = AutoScaleMode.None;
+        StartPosition = FormStartPosition.Manual; BackColor = VerbitUi.Surface; DoubleBuffered = true;
+        Controls.AddRange(new Control[] { Caption, LocationText });
+        foreach (Control surface in new Control[] { this, Caption, LocationText }) surface.Click += delegate { ActivateNotice(); };
+        dismiss.Tick += delegate { Hide(); };
+    }
+    internal void Present(string caption, string location, Action action, Rectangle anchor, int dpi) {
+        dismiss.Stop(); clicked = action;
+        Caption.Text = caption; Caption.ForeColor = VerbitUi.Ink;
+        LocationText.Text = location; LocationText.ForeColor = VerbitUi.Muted;
+        AccessibleName = caption; AccessibleDescription = location;
+        Cursor = action == null ? Cursors.Default : Cursors.Hand;
+        tip.SetToolTip(LocationText, location);
+        LayoutReceipt(anchor, dpi);
+        Show();
+        // Initial show and cross-monitor moves can apply a native DPI change.
+        // Restore the pixel roles after it rather than retaining scaled copies.
+        LayoutReceipt(anchor, DeviceDpi);
+        Invalidate(); dismiss.Start();
+    }
+    void LayoutReceipt(Rectangle anchor, int dpi) {
+        int unit = Math.Max(96, dpi); float scale = unit / 96f;
+        Font previous = null;
+        if (noticeFont == null || noticeDpi != unit) {
+            previous = noticeFont; noticeDpi = unit; noticeFont = new Font("Microsoft YaHei UI", 12 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
+        }
+        Caption.Font = LocationText.Font = noticeFont;
+        if (previous != null) previous.Dispose();
+        Rectangle area = Screen.FromRectangle(anchor).WorkingArea;
+        ClientSize = new Size(Math.Min((int)Math.Round(320 * scale), area.Width - 8), (int)Math.Round(64 * scale));
+        int pad = (int)Math.Round(12 * scale), line = Math.Max(noticeFont.Height, (int)Math.Round(20 * scale));
+        Caption.SetBounds(pad, (int)Math.Round(9 * scale), Width - pad * 2, line);
+        LocationText.SetBounds(pad, (int)Math.Round(33 * scale), Width - pad * 2, line);
+        int gap = (int)Math.Round(8 * scale);
+        int x = Math.Max(area.Left + 4, Math.Min(area.Right - Width - 4, anchor.Right - Width));
+        int y = anchor.Top - Height - gap;
+        if (y < area.Top + 4) y = anchor.Bottom + gap;
+        Location = new Point(x, Math.Max(area.Top + 4, Math.Min(area.Bottom - Height - 4, y)));
+        using (var path = new System.Drawing.Drawing2D.GraphicsPath()) {
+            int r = (int)Math.Round(10 * scale), d = r * 2;
+            path.AddArc(0, 0, d, d, 180, 90); path.AddArc(Width - d, 0, d, d, 270, 90);
+            path.AddArc(Width - d, Height - d, d, d, 0, 90); path.AddArc(0, Height - d, d, d, 90, 90); path.CloseFigure();
+            Region old = Region; Region = new Region(path); if (old != null) old.Dispose();
+        }
+    }
+    internal void ActivateNotice() { Action action = clicked; Hide(); if (action != null) action(); }
+    protected override void OnVisibleChanged(EventArgs e) { if (!Visible) { dismiss.Stop(); clicked = null; } base.OnVisibleChanged(e); }
+    protected override void OnPaint(PaintEventArgs e) {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        int d = (int)Math.Round(20 * noticeDpi / 96.0);
+        using (var path = new System.Drawing.Drawing2D.GraphicsPath()) using (var pen = new Pen(VerbitUi.Border)) {
+            path.AddArc(.5f, .5f, d, d, 180, 90); path.AddArc(Width - d - 1.5f, .5f, d, d, 270, 90);
+            path.AddArc(Width - d - 1.5f, Height - d - 1.5f, d, d, 0, 90); path.AddArc(.5f, Height - d - 1.5f, d, d, 90, 90); path.CloseFigure();
+            e.Graphics.DrawPath(pen, path);
+        }
+    }
+    protected override void Dispose(bool disposing) {
+        if (disposing) { dismiss.Dispose(); tip.Dispose(); if (noticeFont != null) noticeFont.Dispose(); }
+        base.Dispose(disposing);
+    }
+}
+
 internal sealed class RecorderPanel : Form {
     public readonly LinkLabel Heading = new LinkLabel { LinkArea = new LinkArea(0, 0), LinkBehavior = LinkBehavior.HoverUnderline, TabStop = false };
     public readonly Label Time = new Label();
@@ -1666,6 +1750,7 @@ internal sealed class RecorderPanel : Form {
     public readonly RecorderActionButton QuickNoteButton = new RecorderActionButton { QuickAction = "note", Visible = false };
     public readonly RecorderActionButton StartButton = new RecorderActionButton { QuickAction = "record", Visible = false };
     public readonly RecorderActionButton SettingsButton = new RecorderActionButton { QuickAction = "settings", Visible = false };
+    public readonly QuickNoteHeaderButton CloseButton = new QuickNoteHeaderButton { ActionIcon = "close", Cursor = Cursors.Hand, ForeColor = VerbitUi.Muted };
     public readonly PictureBox BrandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom };
     public readonly Label BrandTitle = new RecorderBrandLabel();
     public readonly RecordingLevelIndicator AudioLevel = new RecordingLevelIndicator();
@@ -1791,6 +1876,9 @@ internal sealed class RecorderPanel : Form {
         QuickNoteButton.SetBounds(18, 28, 32, 32);
         StartButton.SetBounds(77, 28, 32, 32);
         SettingsButton.SetBounds(136, 28, 32, 32);
+        CloseButton.SetBounds(160, 2, 24, 24);
+        CloseButton.AccessibleName = CloseButton.Text = "关闭浮窗";
+        CloseButton.Click += delegate { Close(); };
         BrandMark.SetBounds(63, 4, 16, 16);
         RefreshBrandBitmap();
         BrandMark.SizeChanged += delegate { RefreshBrandBitmap(); };
@@ -1814,7 +1902,8 @@ internal sealed class RecorderPanel : Form {
         DevicesTip.SetToolTip(StopButton, "结束录音 · Ctrl+Alt+L");
         DevicesTip.SetToolTip(Time, "录音时长");
         DevicesTip.SetToolTip(AudioLevel, "输入音量");
-        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, QuickNoteButton, StartButton, SettingsButton, BrandMark, BrandTitle });
+        DevicesTip.SetToolTip(CloseButton, "关闭浮窗");
+        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, QuickNoteButton, StartButton, SettingsButton, CloseButton, BrandMark, BrandTitle });
         Heading.LinkClicked += delegate { RetryTranscription(); };
         foreach (Control surface in new Control[] { this, Time, Heading, Detail, AudioLevel, BrandTitle, BrandMark }) ObserveDockDrag(surface);
         Heading.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text); };
@@ -1938,12 +2027,12 @@ internal sealed class RecorderPanel : Form {
         using (var graphics = Graphics.FromImage(dockSnapshot)) {
             graphics.Clear(BackColor);
             foreach (Control control in dockContent.Controls) {
-                bool visible = control == BrandTitle ? true
+                bool visible = control == BrandTitle || control == CloseButton ? true
                     : control == QuickNoteButton || control == StartButton || control == SettingsButton ? showingQuickActions
                     : control == Time || control == AudioLevel || control == MicrophoneButton || control == StopButton ? showingRecording
                     : control == Heading ? showingRecording || !showingQuickActions || showingAttention
                     : control == Detail ? !showingRecording && !showingQuickActions
-                    : control == AudioFile || control == TranscriptFile ? resultSession != null : false;
+                    : control == AudioFile || control == TranscriptFile ? !sharedDock && resultSession != null : false;
                 if (sharedDock && control == BrandTitle) visible = true;
                 if (sharedDock && (control == Heading || control == Detail)) visible = false;
                 if (!visible || control.Width < 1 || control.Height < 1) continue;
@@ -2087,6 +2176,7 @@ internal sealed class RecorderPanel : Form {
         AudioLevel.Bounds = PanelBounds(66, 32, 18, 18);
         MicrophoneButton.Bounds = PanelBounds(91, 27, 32, 32);
         StopButton.Bounds = PanelBounds(148, 29, 28, 28);
+        CloseButton.Bounds = PanelBounds(160, 2, 24, 24);
         LayoutBrandHeader();
         Heading.Bounds = showingRecording ? PanelBounds(10, 52, 74, 16) : showingAttention ? PanelBounds(10, 22, 166, 18) : PanelBounds(10, 25, 166, 18);
         Detail.Bounds = PanelBounds(10, 45, 166, 18);
@@ -2101,12 +2191,14 @@ internal sealed class RecorderPanel : Form {
         if (!sharedDock || dockContent == null) return;
         BrandTitle.Bounds = PanelBounds(87, 9, 40, 22);
         BrandTitle.Visible = true;
+        CloseButton.Bounds = PanelBounds(160, 4, 24, 24);
+        CloseButton.Visible = true;
         Heading.Visible = Detail.Visible = false;
         LayoutQuickActions(false);
-        Time.Bounds = PanelBounds(8, 39, 55, 24);
-        AudioLevel.Bounds = PanelBounds(64, 42, 18, 18);
-        MicrophoneButton.Bounds = PanelBounds(88, 34, 32, 32);
-        StopButton.Bounds = PanelBounds(124, 36, 28, 28);
+        Time.Bounds = PanelBounds(8, 35, 55, 24);
+        AudioLevel.Bounds = PanelBounds(64, 39, 18, 18);
+        MicrophoneButton.Bounds = PanelBounds(88, 32, 28, 28);
+        StopButton.Bounds = PanelBounds(128, 34, 24, 24);
         if (resultSession != null) {
             AudioFile.Bounds = PanelBounds(10, 34, 144, 16);
             TranscriptFile.Bounds = PanelBounds(10, 50, 144, 16);
@@ -2262,7 +2354,7 @@ internal sealed class RecorderPanel : Form {
     void LayoutQuickActions(bool compact) {
         var actions = new[] { QuickNoteButton, StartButton, SettingsButton };
         if (sharedDock) {
-            for (int i = 0; i < actions.Length; i++) actions[i].Bounds = PanelBounds(14 + i * 56, 34, 32, 32);
+            for (int i = 0; i < actions.Length; i++) actions[i].Bounds = PanelBounds(17 + i * 56, 32, 28, 28);
             return;
         }
         int size = compact ? 24 : 32, top = sharedDock ? (dockUp ? 4 : 38) : compact ? 42 : 28;
@@ -2326,11 +2418,13 @@ internal sealed class RecorderPanel : Form {
     public void ShowResult(string session, string audio, string note, string root) {
         if (!showingRecording && !processingBusy && resultSession == session && (AudioFile.Tag as string) == audio && (TranscriptFile.Tag as string) == note) return;
         settingResult = true;
-        try { ShowProcessing("", ""); } finally { settingResult = false; }
+        try { if (sharedDock) ShowStatus("", ""); else ShowProcessing("", ""); } finally { settingResult = false; }
         Heading.Visible = Detail.Visible = false;
-        if (sharedDock) SetQuickActionsVisible(false);
         resultSession = session;
         resultRoot = root;
+        // Result locations belong in the transient notice and recent meetings,
+        // never in the shared action panel or its morph snapshot.
+        if (sharedDock) { AudioFile.Tag = audio; TranscriptFile.Tag = note; NotifyDockState("result"); return; }
         SetArtifact(AudioFile, "录音", audio, root, 25);
         SetArtifact(TranscriptFile, "转录", note, root, 45);
         if (sharedDock) LayoutPanelContent();
@@ -2776,6 +2870,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly NotifyIcon tray;
     readonly System.Windows.Forms.Timer timer;
     readonly RecorderPanel panel = new RecorderPanel();
+    RecorderNotice receipt;
     readonly List<TranscriptionJob> jobs = new List<TranscriptionJob>();
     readonly ToolStripMenuItem toggle = new ToolStripMenuItem("开始录音");
     readonly ToolStripMenuItem pauseMicrophone = new ToolStripMenuItem("暂停麦克风");
@@ -2991,6 +3086,19 @@ internal sealed class MeetingContext : ApplicationContext {
         } catch (Exception error) { MeetingFiles.Log(error); Notice("无法打开速记便签", error.Message, ToolTipIcon.Warning); }
     }
     void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "verbit · " + title, message, icon); }
+    void ShowReceipt(string title, string detail, Action action) {
+        if (exiting || updating) return;
+        if (receipt == null || receipt.IsDisposed) receipt = new RecorderNotice();
+        receipt.Present(title, detail, action, panel.Bounds, panel.DeviceDpi);
+    }
+    void AudioReceipt(SessionRecord record) {
+        if (record == null || string.IsNullOrEmpty(record.AudioPath) || !File.Exists(record.AudioPath)) return;
+        string session = record.DirectoryPath;
+        ShowReceipt("录音已保存，点击查看", record.AudioPath, delegate { LocateArtifactForSession(session, true); });
+    }
+    void FailureReceipt(string session, string detail) {
+        ShowReceipt("转写失败，点击重试", "录音已保留：" + detail, delegate { RetrySession(session); });
+    }
     void OnUi(Action action) { if (!dispatch.IsDisposed) try { dispatch.BeginInvoke(action); } catch (InvalidOperationException) { } }
     void Toggle() {
         if (exiting || updating) return;
@@ -3266,7 +3374,7 @@ internal sealed class MeetingContext : ApplicationContext {
         catalog.SaveWorker(session, null);
         var record = catalog.Get(session);
         if (recording == null) { focusedSession = session; focusedRecord = record; }
-        if (record != null) { MarkNotifiedSafely(record); Notice("录音已保存", record.AudioPath, ToolTipIcon.Info); }
+        if (record != null) { MarkNotifiedSafely(record); AudioReceipt(record); }
     }
     void LaunchTranscriptionWorker(string session) {
         Process startedProcess = null;
@@ -3333,7 +3441,6 @@ internal sealed class MeetingContext : ApplicationContext {
             SaveLastSessionWithAttempt(session, process, attemptStarted, previousStatus);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
             RefreshFeedback();
-            Notice("录音已保存 · " + record.Label, ((string)config["transcription_mode"] == "api" ? "录音将提交已确认的音频转写 API。" : "后台本地转写中。") + "托盘 → 最近会议可查看这场进度。", ToolTipIcon.Info);
         } catch (Exception error) {
             MeetingFiles.Log(error);
             if (startedProcess != null) {
@@ -3343,7 +3450,7 @@ internal sealed class MeetingContext : ApplicationContext {
             RecordLaunchFailure(session, error.Message, checkingConfiguration);
             RefreshFeedback();
             if (checkingConfiguration) OfferApiConfiguration(session);
-            else Notice(checkingConfiguration ? "录音已保存 · 待配置转写" : "转写未启动", error.Message + " 请在最近会议中选择对应场次检查或重试。", ToolTipIcon.Warning);
+            else FailureReceipt(session, error.Message);
         }
     }
     void ReportJobFailure(TranscriptionJob job, string detail) {
@@ -3352,8 +3459,7 @@ internal sealed class MeetingContext : ApplicationContext {
         try { record = catalog.Get(job.Session); } catch (Exception error) { MeetingFiles.Log(error); }
         MarkNotifiedSafely(record);
         if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
-        string label = record == null ? Path.GetFileName(job.Session) : record.Label;
-        Notice("转写失败 · " + label, (string.IsNullOrEmpty(detail) ? "转写进程退出，未生成完成状态。" : detail) + " 原始资料已保留；托盘 → 最近会议 → " + label + " 检查或重试。", ToolTipIcon.Error);
+        FailureReceipt(job.Session, string.IsNullOrEmpty(detail) ? "转写进程退出，录音已保留；可在最近会议查看原因。" : detail);
     }
     void Tick() {
         if (recording != null && !recording.Stopping) {
@@ -3391,7 +3497,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     job.Reported = true;
                     if (fresh && job.Process.ExitCode == 0 && File.Exists(Path.Combine(job.Session, "native_audio.json"))) {
                         catalog.SaveWorker(job.Session, null);
-                        if (job.TranscribeAfterExport) LaunchTranscriptionWorker(job.Session); else KeepRecordingOnly(job.Session);
+                        if (job.TranscribeAfterExport) { AudioReceipt(catalog.Get(job.Session)); LaunchTranscriptionWorker(job.Session); } else KeepRecordingOnly(job.Session);
                     } else {
                         string exportError = MeetingFiles.Text(status, "error", "MP3 导出中断，原始分轨已保留，可重试。");
                         RecordLaunchFailure(job.Session, exportError);
@@ -3405,8 +3511,10 @@ internal sealed class MeetingContext : ApplicationContext {
                     job.Reported = true;
                     MarkNotifiedSafely(record);
                     if (recording == null) { focusedSession = job.Session; focusedRecord = record; }
-                    if (record.State == "completed")
-                        Notice("会议文件 · " + record.Label, "录音：" + record.AudioPath + "\n转录：" + record.NotePath + "\n浮窗点击路径可定位文件。", ToolTipIcon.Info);
+                    if (record.State == "completed") {
+                        string finishedSession = record.DirectoryPath;
+                        ShowReceipt("转写已保存，点击查看", record.NotePath, delegate { LocateArtifactForSession(finishedSession, false); });
+                    }
                     else if (record.State == "capture_warning")
                         Notice(StateLabel(record) + " · " + record.Label, record.Message + "\n录音：" + record.AudioPath + "\n转录：" + record.NotePath, ToolTipIcon.Warning);
                     // Completing A must never take focus away from meeting B.
@@ -3609,6 +3717,7 @@ internal sealed class MeetingContext : ApplicationContext {
         var sharedMenu = tray.ContextMenuStrip;
         tray.ContextMenuStrip = null; panel.ContextMenuStrip = null;
         tray.Visible = false; tray.Dispose();
+        if (receipt != null) receipt.Dispose();
         if (sharedMenu != null) sharedMenu.Dispose();
         panel.AllowClose = true; panel.Close(); panel.Dispose();
         dispatch.Dispose();
