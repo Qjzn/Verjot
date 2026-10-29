@@ -26,6 +26,7 @@
 /documentation/*
 !/documentation/ai-install.md
 !/documentation/configuration.md
+!/documentation/ui-design.md
 !/documentation/product-scope.md
 !/documentation/quality.md
 !/documentation/device-revalidation.md

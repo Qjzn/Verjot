@@ -6,6 +6,8 @@ using System.Windows.Forms;
 
 internal static class TestRecorderPanel {
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetWindowLong(IntPtr window, int index);
     static int assertions;
     static void Check(bool condition, string message) {
         assertions++;
@@ -22,13 +24,23 @@ internal static class TestRecorderPanel {
         return (bool)field.GetValue(button);
     }
     static void Snapshot(RecorderPanel panel, string filename, bool native = false) {
-        Application.DoEvents();
+        panel.Refresh(); Pump(250);
         using (var bitmap = new Bitmap(panel.ClientSize.Width, panel.ClientSize.Height)) {
             if (native) using (Graphics graphics = Graphics.FromImage(bitmap)) {
                 IntPtr dc = graphics.GetHdc();
                 try { Check(PrintWindow(panel.Handle, dc, 0), "Native shared-window capture succeeds"); }
                 finally { graphics.ReleaseHdc(dc); }
             } else panel.DrawToBitmap(bitmap, panel.ClientRectangle);
+            bitmap.Save(filename, System.Drawing.Imaging.ImageFormat.Png);
+            if (native && panel.BrandTitle.Visible) {
+                int ink=0;
+                for(int y=panel.BrandTitle.Top;y<panel.BrandTitle.Bottom;y++)
+                    for(int x=panel.BrandTitle.Left;x<panel.BrandTitle.Right;x++) {
+                        Color c=bitmap.GetPixel(x,y); if(c.R<120 && c.G<150 && c.B<180) ink++;
+                    }
+                Console.WriteLine("Header ink="+ink+" text="+panel.BrandTitle.Text+" bounds="+panel.BrandTitle.Bounds+" font="+panel.BrandTitle.Font+" color="+panel.BrandTitle.ForeColor);
+                Check(ink>10,"Native header must visibly paint verbit in every state: "+Path.GetFileName(filename));
+            }
             bitmap.Save(filename, System.Drawing.Imaging.ImageFormat.Png);
         }
     }
@@ -108,9 +120,12 @@ internal static class TestRecorderPanel {
                 int unit = (int)Math.Round(40 * panel.DeviceDpi / 96.0); IntPtr handle = panel.Handle;
                 Check(panel.ClientSize == new Size(unit, unit), "Shared idle window defaults to logo only at actual monitor DPI");
                 Check(!panel.QuickNoteButton.Visible && !panel.BrandTitle.Visible, "Collapsed shared window hides all duplicate branding and tools");
+                Check(SetWindowPos(handle, new IntPtr(-2), 0, 0, 0, 0, 0x13), "Isolated fixture can simulate lost native topmost state");
+                Check((GetWindowLong(handle,-20)&8)==0,"The native topmost flag was removed only from this isolated test form");
                 panel.SetDockExpanded(true); SettleDock(panel);
+                Check((GetWindowLong(handle,-20)&8)!=0,"Explicit expansion restores native topmost even when the managed TopMost property stayed true");
                 Console.WriteLine("SHARED expanded " + panel.Bounds + "; target=" + typeof(RecorderPanel).GetField("dockExpanded", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; progress=" + typeof(RecorderPanel).GetField("dockProgress", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; tools=" + panel.QuickNoteButton.Visible + "/" + panel.StartButton.Visible + "/" + panel.SettingsButton.Visible);
-                Check(panel.Width == (int)Math.Round(186*panel.DeviceDpi/96.0) && panel.Height == unit && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "The very same shared window expands to a clean single row of existing actions");
+                Check(panel.Width == (int)Math.Round(186*panel.DeviceDpi/96.0) && panel.Height == (int)Math.Round(68*panel.DeviceDpi/96.0) && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "The shared window expands to a brand header and common actions");
                 Snapshot(panel, Path.Combine(output, "shared-idle-" + panel.DeviceDpi + ".png"), true);
                 int logoResizes = 0, actionMoves = 0;
                 panel.BrandMark.SizeChanged += delegate { logoResizes++; };
@@ -123,9 +138,9 @@ internal static class TestRecorderPanel {
                 Snapshot(panel, Path.Combine(output, "shared-recording-" + panel.DeviceDpi + ".png"), true);
                 panel.ShowWorking("正在本地转写", "识别文字"); SettleDock(panel);
                 var animation = (System.Windows.Forms.Timer)typeof(RecorderPanel).GetField("dockAnimation", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel);
-                Check(panel.Handle == handle && panel.Detail.Visible && panel.Heading.Visible && !animation.Enabled, "Processing keeps the shared content and settles its expansion timer");
+                Check(panel.Handle == handle && !panel.Detail.Visible && !panel.Heading.Visible && panel.BrandTitle.Visible && panel.SettingsButton.Visible && !animation.Enabled, "Processing keeps the shared content and settles its expansion timer");
                 using (var bitmap = new Bitmap(panel.Width, panel.Height)) {
-                    panel.DrawToBitmap(bitmap, panel.ClientRectangle); int blue = 0, y = (int)Math.Round(65 * panel.DeviceDpi / 96.0);
+                    panel.DrawToBitmap(bitmap, panel.ClientRectangle); int blue = 0, y = (int)Math.Round(67 * panel.DeviceDpi / 96.0);
                     for (int x = 0; x < bitmap.Width; x++) { Color pixel = bitmap.GetPixel(x, y); if (pixel.B > pixel.R + 12) blue++; }
                     Check(blue > 5, "The shared content parent must not cover the transcription activity strip");
                     bitmap.Save(Path.Combine(output, "shared-working-" + panel.DeviceDpi + ".png"));
@@ -189,7 +204,7 @@ internal static class TestRecorderPanel {
                 Call(panel, "SetInputLevels", 0f, .6f);
                 Check(!InputActive(panel.MicrophoneButton), "System sound must not activate the microphone");
                 Check(panel.AudioLevel.AccessibleName.Contains("录音输入：有声音"), "Meeting wave must also show system signal");
-                string tip = panel.DevicesTip.GetToolTip(panel.MicrophoneButton);
+                string tip = panel.DevicesTip.GetToolTip(panel.AudioLevel);
                 Check(tip.Contains("Test microphone") && tip.Contains("Test speakers"), "Tooltip must name actual captured devices");
                 Check(tip.Contains("麦克风输入：暂无") && tip.Contains("电脑声音输入：有声音"), "Tooltip must distinguish both inputs");
                 Snapshot(panel, Path.Combine(output, "panel-system-only.png"));
@@ -229,6 +244,7 @@ internal static class TestRecorderPanel {
                 Check(panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "Idle must expose the three requested actions");
                 Check(!panel.Heading.Visible && !panel.Detail.Visible && !panel.StopButton.Visible, "Idle must show icons without redundant ready text");
                 Check(panel.DevicesTip.GetToolTip(panel.QuickNoteButton).Contains("Ctrl+Shift+J") && panel.DevicesTip.GetToolTip(panel.StartButton).Contains("Ctrl+Shift+L"), "Tooltips must follow configured hotkeys");
+                Check(panel.DevicesTip.GetToolTip(panel.QuickNoteButton)=="速记 · Ctrl+Shift+J" && panel.DevicesTip.GetToolTip(panel.StartButton)=="录音 · Ctrl+Shift+L" && panel.DevicesTip.GetToolTip(panel.SettingsButton)=="设置", "Action hints contain only action and configured shortcut");
                 Check(!panel.DevicesTip.GetToolTip(panel.SettingsButton).Contains("Ctrl") && panel.DevicesTip.GetToolTip(panel.SettingsButton).Contains("设置"), "Settings must have an explanation without an invented hotkey");
                 int noteClicks = 0, startClicks = 0, settingsClicks = 0;
                 panel.QuickNoteButton.Click += delegate { noteClicks++; };

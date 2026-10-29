@@ -290,7 +290,7 @@ internal static class TestMeetingSettings {
             form.Show();form.ShowTranscription();Application.DoEvents();
             Check(form.Controls.Find("download_recommended_model",true).Length==0,"First-run settings contain no model download entry");
             ((CheckBox)form.Controls.Find("auto_transcribe",true)[0]).Checked=true;Application.DoEvents();
-            Check(((ComboBox)form.Controls.Find("transcription_mode",true)[0]).Items.Count==1 && Input(form,"api_model").Visible,"New user can directly configure their third-party model without a dead local option");
+            Check((form.Controls.Find("transcription_mode", true).Length == 0 && form.Controls.Find("record_only", true).Length == 1) && Input(form,"api_model").Visible,"New user can directly configure their third-party model without a dead local option");
             using(var image=new Bitmap(form.Width,form.Height)) {form.DrawToBitmap(image,new Rectangle(0,0,form.Width,form.Height));image.Save(Path.Combine(directory,"settings-api-first-use.png"));}
             form.Close();
         }
@@ -469,7 +469,7 @@ internal static class TestMeetingSettings {
             var snapshot = MeetingSettingsSnapshot.Open(path);
             using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { snapshot.Commit(next); return null; })) {
                 form.Show(); Application.DoEvents();
-                Check(((ComboBox)form.Controls.Find("transcription_mode", true)[0]).Items.Count == 1, "A machine without a local environment offers API only, without a dead model selector");
+                Check((form.Controls.Find("transcription_mode", true).Length == 0 && form.Controls.Find("record_only", true).Length == 1), "A machine without a local environment offers API only, without a dead model selector");
                 ((CheckBox)form.Controls.Find("auto_transcribe", true)[0]).Checked = false;
                 ((Button)form.AcceptButton).PerformClick();
                 Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "api" && !(bool)MeetingSettingsSnapshot.Open(path).Values["auto_transcribe"], "Missing API credentials do not prevent saving record-only settings, without inventing a local model");
@@ -498,7 +498,7 @@ internal static class TestMeetingSettings {
             legacyForm.Show(); legacyForm.ShowTranscription(); Application.DoEvents();
             Check(!((CheckBox)legacyForm.Controls.Find("auto_transcribe",true)[0]).Checked,"A legacy auto-local choice cannot silently enable API transcription");
             ((CheckBox)legacyForm.Controls.Find("auto_transcribe",true)[0]).Checked=true; Application.DoEvents();
-            Check(((ComboBox)legacyForm.Controls.Find("transcription_mode",true)[0]).Items.Count==1,"Even an old local config only offers explicit API setup");
+            Check((legacyForm.Controls.Find("transcription_mode", true).Length == 0 && legacyForm.Controls.Find("record_only", true).Length == 1),"Even an old local config only offers explicit API setup");
             ((Button)legacyForm.CancelButton).PerformClick();
         }
         Check(beforeLegacy.SequenceEqual(File.ReadAllBytes(legacyPath)),"Opening and canceling API setup preserves old configuration byte-exact");
@@ -528,7 +528,7 @@ internal static class TestMeetingSettings {
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-local.png")); }
             ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
             Check(Input(form, "asr_terms").Visible && Input(form, "api_model").Visible, "Advanced terms expand alongside explicit API fields");
-            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0]; mode.SelectedIndex = 0; Application.DoEvents();
+            var mode = (CheckBox)form.Controls.Find("auto_transcribe", true)[0]; mode.Checked = true; Application.DoEvents();
             Check(Input(form, "api_model").Enabled, "Choosing API exposes API model fields");
             Input(form, "api_key_env").Text = "VERBIT_SYNTHETIC_UNSET_KEY";
             Input(form, "asr_terms").Text = "产品名,术语";
@@ -550,49 +550,80 @@ internal static class TestMeetingSettings {
     }
     static void RenderingResponsiveness(string directory, string root) {
         string path = Path.Combine(directory, "render-settings.json"); Write(path, Config(root));
+        byte[] original = File.ReadAllBytes(path);
         using (var form = new MeetingSettingsDialog(MeetingSettingsSnapshot.Open(path), delegate { return null; })) {
             form.Show(); form.ShowTranscription(); Application.DoEvents();
-            ((CheckBox)form.Controls.Find("auto_transcribe", true)[0]).Checked = true; Application.DoEvents();
+            var mode = (CheckBox)form.Controls.Find("auto_transcribe", true)[0];
+            var recordOnly = (CheckBox)form.Controls.Find("record_only", true)[0];
+            mode.Checked = true; Application.DoEvents();
             ((Button)form.Controls.Find("transcription_advanced", true)[0]).PerformClick(); Application.DoEvents();
-            Application.DoEvents();
             Check(typeof(MeetingSettingsDialog).GetField("engineTimer",BindingFlags.Instance|BindingFlags.NonPublic)==null,"No local model polling timer is constructed");
-            int invalidations = 0;
-            WatchInvalidations(form, delegate { invalidations++; });
+            Check(form.Controls.Find("transcription_mode", true).Length == 0 && form.Controls.Find("asr_denoise", true).Length == 0 && form.Controls.Find("asr_echo_filter", true).Length == 0, "No single-option selector or disabled legacy processing controls are presented");
+            int invalidations = 0; WatchInvalidations(form, delegate { invalidations++; });
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < 50; i++) Application.DoEvents();
             watch.Stop();
-            Console.WriteLine("Settings unchanged status: 50 polls, " + invalidations + " invalidations, " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
-            int unchangedInvalidations = invalidations;
-            var combo = (ComboBox)form.Controls.Find("transcription_mode", true)[0];
-            combo.Focus(); combo.DroppedDown = true; Application.DoEvents();
-            int before = invalidations;
-            for (int i = 0; i < 5; i++) { Application.DoEvents(); Application.DoEvents(); }
-            bool dropdownPreserved = combo.DroppedDown && combo.Focused;
-            int dropdownInvalidations = invalidations - before;
-            combo.DroppedDown = false;
-            var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0];
-            watch.Restart();
+            Check(invalidations == 0, "Idle settings do not invalidate the page");
+            Console.WriteLine("Settings idle: 50 polls, " + invalidations + " invalidations, " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            var tabs = (TabControl)form.Controls.Find("settingsTabs", true)[0]; watch.Restart();
             for (int i = 0; i < 30; i++) { tabs.SelectedIndex = i % 3; Application.DoEvents(); }
-            watch.Stop();
-            Console.WriteLine("Settings page switches: 30 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
-            Check(unchangedInvalidations == 0, "Unchanged readiness must not invalidate controls or redraw the page every timer tick");
-            Check(dropdownPreserved, "Status polling preserves an open native dropdown and its keyboard focus");
-            Check(dropdownInvalidations == 0, "An open dropdown must not trigger background status repaint churn");
-            Check(tabs.SelectedIndex == 2 && tabs.TabPages.Count == 3, "Repeated native page switches leave the intended page active");
-            tabs.SelectedIndex = 1; Application.DoEvents();
-            var mode = (ComboBox)form.Controls.Find("transcription_mode", true)[0];
-            watch.Restart();
+            watch.Stop(); Console.WriteLine("Settings page switches: 30 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            Check(tabs.SelectedIndex == 2 && tabs.TabPages.Count == 3, "Repeated page switches preserve native tabs");
+            tabs.SelectedIndex = 1; watch.Restart();
             for (int i = 0; i < 12; i++) {
-                mode.DroppedDown = true; Application.DoEvents();
-                mode.SelectedIndex = 0; mode.DroppedDown = false; Application.DoEvents();
-                Check(Input(form, "api_model").Visible && mode.Items.Count==1, "Native mode selection updates API visibility without stale controls");
+                mode.Checked = false; Application.DoEvents();
+                Check(recordOnly.Checked && !Input(form,"api_model").Visible,"Record-only hides API fields without changing configuration");
+                mode.Checked = true; Application.DoEvents();
+                Check(!recordOnly.Checked && Input(form,"api_model").Visible,"API mode restores the same live fields");
             }
-            watch.Stop();
-            Console.WriteLine("Settings mode changes: 12 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            watch.Stop(); Console.WriteLine("Settings mode switches: 24 in " + watch.Elapsed.TotalMilliseconds.ToString("F2") + " ms");
+            Call(mode, "OnKeyDown", new KeyEventArgs(Keys.Left));
+            Check(recordOnly.Checked && !mode.Checked, "Mode segments support keyboard selection without saving");
+            Call(recordOnly, "OnKeyDown", new KeyEventArgs(Keys.Right));
+            Check(mode.Checked && !recordOnly.Checked, "Keyboard selection restores API fields through the same binding");
             Input(form, "api_model").Focus(); Input(form, "api_model").Text = "render-test-only";
-            Check(Input(form, "api_model").Focused && Input(form, "api_model").Text == "render-test-only", "Text fields remain immediately editable after repeated mode changes");
+            Check(Input(form, "api_model").Focused && Input(form, "api_model").Text == "render-test-only", "Model fields remain immediately editable");
+            var check = (Button)form.Controls.Find("check_api_configuration",true)[0];
+            var status = (Label)form.Controls.Find("api_configuration_status",true)[0];
+            Input(form,"api_base_url").Text="not-a-url"; check.PerformClick();
+            Check(status.Text.Contains("HTTP(S)"),"Configuration check explains invalid addresses without network access");
+            Input(form,"api_base_url").Text="https://example.invalid/v1"; Input(form,"api_model").Text=""; check.PerformClick();
+            Check(status.Text.Contains("模型名称"),"Missing model gets an actionable inline reason");
+            Input(form,"api_model").Text="synthetic";Input(form,"api_key_env").Text="VERBIT_SYNTHETIC_UNSET_KEY";check.PerformClick();
+            Check(status.Text.Contains("尚未设置"),"Missing credential is not mislabeled as connected");
+            string previous=Environment.GetEnvironmentVariable("VERBIT_SETTINGS_CHECK_ONLY");
+            try { Environment.SetEnvironmentVariable("VERBIT_SETTINGS_CHECK_ONLY","synthetic-not-a-key");Input(form,"api_key_env").Text="VERBIT_SETTINGS_CHECK_ONLY";check.PerformClick();
+                Check(status.Text.Contains("尚未验证实际转写"),"A locally present key never claims actual transcription success");
+            } finally {Environment.SetEnvironmentVariable("VERBIT_SETTINGS_CHECK_ONLY",previous);}
+            Check(original.SequenceEqual(File.ReadAllBytes(path)),"Mode switches and configuration checks never save or start transcription");
             form.Close();
         }
+    }
+    static void CrossMonitorFontLifetime(string directory, string root) {
+        if (Screen.AllScreens.Length < 2) { Console.WriteLine("SKIP actual cross-monitor settings transfer: only one monitor"); return; }
+        string path=Path.Combine(directory,"monitor-fonts.json");Write(path,Config(root));
+        var failures=new List<Exception>();ThreadExceptionEventHandler listener=delegate(object sender,ThreadExceptionEventArgs args) {failures.Add(args.Exception);};
+        Application.ThreadException+=listener;
+        try {
+            using(var form=new MeetingSettingsDialog(MeetingSettingsSnapshot.Open(path),delegate {throw new Exception("Moving settings cannot apply");})) {
+                form.Show();Application.DoEvents();
+                foreach(int page in new[]{0,1,0}) {
+                    ((TabControl)form.Controls.Find("settingsTabs",true)[0]).SelectedIndex=page;
+                    foreach(var screen in Screen.AllScreens) {
+                        form.Location=new Point(screen.WorkingArea.Left+50,screen.WorkingArea.Top+50);
+                        var watch=System.Diagnostics.Stopwatch.StartNew();
+                        while(watch.ElapsedMilliseconds<180){Application.DoEvents();Thread.Sleep(2);}
+                        form.Refresh();Application.DoEvents();
+                        Check(failures.Count==0,"Actual monitor transfer cannot paint a disposed font: "+(failures.Count==0?"":failures[0].ToString()));
+                        Check(form.Font.GetHeight()>0,"Active monitor font remains valid until the form closes");
+                        Console.WriteLine("Settings actual transfer: dpi="+form.DeviceDpi+" page="+page+" font="+form.Font.Size);
+                    }
+                }
+                var fonts=(Dictionary<int,Font>)Field(form,"dpiFonts");
+                Check(fonts.Count<=Screen.AllScreens.Length+1,"Monitor fonts are reused instead of allocated every transition");
+                form.Close();
+            }
+        } finally {Application.ThreadException-=listener;}
     }
     static void ShortcutCapture(string directory, string root) {
         string path = Path.Combine(directory, "key-capture.json"); Write(path, Config(root));
@@ -661,6 +692,7 @@ internal static class TestMeetingSettings {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings-fixture");
             string root = Path.Combine(directory, "notes"), nextRoot = Path.Combine(directory, "other-notes");
             Directory.CreateDirectory(root); Directory.CreateDirectory(nextRoot);
+            CrossMonitorFontLifetime(directory, root);
             ShortcutCapture(directory, root); RenderingResponsiveness(directory, root);
             RecognitionConfig(root); Persistence(directory, root, nextRoot); RecordingProtection(directory, root); Interface(directory, root); ExtendedInterface(directory, root); ApiCredentialRecovery(directory, root); FirstRun(directory, root); MonitorLayouts(directory, root); ContextIntegration(root, nextRoot);
             Console.WriteLine("PASS TestMeetingSettings: " + assertions + " assertions; synthetic configs and isolated native settings only; no user config, clipboard, audio or global input.");

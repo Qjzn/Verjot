@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -10,6 +10,75 @@ using System.Text.RegularExpressions;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+
+// Shared visual roles; native input, menu navigation and DPI ownership stay
+// with their existing controls. No polling or application-wide repaint hook.
+internal static class VerbitUi {
+    internal static Color Surface { get { return SystemInformation.HighContrast ? SystemColors.Window : Color.White; } }
+    internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(34, 46, 63); } }
+    internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : Color.FromArgb(85, 101, 123); } }
+    internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(40, 104, 168); } }
+    internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(238, 245, 253); } }
+    internal static Color Border { get { return SystemInformation.HighContrast ? SystemColors.WindowFrame : Color.FromArgb(218, 226, 235); } }
+    internal static void StyleButton(Button button, bool primary) {
+        button.FlatStyle = FlatStyle.Flat; button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.BorderColor = primary ? Accent : Border;
+        button.BackColor = primary ? Accent : Surface;
+        button.ForeColor = primary ? SystemColors.HighlightText : Ink;
+        button.FlatAppearance.MouseOverBackColor = SystemInformation.HighContrast ? SystemColors.Highlight : primary ? Color.FromArgb(31, 85, 143) : Hover;
+        button.MinimumSize = new Size(76, 28); button.Cursor = Cursors.Hand;
+    }
+    internal static void ToolBackground(Graphics graphics, Rectangle bounds, Color background, Color highlight, float amount, int dpi) {
+        graphics.Clear(background);
+        if (amount <= 0) return;
+        Color color = Color.FromArgb((int)(background.R + (highlight.R - background.R) * amount),
+            (int)(background.G + (highlight.G - background.G) * amount), (int)(background.B + (highlight.B - background.B) * amount));
+        int inset = Math.Max(1, dpi / 96), diameter = Math.Min(Math.Min(bounds.Width, bounds.Height) - 2 * inset, 8 * dpi / 96);
+        if (diameter <= 0) return;
+        Rectangle r = Rectangle.Inflate(bounds, -inset, -inset);
+        using (var path = new GraphicsPath()) using (var brush = new SolidBrush(color)) {
+            path.AddArc(r.Left, r.Top, diameter, diameter, 180, 90);
+            path.AddArc(r.Right - diameter, r.Top, diameter, diameter, 270, 90);
+            path.AddArc(r.Right - diameter, r.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(r.Left, r.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure(); graphics.FillPath(brush, path);
+        }
+    }
+}
+
+// CheckBox preserves the existing boolean binding; radio semantics describe
+// the two mutually exclusive modes to assistive technology.
+internal sealed class VerbitModeButton : CheckBox {
+    bool hovered;
+    internal VerbitModeButton() {
+        AutoCheck = false; Appearance = Appearance.Button; FlatStyle = FlatStyle.Flat;
+        AccessibleRole = AccessibleRole.RadioButton; TextAlign = ContentAlignment.MiddleCenter;
+        Dock = DockStyle.Fill; Margin = Padding.Empty; Cursor = Cursors.Hand;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+    }
+    protected override void OnMouseEnter(EventArgs e) { hovered = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hovered = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnCheckedChanged(EventArgs e) { Invalidate(); base.OnCheckedChanged(e); }
+    protected override void OnKeyDown(KeyEventArgs e) {
+        if (Parent != null && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)) {
+            foreach (Control child in Parent.Controls) {
+                var next = child as VerbitModeButton;
+                if (next != null && next != this && next.Enabled && next.Visible) {
+                    next.Focus(); next.OnClick(EventArgs.Empty); e.Handled = e.SuppressKeyPress = true; return;
+                }
+            }
+        }
+        base.OnKeyDown(e);
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        Color fill = Checked || hovered ? VerbitUi.Hover : VerbitUi.Surface;
+        Color ink = (Checked || hovered) && SystemInformation.HighContrast ? SystemColors.HighlightText : Checked ? VerbitUi.Accent : VerbitUi.Ink;
+        e.Graphics.Clear(fill);
+        using (var pen = new Pen(Checked ? VerbitUi.Accent : VerbitUi.Border)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4), ink, fill);
+    }
+}
 
 // One renderer for app-owned menus. Native menu navigation, focus and dismissal
 // stay with WinForms; no animation timer or editor repaint is involved.
@@ -113,10 +182,10 @@ internal sealed class VerbitMenu : ContextMenuStrip {
 internal sealed class VerbitMenuRenderer : ToolStripProfessionalRenderer {
     internal static readonly VerbitMenuRenderer Shared = new VerbitMenuRenderer();
     internal static Color Surface { get { return SystemInformation.HighContrast ? SystemColors.Menu : Color.White; } }
-    internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.MenuText : Color.FromArgb(34, 46, 63); } }
-    internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : Color.FromArgb(98, 112, 130); } }
-    internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.MenuText : Color.FromArgb(40, 104, 168); } }
-    internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(238, 245, 253); } }
+    internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.MenuText : VerbitUi.Ink; } }
+    internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : VerbitUi.Muted; } }
+    internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.MenuText : VerbitUi.Accent; } }
+    internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : VerbitUi.Hover; } }
     internal static readonly Color Danger = Color.FromArgb(174, 47, 47);
     VerbitMenuRenderer() { RoundedEdges = false; }
     static float Scale(ToolStrip strip) { return strip.Font.Size / 12f; }
@@ -129,7 +198,7 @@ internal sealed class VerbitMenuRenderer : ToolStripProfessionalRenderer {
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) { e.Graphics.Clear(Surface); }
     protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) {
-        using (var pen = new Pen(SystemInformation.HighContrast ? SystemColors.WindowFrame : Color.FromArgb(218, 226, 235)))
+        using (var pen = new Pen(SystemInformation.HighContrast ? SystemColors.WindowFrame : VerbitUi.Border))
             e.Graphics.DrawRectangle(pen, 0, 0, Math.Max(0, e.ToolStrip.Width - 1), Math.Max(0, e.ToolStrip.Height - 1));
     }
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {

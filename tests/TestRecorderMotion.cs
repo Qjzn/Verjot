@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
@@ -79,6 +79,16 @@ internal static class TestRecorderMotion {
                 } else {
                     Check(!buttonTimer.Enabled && Fill(button) != resting, "Reduced motion must update hover feedback immediately");
                     Event(button, "OnMouseLeave", EventArgs.Empty);
+                }
+                using (var action = new RecorderActionButton { QuickAction = "note", Size = new Size(32,32), BackColor = Color.White, Location = new Point(80,0) }) {
+                    form.Controls.Add(action); action.Show();
+                    Event(action,"OnMouseEnter",EventArgs.Empty); Pump(220);
+                    Color entered; using(var bitmap=new Bitmap(32,32)) { action.DrawToBitmap(bitmap,action.ClientRectangle); entered=bitmap.GetPixel(3,16); }
+                    Event(action,"OnMouseLeave",EventArgs.Empty);
+                    Color leaving; using(var bitmap=new Bitmap(32,32)) { action.DrawToBitmap(bitmap,action.ClientRectangle); leaving=bitmap.GetPixel(3,16); }
+                    Check(ColorDistance(entered,leaving)<16 && leaving.ToArgb()!=action.BackColor.ToArgb(),"Quick-action background release retains the painted intermediate frame instead of disappearing on leave");
+                    Pump(220);
+                    using(var bitmap=new Bitmap(32,32)) { action.DrawToBitmap(bitmap,action.ClientRectangle); Check(bitmap.GetPixel(3,16).ToArgb()==action.BackColor.ToArgb() && !Animation(action).Enabled,"Quick action settles to the white surface and stops its timer"); }
                 }
                 int clicks = 0;
                 button.Click += delegate { clicks++; };

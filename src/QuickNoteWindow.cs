@@ -273,7 +273,6 @@ internal sealed class QuickNoteTabs : Form {
         // Color-keyed edges must stay opaque; antialiasing against the key
         // would leave pink fringes on light desktops.
         e.Graphics.Clear(TransparencyKey); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
-        Color[] colors = { Color.FromArgb(255, 241, 183), Color.FromArgb(224, 239, 223), Color.FromArgb(222, 235, 249), Color.FromArgb(236, 226, 245), Color.FromArgb(249, 229, 215) };
         for (int i = 0; i <= files.Length; i++) {
             bool selected = i < files.Length && String.Equals(files[i], current, StringComparison.OrdinalIgnoreCase);
             float extra = selected ? 7 : 7 * emphasis[i];
@@ -281,7 +280,7 @@ internal sealed class QuickNoteTabs : Form {
             if (width < 8) continue;
             Rectangle r = new Rectangle(Width - width, i * Row + 2, width + 6, height);
             if (OnRight) r.X = -6;
-            Color color = i == files.Length ? Color.FromArgb(242, 244, 244) : colors[i % colors.Length];
+            Color color = selected ? VerbitUi.Hover : VerbitUi.Surface;
             using (var path = new System.Drawing.Drawing2D.GraphicsPath()) {
                 int radius = 6 * DeviceDpi / 96;
                 if (OnRight) { path.AddLine(r.Left, r.Top, r.Right - radius, r.Top); path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90); path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddLine(r.Right - radius, r.Bottom, r.Left, r.Bottom); path.CloseFigure(); }
@@ -381,10 +380,6 @@ internal sealed class QuickNoteHoverFeedback : IDisposable {
         if (target == next) return;
         target = next; previous = Environment.TickCount; timer.Start();
     }
-    internal Color Background(Color normal, bool active) {
-        Color highlight = Color.FromArgb(231, 239, 248); float amount = active ? 1 : Value;
-        return Color.FromArgb((int)Math.Round(normal.R + (highlight.R - normal.R) * amount), (int)Math.Round(normal.G + (highlight.G - normal.G) * amount), (int)Math.Round(normal.B + (highlight.B - normal.B) * amount));
-    }
     public void Dispose() { timer.Dispose(); }
 }
 
@@ -396,14 +391,14 @@ internal sealed class QuickNoteHeaderButton : Button {
     public QuickNoteHeaderButton() {
         hover = new QuickNoteHoverFeedback(Invalidate);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
-        BackColor = Color.FromArgb(250, 250, 248); ForeColor = Color.FromArgb(55, 96, 138);
+        BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Accent;
         TabStop = true; Size = new Size(32, 30);
         MouseEnter += delegate { hover.Set(true); };
         MouseLeave += delegate { hover.Set(false); };
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
     }
     protected override void OnPaint(PaintEventArgs e) {
-        e.Graphics.Clear(hover.Background(BackColor, false));
+        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, VerbitUi.Hover, hover.Value, DeviceDpi);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, cx = Width / 2f, cy = Height / 2f;
         using (var pen = new Pen(IsPin && Pinned ? Color.FromArgb(40, 104, 168) : ForeColor, 1.6f * scale)) {
@@ -441,17 +436,20 @@ internal sealed class QuickNoteTitle : Label {
 internal sealed class QuickNoteFormatButton : Button {
     internal string Format;
     internal bool Active;
+    Font glyphFont;
+    int glyphDpi;
+    string glyphFormat;
     readonly QuickNoteHoverFeedback hover;
     internal QuickNoteFormatButton() {
         hover = new QuickNoteHoverFeedback(Invalidate);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TabStop = true;
         Size = new Size(34, 30); Margin = new Padding(0, 0, 2, 0);
-        BackColor = Color.FromArgb(250, 250, 248); ForeColor = Color.FromArgb(55, 75, 95);
+        BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Ink;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         MouseEnter += delegate { hover.Set(true); }; MouseLeave += delegate { hover.Set(false); };
     }
     protected override void OnPaint(PaintEventArgs e) {
-        e.Graphics.Clear(hover.Background(BackColor, Active));
+        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, VerbitUi.Hover, Active ? 1 : hover.Value, DeviceDpi);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, x = Width / 2f, y = Height / 2f;
         using (var pen = new Pen(Enabled ? ForeColor : SystemColors.GrayText, 1.4f * scale)) {
@@ -473,12 +471,16 @@ internal sealed class QuickNoteFormatButton : Button {
             } else {
                 FontStyle style = Format == "bold" ? FontStyle.Bold : Format == "italic" ? FontStyle.Italic : Format == "underline" ? FontStyle.Underline : FontStyle.Strikeout;
                 string label = Format == "bold" ? "B" : Format == "italic" ? "I" : Format == "underline" ? "U" : "ab";
-                using (var font = new Font("Segoe UI", 11, style)) TextRenderer.DrawText(e.Graphics, label, font, ClientRectangle, Enabled ? ForeColor : SystemColors.GrayText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                if (glyphFont == null || glyphDpi != DeviceDpi || glyphFormat != Format) {
+                    if (glyphFont != null) glyphFont.Dispose();
+                    glyphFont = new Font("Segoe UI", 14f * DeviceDpi / 96f, style, GraphicsUnit.Pixel); glyphDpi = DeviceDpi; glyphFormat = Format;
+                }
+                TextRenderer.DrawText(e.Graphics, label, glyphFont, ClientRectangle, Enabled ? ForeColor : SystemColors.GrayText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
         if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
     }
-    protected override void Dispose(bool disposing) { if (disposing) hover.Dispose(); base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { hover.Dispose(); if (glyphFont != null) { glyphFont.Dispose(); glyphFont = null; } } base.Dispose(disposing); }
 }
 
 internal sealed class QuickNoteWindow : Form {
@@ -568,10 +570,10 @@ internal sealed class QuickNoteWindow : Form {
         MaximizeBox = false; MinimizeBox = true; FormBorderStyle = FormBorderStyle.None;
         Padding = new Padding(4); SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer, true);
         ClientSize = new Size(360, 420); MinimumSize = new Size(280, 240);
-        StartPosition = FormStartPosition.Manual; BackColor = Color.FromArgb(250, 250, 248);
+        StartPosition = FormStartPosition.Manual; BackColor = VerbitUi.Surface;
         top = new QuickNoteChromePanel { Dock = DockStyle.Top, Height = 40, BackColor = BackColor };
         dateLabel = new QuickNoteTitle { TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, UseMnemonic = false, ForeColor = Color.FromArgb(36, 59, 83), AccessibleName = "当前便签文件名" };
-        brand = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Image = MeetingBrand.LogoBitmap(48), AccessibleName = "片言 Logo" };
+        brand = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Image = MeetingBrand.LogoBitmap(48), AccessibleName = "verbit Logo" };
         newButton = new QuickNoteHeaderButton { ActionIcon = "new", AccessibleName = "新建便签", Name = "note-new" };
         pin = new QuickNoteHeaderButton { IsPin = true, Pinned = true, AccessibleName = "取消置顶", Name = "note-pin" };
         hideButton = new QuickNoteHeaderButton { AccessibleName = "最小化", Name = "note-minimize" };
@@ -585,8 +587,8 @@ internal sealed class QuickNoteWindow : Form {
             target.MouseDown += delegate { tips.Hide(target); };
         }
         top.Layout += delegate { LayoutHeader(); };
-        status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Visible = false, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = Color.FromArgb(55, 96, 138), ActiveLinkColor = Color.FromArgb(40, 104, 168), AccessibleName = "速记保存提示" };
-        editor = new QuickNoteInputBox { BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = Color.FromArgb(36, 49, 68), Font = editorFont, AcceptsTab = true, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, HideSelection = false, AllowDrop = true, AccessibleName = "速记正文", Name = "quick-note-editor", ReadOnly = true };
+        status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Visible = false, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = VerbitUi.Accent, ActiveLinkColor = Color.FromArgb(40, 104, 168), AccessibleName = "速记保存提示" };
+        editor = new QuickNoteInputBox { BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = VerbitUi.Ink, Font = editorFont, AcceptsTab = true, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, HideSelection = false, AllowDrop = true, AccessibleName = "速记正文", Name = "quick-note-editor", ReadOnly = true };
         body = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Padding = new Padding(14, 12, 4, 8) };
         viewport = new Panel { Dock = DockStyle.Fill, BackColor = BackColor };
         scroll = new QuickNoteScrollBar { Dock = DockStyle.Right, Width = 10, BackColor = BackColor, Target = editor };
@@ -908,11 +910,11 @@ internal sealed class QuickNoteWindow : Form {
         if (continueExit && continuation != null) continuation();
     }
     void SetStatus(string message, bool error, bool show = true) {
-        status.Text = message; status.LinkColor = error ? Color.FromArgb(155, 73, 33) : Color.FromArgb(55, 96, 138);
+        status.Text = message; status.LinkColor = error ? Color.FromArgb(155, 73, 33) : VerbitUi.Accent;
         statusShown = show; statusError = error && show;
         if (statusError) SetChromeVisible(true);
         LayoutChrome();
-        location.ForeColor = error ? Color.FromArgb(155, 73, 33) : Color.FromArgb(55, 75, 95); location.Invalidate();
+        location.ForeColor = error ? Color.FromArgb(155, 73, 33) : VerbitUi.Ink; location.Invalidate();
         status.AccessibleName = message;
         string tip = !error && notePath != null ? notePath : message;
         if (!error && nativeDocument.TextImageFallback) tip += "\n图片较多，部分图片以 Markdown 引用显示；原图已保留。";

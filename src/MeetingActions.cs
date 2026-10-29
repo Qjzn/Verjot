@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -292,6 +292,7 @@ internal sealed class MeetingNameDialog : Form {
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, FlowDirection = FlowDirection.RightToLeft };
         var save = new Button { Text = "保存", DialogResult = DialogResult.OK, AutoSize = true };
         var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, AutoSize = true };
+        VerbitUi.StyleButton(save, true); VerbitUi.StyleButton(cancel, false);
         actions.Controls.Add(save); actions.Controls.Add(cancel);
         Controls.Add(name); Controls.Add(label); Controls.Add(actions);
         AcceptButton = save; CancelButton = cancel;

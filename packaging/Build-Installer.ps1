@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.23',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.28',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -27,8 +27,9 @@ $taskFiles = @(
     'Install.ps1', 'check_local_engine.py', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
     'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'NativeAudioExport.cs', 'Restore-Encoder.ps1', 'MeetingSettings.cs', 'DesktopServices.cs', 'VerbitUpdates.cs',
     'QuickNoteStore.cs', 'QuickNoteWindow.cs', 'NativeNoteDocument.cs', 'app.manifest',
-    'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png', 'assets\engine-check.wav', 'assets\engine-check-source.md',
-    'documentation\changelog.md',
+    'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png',
+    'assets\engine-check.wav', 'assets\engine-check-source.md',
+    'documentation\changelog.md', 'documentation\ui-design.md',
     'documentation\install-windows.md', 'documentation\first-use.md',
     'documentation\configuration.md', 'documentation\ai-install.md',
     'documentation\brand.md', 'documentation\product-scope.md',

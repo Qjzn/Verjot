@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -365,10 +365,7 @@ internal sealed class VerbitUpdateWindow : Form {
         status.Text = "当前版本 " + DesktopServices.Version;
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         buttons.Controls.Add(action); buttons.Controls.Add(close);
-        foreach (Button button in new[] { action, close }) {
-            button.FlatStyle = FlatStyle.Flat; button.Cursor = Cursors.Hand; button.FlatAppearance.BorderColor = Color.FromArgb(211, 220, 231);
-        }
-        action.BackColor = Color.FromArgb(40, 104, 168); action.ForeColor = Color.White;
+        VerbitUi.StyleButton(action, true); VerbitUi.StyleButton(close, false);
         Controls.Add(details); Controls.Add(cli); Controls.Add(progress); Controls.Add(status); Controls.Add(buttons);
         VerbitMenu.AttachTextMenu(details); CancelButton = close;
         action.Name = "update_action"; close.Name = "update_close"; cli.Name = "update_github_cli"; status.Name = "update_status"; details.Name = "update_details";
