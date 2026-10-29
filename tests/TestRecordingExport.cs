@@ -86,7 +86,16 @@ internal static class TestRecordingExport {
             var clock=Stopwatch.StartNew();
             while(starts==0&&clock.ElapsedMilliseconds<20000) {Thread.Sleep(40);Application.DoEvents();typeof(MeetingContext).GetMethod("Tick",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(context,null);}
             Check(starts==1,"Native export completion hands off to transcription exactly once");
-        }finally {if(child!=null){child.WaitForExit(5000);child.Dispose();}context.Dispose();}
+        } finally {
+            if (child != null) child.WaitForExit(5000);
+            // Match the controller's normal exit path so native windows and
+            // their callbacks are gone before this console fixture returns.
+            context.ExitThread();
+            context.Dispose();
+            var receipt = (RecorderNotice)typeof(MeetingContext).GetField("receipt", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(context);
+            Check(receipt == null || receipt.IsDisposed, "Export fixture closes its completion notice before process shutdown");
+            if (child != null) child.Dispose();
+        }
     }
     [STAThread]
     public static int Main(string[] args) {
