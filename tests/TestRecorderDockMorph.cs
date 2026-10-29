@@ -46,12 +46,17 @@ internal static class TestRecorderDockMorph {
         slow.Step(186, 38, 3); Check(slow.Value == 186 && slow.Velocity == 0, "A delayed UI frame settles rather than accumulating catch-up frames");
     }
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="GetWindowLongW")] static extern int GetWindowStyle(IntPtr window,int index);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
     static Bitmap Frame(RecorderPanel panel) {
         var image = new Bitmap(panel.Width, panel.Height);
         using (var graphics = Graphics.FromImage(image)) { var dc = graphics.GetHdc(); try { Check(PrintWindow(panel.Handle, dc, 0), "Capture the real native morph surface"); } finally { graphics.ReleaseHdc(dc); } }
         return image;
     }
     static int CaptureFromProcess(string[] args) {
+        IntPtr previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
+        try {
         using (var image=new Bitmap(int.Parse(args[2]),int.Parse(args[3]))) {
             using(var graphics=Graphics.FromImage(image)) {
                 IntPtr dc=graphics.GetHdc();
@@ -65,9 +70,11 @@ internal static class TestRecorderDockMorph {
             }
             return cyan>=5 ? 0 : 3;
         }
+        } finally { if(previous!=IntPtr.Zero) SetThreadDpiAwarenessContext(previous); }
     }
     static void ExternalCapture(RecorderPanel panel) {
         Pump(50); // Capture a presented native tree, not just a stopped timer.
+        int dpi=panel.DeviceDpi;
         Console.WriteLine("External capture begin: mode="+RecorderMotionPreferences.Mode+"; bounds="+panel.Bounds);
         var start=new ProcessStartInfo(Application.ExecutablePath,"--capture-window "+panel.Handle.ToInt64()+" "+panel.Width+" "+panel.Height) {UseShellExecute=false,CreateNoWindow=true};
         using(var child=Process.Start(start)) {
@@ -75,6 +82,7 @@ internal static class TestRecorderDockMorph {
             while(!child.HasExited && clock.ElapsedMilliseconds<5000) Pump(2);
             if(!child.HasExited) { child.Kill(); child.WaitForExit(); throw new InvalidOperationException("Owned capture fixture timed out"); }
             Check(child.ExitCode==0,"External-process PrintWindow retains visible Logo pixels rather than a blank white surface; code="+child.ExitCode);
+            Check(panel.DeviceDpi==dpi,"External capture uses the same per-monitor awareness and never changes the target DPI");
             Console.WriteLine("External capture passed");
         }
     }
@@ -171,6 +179,11 @@ internal static class TestRecorderDockMorph {
             panel.Location=new Point(screen.WorkingArea.Right-230,screen.WorkingArea.Bottom-80);
             panel.SetDockExpanded(true); panel.Show(); Pump(120); WaitForRest(panel);
             Check(screen.WorkingArea.Contains(panel.Bounds),"First expanded show fits after native monitor DPI promotion");
+            Check((GetWindowStyle(panel.Handle,-20)&8)!=0,"Startup checks actual native topmost, not only cached Form.TopMost");
+            Rectangle before=panel.Bounds;
+            Check(SetWindowPos(panel.Handle,new IntPtr(-2),0,0,0,0,0x13),"Simulate native topmost-band loss on the owned fixture");
+            Pump(20);
+            Check((GetWindowStyle(panel.Handle,-20)&8)!=0 && panel.Bounds==before,"Native band loss restores topmost without moving, resizing or a polling timer");
             PointF origin=WorldLogo(panel);
             for(int i=0;i<4;i++) {
                 panel.ToggleDockFromLogo(); WaitForRest(panel);

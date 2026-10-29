@@ -121,7 +121,7 @@ internal static class TestRecorderPanel {
                 Check(panel.ClientSize == new Size(unit, unit), "Shared idle window defaults to logo only at actual monitor DPI");
                 Check(!panel.QuickNoteButton.Visible && !panel.BrandTitle.Visible, "Collapsed shared window hides all duplicate branding and tools");
                 Check(SetWindowPos(handle, new IntPtr(-2), 0, 0, 0, 0, 0x13), "Isolated fixture can simulate lost native topmost state");
-                Check((GetWindowLong(handle,-20)&8)==0,"The native topmost flag was removed only from this isolated test form");
+                Check((GetWindowLong(handle,-20)&8)!=0,"The shared dock restores a lost native topmost band immediately on the position event");
                 panel.SetDockExpanded(true); SettleDock(panel);
                 Check((GetWindowLong(handle,-20)&8)!=0,"Explicit expansion restores native topmost even when the managed TopMost property stayed true");
                 Console.WriteLine("SHARED expanded " + panel.Bounds + "; target=" + typeof(RecorderPanel).GetField("dockExpanded", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; progress=" + typeof(RecorderPanel).GetField("dockProgress", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel) + "; tools=" + panel.QuickNoteButton.Visible + "/" + panel.StartButton.Visible + "/" + panel.SettingsButton.Visible);

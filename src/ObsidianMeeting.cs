@@ -1683,7 +1683,7 @@ internal sealed class RecorderPanel : Form {
     bool processingBusy;
     bool settingResult;
     Panel dockContent;
-    bool sharedDock, dockExpanded, dockLeft, dockUp, dockPositioning, dockMoving;
+    bool sharedDock, dockExpanded, dockLeft, dockUp, dockPositioning, dockMoving, dockRestoringTopmost;
     int dockEdge; // -1: left working edge, +1: right working edge; only chosen on release.
     bool dockRetryAvailable, dockRetryBusy, dockPositionInitialized;
     Control dockDragControl;
@@ -1724,6 +1724,7 @@ internal sealed class RecorderPanel : Form {
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowStyle(IntPtr window, int index);
     public RecorderPanel() {
         SuspendLayout();
         Text = MeetingBrand.Name + " · 会议录音";
@@ -2376,6 +2377,9 @@ internal sealed class RecorderPanel : Form {
         base.OnVisibleChanged(e);
         if (sharedDock && !Visible) { SnapDockMotion(); PositionSharedDock(); }
         if (Visible && IsHandleCreated) EnsureDockTopmost();
+        if (sharedDock && Visible && IsHandleCreated) BeginInvoke(new Action(delegate {
+            if (!IsDisposed && Visible) EnsureDockTopmost();
+        }));
         if (processingAnimation != null) UpdateProcessingAnimation();
     }
     static System.Drawing.Drawing2D.GraphicsPath Rounded(RectangleF bounds, float radius) {
@@ -2491,8 +2495,15 @@ internal sealed class RecorderPanel : Form {
         EnsureDockTopmost();
     }
     void EnsureDockTopmost() {
-        TopMost = true;
-        if (IsHandleCreated) SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x13); // no move/size/activation
+        if (dockRestoringTopmost || IsDisposed || Disposing) return;
+        dockRestoringTopmost = true;
+        try {
+            if (!TopMost) TopMost = true;
+            // Form.TopMost caches managed state. Check the actual native band
+            // as well after show/DPI/window-position changes, without a timer.
+            if (IsHandleCreated && (GetWindowStyle(Handle, -20) & 8) == 0)
+                SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x13); // no move/size/activation
+        } finally { dockRestoringTopmost = false; }
     }
     protected override void OnLocationChanged(EventArgs e) {
         base.OnLocationChanged(e);
@@ -2506,6 +2517,7 @@ internal sealed class RecorderPanel : Form {
             dockDragOffset = new PointF((dockAnchor.X - Left) * 96f / fontDpi, (dockAnchor.Y - Top) * 96f / fontDpi);
         }
         base.WndProc(ref message);
+        if (sharedDock && Visible && (message.Msg == 0x47 || message.Msg == 0x7d && message.WParam.ToInt64() == -20)) EnsureDockTopmost(); // position / extended-style changed
         if (sharedDock && message.Msg == 0x232) {
             dockMoving = false;
             dockAnchor = new Point(Left + (int)Math.Round(dockDragOffset.X * fontDpi / 96f), Top + (int)Math.Round(dockDragOffset.Y * fontDpi / 96f));
@@ -2877,7 +2889,7 @@ internal sealed class MeetingContext : ApplicationContext {
         if (hotkey.QuickNoteWarning.Length != 0)
             dispatch.BeginInvoke(new Action(delegate { Notice("速记快捷键不可用", hotkey.QuickNoteWarning + " 可从托盘打开速记便签。", ToolTipIcon.Warning); }));
     }
-    public void ShowPanel() { RefreshFeedback(); panel.ExpandDockPinned(); panel.Show(); }
+    public void ShowPanel() { RefreshFeedback(); panel.Show(); panel.ExpandDockPinned(); }
     async void MaybeCheckUpdates() {
         if (exiting || checkingUpdate || !Convert.ToBoolean(config["check_updates"]) || DateTime.UtcNow - lastUpdateCheck < TimeSpan.FromHours(24)) return;
         lastUpdateCheck = DateTime.UtcNow; checkingUpdate = true;
@@ -3013,8 +3025,8 @@ internal sealed class MeetingContext : ApplicationContext {
             silence.Reset();
             bookmark.Enabled = true;
             panel.ShowRecording(recording.MicrophoneName, recording.SystemDeviceName);
-            panel.ExpandDockPinned();
             panel.Show();
+            panel.ExpandDockPinned();
             tray.Icon = MeetingBrand.RecordingIcon;
             RefreshFeedback();
             string startMessage = "正在录制麦克风和电脑声音；" + StartHotkey + " 结束。";
@@ -3194,7 +3206,7 @@ internal sealed class MeetingContext : ApplicationContext {
         try { focusedRecord = catalog.Get(session); }
         catch (Exception error) { MeetingFiles.Log(error); focusedRecord = null; }
         RefreshFeedback();
-        if (show) { panel.ExpandDockPinned(); panel.Show(); }
+        if (show) { panel.Show(); panel.ExpandDockPinned(); }
     }
     void RecordLaunchFailure(string session, string detail, bool configuration = false) {
         try {
