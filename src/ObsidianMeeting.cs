@@ -1716,6 +1716,7 @@ internal sealed class RecorderPanel : Form {
     RecorderDockSpring dockLogoX = new RecorderDockSpring(8), dockLogoY = new RecorderDockSpring(8), dockLogoSize = new RecorderDockSpring(24);
     Bitmap dockSnapshot;
     Image dockLogo;
+    int dockLogoDpi;
     bool dockToolsSnapshot;
     Size panelRegionSize;
     float panelRegionRadius;
@@ -1884,14 +1885,39 @@ internal sealed class RecorderPanel : Form {
     internal void SetDockExpanded(bool expanded) {
         if (!sharedDock || dockMoving) return;
         bool changed = dockExpanded != expanded;
+        Rectangle before = Bounds;
+        float scale = fontDpi / 96f;
+        // In either orientation the visible Logo is anchor + shift + local
+        // offset. Preserve this screen position when choosing a new shape.
+        var logo = new PointF(dockAnchor.X + (float)(dockEdgeShift.Value + dockLogoX.Value) * scale,
+            dockAnchor.Y + (float)(dockEdgeShiftY.Value + dockLogoY.Value) * scale);
         dockExpanded = expanded;
-        if (expanded && changed && !dockAnimation.Enabled) {
-            Rectangle work = Screen.FromPoint(dockAnchor).WorkingArea;
-            int needed = PanelBounds(0, 0, 186, 68).Width;
-            dockLeft = work.Right - dockAnchor.X < needed && dockAnchor.X - work.Left >= needed - DockUnit;
-            dockUp = work.Bottom - dockAnchor.Y < PanelBounds(0, 0, 186, 68).Height;
-        } else if (!expanded && changed) {
-            foreach (Control c in dockContent.Controls) DevicesTip.Hide(c);
+        if (changed) {
+            Rectangle work = Screen.FromPoint(new Point(dockAnchor.X + DockUnit / 2, dockAnchor.Y + DockUnit / 2)).WorkingArea;
+            int width = (int)Math.Round(DockTargetWidth * scale), height = (int)Math.Round(DockTargetHeight * scale);
+            int left = (int)Math.Round(logo.X - (expanded ? 59 : 8) * scale);
+            int top = (int)Math.Round(logo.Y - 8 * scale);
+            if (dockEdge != 0) left = dockEdge < 0 ? work.Left : work.Right - width;
+            left = Math.Max(work.Left, Math.Min(work.Right - width, left));
+            top = Math.Max(work.Top, Math.Min(work.Bottom - height, top));
+            // Keep orientation while interrupted; a new direction is chosen
+            // only at the settled capsule, so reversing never jumps a frame.
+            if (expanded && !dockAnimation.Enabled) {
+                dockLeft = dockEdge != 0 ? dockEdge > 0 : left < before.Left;
+                dockUp = top < before.Top;
+            }
+            dockAnchor = new Point(dockLeft ? left + width - DockUnit : left,
+                dockUp ? top + height - DockUnit : top);
+            int originX = dockLeft ? dockAnchor.X + DockUnit - before.Width : dockAnchor.X;
+            int originY = dockUp ? dockAnchor.Y + DockUnit - before.Height : dockAnchor.Y;
+            // Rebase values without resetting velocity. Width, offset and Logo
+            // springs share the same curve, so the window flows around the
+            // Logo instead of carrying it back to the panel's outside corner.
+            dockEdgeShift.Value = (before.Left - originX) / scale;
+            dockEdgeShiftY.Value = (before.Top - originY) / scale;
+            dockLogoX.Value = (logo.X - before.Left - (dockLeft ? before.Width - DockUnit : 0)) / scale;
+            dockLogoY.Value = (logo.Y - before.Top - (dockUp ? before.Height - DockUnit : 0)) / scale;
+            if (!expanded) foreach (Control c in dockContent.Controls) DevicesTip.Hide(c);
         }
         RetargetDockMotion();
         UpdateProcessingAnimation();
@@ -1994,9 +2020,7 @@ internal sealed class RecorderPanel : Form {
             // Only relayout on geometry/profile changes; status polling must not
             // move native controls or recreate tooltip handles.
             LayoutSharedContent(full);
-            if (dockLogo == null || dockLogo.Width < DockUnit) {
-                if (dockLogo != null) dockLogo.Dispose(); dockLogo = MeetingBrand.LogoBitmap(DockUnit);
-            }
+            RefreshDockLogo();
             UpdatePanelRegion(); BrandMark.BringToFront(); UpdateProcessingAnimation(); Invalidate();
         } finally { dockPositioning = false; }
     }
@@ -2005,6 +2029,15 @@ internal sealed class RecorderPanel : Form {
         Image previous = BrandMark.Image;
         BrandMark.Image = MeetingBrand.LogoBitmap(pixels);
         if (previous != null) previous.Dispose();
+    }
+    void RefreshDockLogo() {
+        if (dockLogo != null && dockLogoDpi == fontDpi) return;
+        if (dockLogo != null) dockLogo.Dispose();
+        // Use the same embedded frame as the settled PictureBox. Different
+        // small-icon frames have different pixel hinting and visibly shift
+        // the cyan waveform even when their geometric bounds stay fixed.
+        dockLogo = MeetingBrand.LogoBitmap((int)Math.Round(24 * fontDpi / 96.0));
+        dockLogoDpi = fontDpi;
     }
     void LayoutBrandHeader() {
         if (sharedDock) return;
@@ -2422,20 +2455,23 @@ internal sealed class RecorderPanel : Form {
     }
     void PaintDockMorph(Graphics graphics) {
         float scale = fontDpi / 96f, progress = dockProgress;
+        float xLogo = (dockLeft ? Width - DockUnit : 0) + (float)dockLogoX.Value * scale;
+        float yLogo = (dockUp ? Height - DockUnit : 0) + (float)dockLogoY.Value * scale, size = (float)dockLogoSize.Value * scale;
         float alpha = Math.Max(0, Math.Min(1, (progress - .3f) / .7f));
         alpha = alpha * alpha * (3 - 2 * alpha);
         if (dockSnapshot != null && alpha > 0) {
             using (var attributes = new System.Drawing.Imaging.ImageAttributes()) {
                 var matrix = new System.Drawing.Imaging.ColorMatrix(); matrix.Matrix33 = alpha;
                 attributes.SetColorMatrix(matrix);
-                int x = dockLeft ? Width - dockSnapshot.Width : 0;
+                // The raster follows the same Logo origin as the native brand
+                // at rest. Sliding it from an outside edge crosses the name
+                // over the fixed Logo halfway through the morph.
+                int x = (int)Math.Round(xLogo - 59 * scale);
+                int y = (int)Math.Round(yLogo - 8 * scale);
                 // Keep text at native resolution; only reveal/cross-fade it.
-                int y = dockUp ? Height - dockSnapshot.Height : 0;
                 graphics.DrawImage(dockSnapshot, new Rectangle(x, y, dockSnapshot.Width, dockSnapshot.Height), 0, 0, dockSnapshot.Width, dockSnapshot.Height, GraphicsUnit.Pixel, attributes);
             }
         }
-        float xLogo = (dockLeft ? Width - DockUnit : 0) + (float)dockLogoX.Value * scale;
-        float yLogo = (dockUp ? Height - DockUnit : 0) + (float)dockLogoY.Value * scale, size = (float)dockLogoSize.Value * scale;
         if (dockLogo != null) {
             graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             graphics.DrawImage(dockLogo, new RectangleF(xLogo, yLogo, size, size));
@@ -2460,7 +2496,7 @@ internal sealed class RecorderPanel : Form {
     }
     protected override void OnLocationChanged(EventArgs e) {
         base.OnLocationChanged(e);
-        if (sharedDock && !dockPositioning && !dockMoving) dockAnchor = new Point(dockLeft ? Right - DockUnit : Left, Top);
+        if (sharedDock && !dockPositioning && !dockMoving) dockAnchor = new Point(dockLeft ? Right - DockUnit : Left, dockUp ? Bottom - DockUnit : Top);
     }
     protected override void WndProc(ref Message message) {
         if (sharedDock && message.Msg == 0x231) {
@@ -2519,7 +2555,7 @@ internal sealed class RecorderPanel : Form {
             dockContent.Size = PanelBounds(0, 0, 186, 68).Size;
             if (dockSnapshot != null) CaptureDockSnapshot(tools);
             else BrandMark.Bounds = new Rectangle((dockExpanded ? (int)Math.Round(51 * fontDpi / 96.0) : dockLeft ? Width - DockUnit : 0) + (int)Math.Round(8 * fontDpi / 96.0), (dockExpanded ? 0 : dockUp ? Height-DockUnit : 0)+(int)Math.Round(8 * fontDpi / 96.0), (int)Math.Round(24 * fontDpi / 96.0), (int)Math.Round(24 * fontDpi / 96.0));
-            if (dockLogo == null || dockLogo.Width < DockUnit) { if (dockLogo != null) dockLogo.Dispose(); dockLogo = MeetingBrand.LogoBitmap(DockUnit); }
+            RefreshDockLogo();
             UpdatePanelRegion(); Invalidate(); return;
         }
         if (sharedDock) {

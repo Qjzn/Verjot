@@ -51,6 +51,88 @@ internal static class TestRecorderDockMorph {
         using (var graphics = Graphics.FromImage(image)) { var dc = graphics.GetHdc(); try { Check(PrintWindow(panel.Handle, dc, 0), "Capture the real native morph surface"); } finally { graphics.ReleaseHdc(dc); } }
         return image;
     }
+    static Point CapsuleAtLogo(RecorderPanel panel) {
+        int pad = Math.Max(4, (int)Math.Round(40 * panel.DeviceDpi / 96.0) / 5);
+        return new Point(panel.Left + panel.BrandMark.Left - pad, panel.Top + panel.BrandMark.Top - pad);
+    }
+    static PointF WorldLogo(RecorderPanel panel) {
+        var timer=(System.Windows.Forms.Timer)Field(panel,"dockAnimation");
+        bool running=timer.Enabled;
+        Point location=panel.Location;
+        Rectangle area=panel.BrandMark.Bounds;
+        if(running) {
+            float scale=(int)Field(panel,"fontDpi")/96f;
+            float x=((bool)Field(panel,"dockLeft")?panel.Width-(int)Math.Round(40*scale):0)+(float)((RecorderDockSpring)Field(panel,"dockLogoX")).Value*scale;
+            float y=((bool)Field(panel,"dockUp")?panel.Height-(int)Math.Round(40*scale):0)+(float)((RecorderDockSpring)Field(panel,"dockLogoY")).Value*scale;
+            area=Rectangle.Round(new RectangleF(x,y,24*scale,24*scale));
+        }
+        PointF point = LogoCenter(panel, area);
+        Check(panel.Location==location,"A captured native frame has one consistent screen rectangle");
+        return new PointF(location.X + point.X, location.Y + point.Y);
+    }
+    static void LogoAnchorChecks(string output) {
+        foreach (Screen screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
+            panel.EnableSharedDock(); panel.ShowStatus("verbit", "ready"); panel.Show(); Pump(60);
+            panel.Location = new Point(screen.WorkingArea.Left + 300, screen.WorkingArea.Top + 200); Pump(60);
+            var timer = (System.Windows.Forms.Timer)Field(panel,"dockAnimation");
+            PointF origin = WorldLogo(panel); IntPtr handle = panel.Handle;
+            double drift = 0; int frames = 0;
+            for (int cycle = 0; cycle < 4; cycle++) {
+                foreach (bool expanded in new[] { true, false }) {
+                    Rectangle before = panel.Bounds;
+                    panel.SetDockExpanded(expanded);
+                    Check(panel.Bounds == before,"Retargeting preserves the first native rectangle at the Logo");
+                    var clock = Stopwatch.StartNew();
+                    bool capturedMiddle=false;
+                    do {
+                        Pump(12); PointF point = WorldLogo(panel); frames++;
+                        float progress=(float)Field(panel,"dockProgress");
+                        if(cycle==0 && expanded && !capturedMiddle && progress>.65f && progress<.96f) {
+                            using(var frame=Frame(panel)) frame.Save(Path.Combine(output,"logo-origin-middle-"+panel.DeviceDpi+".png"));
+                            capturedMiddle=true;
+                        }
+                        drift = Math.Max(drift, Math.Max(Math.Abs(point.X-origin.X),Math.Abs(point.Y-origin.Y)));
+                        if(Math.Abs(point.X-origin.X)>2 || Math.Abs(point.Y-origin.Y)>2) {
+                            Console.WriteLine("Logo drift cycle="+cycle+" expanded="+expanded+" origin="+origin+" pixel="+point+" bounds="+panel.Bounds+" anchor="+Field(panel,"dockAnchor")+" shift="+((RecorderDockSpring)Field(panel,"dockEdgeShift")).Value+" local="+((RecorderDockSpring)Field(panel,"dockLogoX")).Value+" dpi="+panel.DeviceDpi);
+                            using(var failed=Frame(panel)) failed.Save(Path.Combine(output,"logo-drift.png"));
+                        }
+                        Check(Math.Abs(point.X-origin.X)<=2 && Math.Abs(point.Y-origin.Y)<=2,"Painted Logo remains the origin throughout native open/close frames");
+                        Check(screen.WorkingArea.Contains(panel.Bounds),"Logo-origin morph stays inside the actual monitor");
+                    } while(timer.Enabled && clock.ElapsedMilliseconds<450);
+                    Check(!timer.Enabled && panel.Handle==handle,"Logo-origin morph settles in the shared HWND and stops its timer");
+                    if(cycle==0 && expanded) using(var frame=Frame(panel)) frame.Save(Path.Combine(output,"logo-origin-expanded-"+panel.DeviceDpi+".png"));
+                }
+            }
+            for(int i=0;i<12;i++) {
+                Rectangle before=panel.Bounds; panel.ToggleDockFromLogo();
+                Check(panel.Bounds==before,"A rapid reversal retains the current native shape without a jump");
+                Pump(14); PointF point=WorldLogo(panel);
+                Check(Math.Abs(point.X-origin.X)<=2 && Math.Abs(point.Y-origin.Y)<=2,"Rapid reversals do not carry the Logo away from its origin");
+            }
+            panel.SetDockExpanded(false); WaitForRest(panel);
+            PointF final=WorldLogo(panel);
+            Check(Math.Abs(final.X-origin.X)<=2 && Math.Abs(final.Y-origin.Y)<=2,"Repeated open/close never creeps to the panel's outside corner");
+            Console.WriteLine("Logo-origin actual-monitor="+screen.DeviceName+"; dpi="+panel.DeviceDpi+"; frames="+frames+"; max-painted-drift-px="+drift);
+            using(var frame=Frame(panel)) frame.Save(Path.Combine(output,"logo-origin-rest-"+panel.DeviceDpi+".png"));
+            var layout=typeof(RecorderPanel).GetMethod("ApplyDpiLayout",BindingFlags.NonPublic|BindingFlags.Instance);
+            foreach(int dpi in new[]{96,120,144,168,192,240}) {
+                layout.Invoke(panel,new object[]{dpi}); panel.Location=new Point(screen.WorkingArea.Left+300,screen.WorkingArea.Top+200);
+                PointF initial=WorldLogo(panel); double simulatedDrift=0;
+                foreach(bool expanded in new[]{true,false}) {
+                    panel.SetDockExpanded(expanded); var clock=Stopwatch.StartNew();
+                    do {
+                        Pump(18); PointF point=WorldLogo(panel);
+                        simulatedDrift=Math.Max(simulatedDrift,Math.Max(Math.Abs(point.X-initial.X),Math.Abs(point.Y-initial.Y)));
+                        Check(Math.Abs(point.X-initial.X)<=2 && Math.Abs(point.Y-initial.Y)<=2,"Simulated DPI Logo origin stays fixed throughout the morph: "+dpi);
+                    } while(timer.Enabled && clock.ElapsedMilliseconds<450);
+                    Check(!timer.Enabled,"Simulated DPI morph stops its timer: "+dpi);
+                }
+                Console.WriteLine("Logo-origin simulated-dpi="+dpi+"; max-painted-drift-px="+simulatedDrift);
+            }
+            layout.Invoke(panel,new object[]{panel.DeviceDpi});
+            panel.AllowClose=true; panel.Close();
+        }
+    }
     static void NativeChecks(string output) {
         foreach (Screen screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
             panel.EnableSharedDock(); panel.ShowStatus("verbit", "ready"); panel.Show(); Pump(60);
@@ -90,7 +172,8 @@ internal static class TestRecorderDockMorph {
             panel.Location = new Point(screen.WorkingArea.Right - unit - 4, screen.WorkingArea.Bottom - unit - 4);
             Point anchor = panel.Location; panel.ShowAttention("测试", "ready"); panel.SetDockExpanded(true);
             for (int i = 0; i < 10; i++) { Pump(24); Check(screen.WorkingArea.Contains(panel.Bounds), "Every edge-morph frame stays on the monitor"); }
-            panel.SetDockExpanded(false); WaitForRest(panel); Check(panel.Location == anchor, "Edge morph preserves its original logo anchor");
+            Point capsule = CapsuleAtLogo(panel);
+            panel.SetDockExpanded(false); WaitForRest(panel); Check(Math.Abs(panel.Left-capsule.X)<=1 && Math.Abs(panel.Top-capsule.Y)<=1, "Screen-fitted panel collapses to its visible Logo within native DPI rounding");
             panel.SetDockExpanded(true); Pump(40); panel.Hide();
             Check(!timer.Enabled && Field(panel, "dockSnapshot") == null, "Hidden window stops morphing and releases transient content");
             RecorderMotionPreferences.Mode = "off"; panel.Show(); panel.SetDockExpanded(false);
@@ -168,7 +251,8 @@ internal static class TestRecorderDockMorph {
             foreach (Point corner in new[] { new Point(screen.WorkingArea.Left, screen.WorkingArea.Top), new Point(screen.WorkingArea.Right-unit, screen.WorkingArea.Top), new Point(screen.WorkingArea.Left,screen.WorkingArea.Bottom-unit), new Point(screen.WorkingArea.Right-unit,screen.WorkingArea.Bottom-unit) }) {
                 panel.Location = corner; panel.SetDockExpanded(true);
                 for (int i=0; i<14; i++) { Pump(20); Check(screen.WorkingArea.Contains(panel.Bounds), "All four screen edges contain every sampled expansion frame"); }
-                panel.SetDockExpanded(false); WaitForRest(panel); Check(panel.Location == corner, "Every corner returns to its exact anchor");
+                Point capsule=CapsuleAtLogo(panel);
+                panel.SetDockExpanded(false); WaitForRest(panel); Check(Math.Abs(panel.Left-capsule.X)<=1 && Math.Abs(panel.Top-capsule.Y)<=1, "At every corner collapse keeps the expanded Logo within native DPI rounding");
             }
             foreach (Screen destination in Screen.AllScreens) if (destination.DeviceName != screen.DeviceName) {
                 foreach (string state in new[] {"collapsed","expanded","partial"}) {
@@ -311,8 +395,8 @@ internal static class TestRecorderDockMorph {
             Rectangle released=panel.Bounds; SendMessage(handle,0x232,IntPtr.Zero,IntPtr.Zero);
             Check(panel.Bounds==released,"Releasing an expanded panel below the working area does not jump on its first frame");
             WaitForRest(panel); Check(screen.WorkingArea.Contains(panel.Bounds),"An expanded panel dragged to the bottom softly returns fully inside the working area");
-            Point safeAnchor=(Point)Field(panel,"dockAnchor"); panel.SetDockExpanded(false); WaitForRest(panel);
-            Check(panel.Left==safeAnchor.X && panel.Top==safeAnchor.Y,"Collapse after soft screen fitting returns to the stored capsule anchor");
+            Point safeAnchor=CapsuleAtLogo(panel); panel.SetDockExpanded(false); WaitForRest(panel);
+            Check(Math.Abs(panel.Left-safeAnchor.X)<=1 && Math.Abs(panel.Top-safeAnchor.Y)<=1,"Collapse after soft screen fitting keeps the visible Logo within native DPI rounding");
             panel.SetDockExpanded(false); WaitForRest(panel);
             foreach(int edge in new[]{-1,1}) {
                 panel.Location=new Point(edge<0?screen.WorkingArea.Left+5:screen.WorkingArea.Right-unit-5,screen.WorkingArea.Top+180);
@@ -342,7 +426,7 @@ internal static class TestRecorderDockMorph {
     }
     [STAThread] static int Main(string[] args) {
         string previous = RecorderMotionPreferences.Mode;
-        try { Application.EnableVisualStyles(); RecorderMotionPreferences.Mode = "on"; SpringChecks(); if (Array.IndexOf(args, "--review-only") >= 0) ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); else { NativeChecks(AppDomain.CurrentDomain.BaseDirectory); ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); ExperienceChecks(AppDomain.CurrentDomain.BaseDirectory); } Console.WriteLine("PASS fluid morph assertions=" + assertions); return 0; }
+        try { Application.EnableVisualStyles(); RecorderMotionPreferences.Mode = "on"; SpringChecks(); if (Array.IndexOf(args, "--anchor-only") >= 0) LogoAnchorChecks(AppDomain.CurrentDomain.BaseDirectory); else if (Array.IndexOf(args, "--review-only") >= 0) ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); else { LogoAnchorChecks(AppDomain.CurrentDomain.BaseDirectory); NativeChecks(AppDomain.CurrentDomain.BaseDirectory); ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); ExperienceChecks(AppDomain.CurrentDomain.BaseDirectory); } Console.WriteLine("PASS fluid morph assertions=" + assertions); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { RecorderMotionPreferences.Mode = previous; }
     }

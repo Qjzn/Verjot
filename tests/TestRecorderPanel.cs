@@ -156,10 +156,15 @@ internal static class TestRecorderPanel {
                 Check(panel.AudioFile.Visible && panel.TranscriptFile.Visible && panel.Handle == handle, "Result paths remain available on the single shared window");
                 panel.SetDockExpanded(false); SettleDock(panel);
                 panel.Location = new Point(screen.WorkingArea.Right - unit - 4, screen.WorkingArea.Bottom - unit - 4);
-                Point anchor = panel.Location; panel.SetDockExpanded(true); SettleDock(panel);
+                panel.SetDockExpanded(true); SettleDock(panel);
                 Check(screen.WorkingArea.Contains(panel.Bounds), "Right/bottom edge expansion stays entirely on the actual screen");
+                Point anchor = new Point(panel.Left + panel.BrandMark.Left - unit/5, panel.Top + panel.BrandMark.Top - unit/5);
                 panel.SetDockExpanded(false); SettleDock(panel);
-                Check(panel.Location == anchor, "Repeated edge expansion returns to the original Logo anchor without creeping");
+                Console.WriteLine("Fitted Logo capsule expected="+anchor+"; actual="+panel.Location);
+                Check(Math.Abs(panel.Left-anchor.X)<=1 && Math.Abs(panel.Top-anchor.Y)<=1, "Collapse keeps the expanded Logo within one physical pixel of native DPI rounding");
+                anchor=panel.Location;
+                panel.SetDockExpanded(true); SettleDock(panel); panel.SetDockExpanded(false); SettleDock(panel);
+                Check(panel.Location == anchor,"Subsequent edge open/close cycles do not creep");
                 panel.AllowClose = true; panel.Close();
             }
         } finally { RecorderMotionPreferences.Mode = motion; }
