@@ -145,7 +145,7 @@ internal static class TestRecorderPanel {
                     Check(blue > 5, "The shared content parent must not cover the transcription activity strip");
                     bitmap.Save(Path.Combine(output, "shared-working-" + panel.DeviceDpi + ".png"));
                 }
-                panel.CollapseButton.PerformClick(); SettleDock(panel);
+                panel.ToggleDockFromLogo(); SettleDock(panel);
                 Check(panel.Visible && panel.Width == unit && panel.Height == unit, "Collapse returns an active shared window to the Logo rather than creating or hiding another window");
                 for (int i = 0; i < 5; i++) panel.ShowWorking("正在本地转写", "识别文字");
                 Check(panel.Width == unit && !animation.Enabled, "Background status polling never reopens a manually collapsed working window");
@@ -191,8 +191,8 @@ internal static class TestRecorderPanel {
                 Check(Math.Abs((panel.BrandMark.Left + panel.BrandTitle.Right) - panel.ClientSize.Width) <= 2, "The logo and name group must remain centered");
                 Check(panel.BrandMark.Image.Width >= panel.BrandMark.Width - 1 && panel.BrandMark.Image.Height >= panel.BrandMark.Height - 1, "The header must not upscale a smaller icon frame");
                 Check(typeof(RecorderPanel).GetField("BackButton") == null, "The unused return action must be removed");
-                Check(panel.CollapseButton.AccessibleName == "收起浮窗" && panel.CollapseButton.Left > panel.BrandTitle.Right, "The collapse action must describe its actual scope");
-                foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle, panel.CollapseButton }) {
+                Check(typeof(RecorderPanel).GetField("CollapseButton") == null, "Logo replaces the separate collapse action");
+                foreach (Control control in new Control[] { panel.BrandMark, panel.BrandTitle }) {
                     Check(panel.ClientRectangle.Contains(control.Bounds), "Header control must fit the 186 x 68 panel");
                     Check(control.Bottom <= panel.MicrophoneButton.Top, "Header must not overlap recording actions");
                 }
@@ -240,7 +240,7 @@ internal static class TestRecorderPanel {
                 Call(panel, "ShowProcessing", "转写中", "识别文字 · 23 / 80 段");
                 Check(panel.Heading.Visible && panel.Detail.Visible, "Processing title and detail must both be visible");
                 Check(!panel.MicrophoneButton.Visible && !panel.StopButton.Visible && !panel.AudioLevel.Visible, "Processing must hide obsolete recording controls");
-                Check(panel.CollapseButton.Visible, "Processing must retain collapse");
+                Check(panel.BrandMark.Visible, "Processing retains the Logo toggle");
                 Check(!panel.QuickNoteButton.Visible && !panel.StartButton.Visible && !panel.SettingsButton.Visible, "Progress must not be obscured by home actions");
                 Check(panel.ClientRectangle.Contains(panel.Heading.Bounds) && panel.ClientRectangle.Contains(panel.Detail.Bounds), "Processing labels must fit the compact panel");
                 Snapshot(panel, Path.Combine(output, "panel-processing.png"));
@@ -277,7 +277,7 @@ internal static class TestRecorderPanel {
                 Call(panel, "ShowProcessing", "转写失败", longDetail);
                 Check(panel.Detail.AutoEllipsis && panel.DevicesTip.GetToolTip(panel.Detail).Contains(longDetail), "Long processing detail must truncate visually and remain complete in its tooltip");
                 Call(panel, "ShowProcessing", "转写中", "识别文字 · 23 / 80 段");
-                panel.CollapseButton.PerformClick();
+                panel.ToggleDockFromLogo();
                 Check(!panel.Visible, "Collapse must hide the panel");
                 panel.ShowRecording("Test microphone", "Test speakers");
                 panel.Show();

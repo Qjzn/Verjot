@@ -1382,14 +1382,11 @@ internal static class RecorderMotionPreferences {
 internal sealed class RecorderActionButton : Button {
     readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer { Interval = 33 };
     readonly Stopwatch transitionClock = new Stopwatch();
-    bool endsRecording, microphoneDisabled, recordingPaused, collapsesWindow;
+    bool endsRecording, microphoneDisabled, recordingPaused;
     public string QuickAction;
-    public bool CollapseToRight = false;
-    public bool CloseGlyph;
     public bool EndsRecording { get { return endsRecording; } set { if (endsRecording == value) return; endsRecording = value; UpdateVisualState(); } }
     public bool MicrophoneDisabled { get { return microphoneDisabled; } set { if (microphoneDisabled == value) return; microphoneDisabled = value; if (value) { inputLevel = 0; InputActive = false; } UpdateVisualState(); } }
     public bool RecordingPaused { get { return recordingPaused; } set { if (recordingPaused == value) return; recordingPaused = value; if (value) { inputLevel = 0; InputActive = false; } UpdateVisualState(); } }
-    public bool CollapsesWindow { get { return collapsesWindow; } set { if (collapsesWindow == value) return; collapsesWindow = value; UpdateVisualState(); } }
     public bool InputActive;
     float inputLevel;
     bool hovering, pressed;
@@ -1435,9 +1432,9 @@ internal sealed class RecorderActionButton : Button {
             ? (pressed ? Color.FromArgb(171, 34, 45) : hovering ? Color.FromArgb(191, 42, 54) : Color.FromArgb(216, 57, 69))
             : MicrophoneDisabled ? (pressed ? Color.FromArgb(240, 224, 200) : hovering ? Color.FromArgb(247, 235, 215) : Color.FromArgb(250, 243, 232))
             : pressed ? Color.FromArgb(205, 226, 253) : (hovering || InputActive ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
-        if (CollapsesWindow || QuickAction != null) fill = unavailable ? BackColor : pressed ? Color.FromArgb(205, 226, 253) : hovering ? VerbitUi.Hover : BackColor;
+        if (QuickAction != null) fill = unavailable ? BackColor : pressed ? Color.FromArgb(205, 226, 253) : hovering ? VerbitUi.Hover : BackColor;
         Color ink = unavailable ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : InputActive ? Color.FromArgb(31, 126, 220) : Color.FromArgb(40, 104, 168);
-        if (CollapsesWindow || QuickAction != null) ink = !Enabled ? SystemColors.GrayText : pressed || hovering ? VerbitUi.Accent : VerbitUi.Muted;
+        if (QuickAction != null) ink = !Enabled ? SystemColors.GrayText : pressed || hovering ? VerbitUi.Accent : VerbitUi.Muted;
         Color border = unavailable ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : InputActive ? Color.FromArgb(78, 159, 235) : Color.FromArgb(188, 215, 243);
         float nextInput = InputActive && !unavailable && !MicrophoneDisabled ? (float)Math.Max(0, Math.Min(1, (Math.Log10(inputLevel) + 2.7) / 2.2)) : 0;
         float nextScale = pressed && Enabled ? .95f : 1;
@@ -1507,22 +1504,6 @@ internal sealed class RecorderActionButton : Button {
                 }
             }
             if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(g, new Rectangle(2, 2, 28, 28));
-            return;
-        }
-        if (CollapsesWindow) {
-            float scale = Height / 20f * visualScale;
-            float x = Width / 2f, y = Height / 2f;
-            using (var pen = new Pen(visualInk, 1.6f * scale)) {
-                pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-                if (CloseGlyph) {
-                    g.DrawLine(pen, x-3*scale,y-3*scale,x+3*scale,y+3*scale);
-                    g.DrawLine(pen, x+3*scale,y-3*scale,x-3*scale,y+3*scale);
-                } else {
-                    float direction = CollapseToRight ? 1 : -1;
-                    g.DrawLines(pen, new[] { new PointF(x - direction * 2 * scale, y - 4 * scale), new PointF(x + direction * 2 * scale, y), new PointF(x - direction * 2 * scale, y + 4 * scale) });
-                }
-            }
-            if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(g, new Rectangle(1, 1, Width - 2, Height - 2));
             return;
         }
         float unit = Math.Min(Width, Height) / 36f * visualScale;
@@ -1682,7 +1663,6 @@ internal sealed class RecorderPanel : Form {
     internal event Action RetryRequested;
     public readonly RecorderActionButton MicrophoneButton = new RecorderActionButton();
     public readonly RecorderActionButton StopButton = new RecorderActionButton { EndsRecording = true };
-    public readonly RecorderActionButton CollapseButton = new RecorderActionButton { CollapsesWindow = true };
     public readonly RecorderActionButton QuickNoteButton = new RecorderActionButton { QuickAction = "note", Visible = false };
     public readonly RecorderActionButton StartButton = new RecorderActionButton { QuickAction = "record", Visible = false };
     public readonly RecorderActionButton SettingsButton = new RecorderActionButton { QuickAction = "settings", Visible = false };
@@ -1758,6 +1738,7 @@ internal sealed class RecorderPanel : Form {
         Font = new Font("Microsoft YaHei UI", 9);
         BackColor = Color.White;
         DoubleBuffered = true;
+        ResizeRedraw = true;
         ClientSize = new Size(186, 68);
         MinimumSize = MaximumSize = new Size(186, 68);
         StartPosition = FormStartPosition.Manual;
@@ -1808,7 +1789,6 @@ internal sealed class RecorderPanel : Form {
         QuickNoteButton.SetBounds(18, 28, 32, 32);
         StartButton.SetBounds(77, 28, 32, 32);
         SettingsButton.SetBounds(136, 28, 32, 32);
-        CollapseButton.SetBounds(160, 2, 22, 20);
         BrandMark.SetBounds(63, 4, 16, 16);
         RefreshBrandBitmap();
         BrandMark.SizeChanged += delegate { RefreshBrandBitmap(); };
@@ -1819,9 +1799,11 @@ internal sealed class RecorderPanel : Form {
         BrandTitle.Text = MeetingBrand.Name;
         BrandTitle.AccessibleName = MeetingBrand.Name;
         BrandMark.AccessibleName = MeetingBrand.Name + " Logo";
+        BrandMark.AccessibleRole = AccessibleRole.PushButton;
+        BrandMark.AccessibleDescription = "点击展开或收起浮窗；拖动可移动";
+        BrandMark.Cursor = Cursors.Hand;
         MicrophoneButton.AccessibleName = MicrophoneButton.Text = "关闭麦克风";
         StopButton.AccessibleName = StopButton.Text = "结束整个记录";
-        CollapseButton.AccessibleName = CollapseButton.Text = "收起浮窗";
         QuickNoteButton.AccessibleName = QuickNoteButton.Text = "速记便签";
         StartButton.AccessibleName = StartButton.Text = "开始录制";
         SettingsButton.AccessibleName = SettingsButton.Text = "设置";
@@ -1830,10 +1812,8 @@ internal sealed class RecorderPanel : Form {
         DevicesTip.SetToolTip(StopButton, "结束录音 · Ctrl+Alt+L");
         DevicesTip.SetToolTip(Time, "录音时长");
         DevicesTip.SetToolTip(AudioLevel, "输入音量");
-        DevicesTip.SetToolTip(CollapseButton, "收起（后台继续）");
-        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, CollapseButton, QuickNoteButton, StartButton, SettingsButton, BrandMark, BrandTitle });
+        Controls.AddRange(new Control[] { Time, AudioLevel, Heading, Detail, AudioFile, TranscriptFile, MicrophoneButton, StopButton, QuickNoteButton, StartButton, SettingsButton, BrandMark, BrandTitle });
         Heading.LinkClicked += delegate { RetryTranscription(); };
-        CollapseButton.Click += delegate { if (sharedDock) { SetDockExpanded(false); } else Hide(); };
         foreach (Control surface in new Control[] { this, Time, Heading, Detail, AudioLevel, BrandTitle, BrandMark }) ObserveDockDrag(surface);
         Heading.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text); };
         Detail.TextChanged += delegate { if (!showingRecording) DevicesTip.SetToolTip(Heading, Heading.Text + "\n" + Detail.Text); };
@@ -1852,8 +1832,6 @@ internal sealed class RecorderPanel : Form {
         foreach (Control c in children) { c.BackColor = BackColor; dockContent.Controls.Add(c); }
         BrandMark.BackColor = BackColor;
         Controls.Add(dockContent); BrandTitle.BringToFront(); BrandMark.BringToFront();
-        CollapseButton.CloseGlyph = false;
-        DevicesTip.SetToolTip(CollapseButton, "收起（后台继续）");
         dockAnimation.Tick += delegate {
             if (!RecorderMotionPreferences.Enabled) { SnapDockMotion(); PositionSharedDock(); return; }
             int now = Environment.TickCount;
@@ -1873,12 +1851,12 @@ internal sealed class RecorderPanel : Form {
             dockProgress = (float)Math.Max(0, Math.Min(1, dockReveal.Value));
             if (settled) { dockProgress = dockExpanded ? 1 : 0; dockAnimation.Stop(); }
             PositionSharedDock();
-            if (settled) ReleaseDockSnapshot();
         };
         PositionSharedDock();
     }
     internal void ToggleDockFromLogo() {
-        if (!sharedDock || dockMoving) return;
+        if (!sharedDock) { Hide(); return; }
+        if (dockMoving) return;
         SetDockExpanded(!dockExpanded);
     }
     internal void ExpandDockPinned() { SetDockExpanded(true); }
@@ -1958,7 +1936,7 @@ internal sealed class RecorderPanel : Form {
         using (var graphics = Graphics.FromImage(dockSnapshot)) {
             graphics.Clear(BackColor);
             foreach (Control control in dockContent.Controls) {
-                bool visible = control == CollapseButton ? true : control == BrandTitle ? true
+                bool visible = control == BrandTitle ? true
                     : control == QuickNoteButton || control == StartButton || control == SettingsButton ? showingQuickActions
                     : control == Time || control == AudioLevel || control == MicrophoneButton || control == StopButton ? showingRecording
                     : control == Heading ? showingRecording || !showingQuickActions || showingAttention
@@ -1999,24 +1977,35 @@ internal sealed class RecorderPanel : Form {
             dockAnchor.Y = Math.Max(work.Top, Math.Min(work.Bottom - DockUnit, dockAnchor.Y));
             int x = dockLeft ? dockAnchor.X + DockUnit - width : dockAnchor.X;
             x += (int)Math.Round(dockEdgeShift.Value * fontDpi / 96.0);
-            if (dockEdgeShift.Value == 0) x = Math.Max(work.Left, Math.Min(work.Right - width, x));
+            if (dockEdgeShift.Value == 0) {
+                int fitted = Math.Max(work.Left, Math.Min(work.Right - width, x));
+                dockAnchor.X += fitted - x; x = fitted;
+            }
             if (MaximumSize != Size.Empty) MaximumSize = Size.Empty;
             Size minimum = PanelBounds(0, 0, 6, 36).Size;
             if (MinimumSize != minimum) MinimumSize = minimum;
             int y = (dockUp ? dockAnchor.Y + DockUnit - height : dockAnchor.Y) + (int)Math.Round(dockEdgeShiftY.Value*fontDpi/96.0);
+            if (dockEdgeShiftY.Value == 0) {
+                // First showing an already expanded dock can promote its DPI
+                // after the target was fitted at 96 DPI. Fit the new height
+                // and rebase its anchor together, or the next click jumps.
+                int fitted = Math.Max(work.Top, Math.Min(work.Bottom - height, y));
+                dockAnchor.Y += fitted - y; y = fitted;
+            }
             Rectangle target = new Rectangle(x, y, width, height);
             if (Bounds != target) Bounds = target;
             dockContent.Bounds = new Rectangle(Point.Empty, full);
             dockContent.Visible = dockExpanded && !dockAnimation.Enabled;
-            BrandMark.Visible = !dockAnimation.Enabled && !(dockEdge != 0 && !dockExpanded);
+            // Keep one native Logo through the whole transition. Swapping a
+            // PictureBox for a painted copy hides its HWND before the form's
+            // next WM_PAINT, exposing a blank frame at either end of a morph.
+            BrandMark.Visible = !(dockEdge != 0 && !dockExpanded && !dockAnimation.Enabled);
             BrandTitle.Visible = dockExpanded;
-            CollapseButton.Visible = true;
-            if (!dockAnimation.Enabled) {
-                int pad = Math.Max(4, DockUnit / 5), offset = dockExpanded ? PanelBounds(51, 0, 0, 0).X : dockLeft ? width - DockUnit : 0;
-                int top = dockExpanded ? 0 : dockUp ? height - DockUnit : 0;
-                BrandMark.SetBounds(offset + pad, top + pad, DockUnit - pad * 2, DockUnit - pad * 2);
-
-            }
+            float scale = fontDpi / 96f;
+            BrandMark.Bounds = Rectangle.Round(new RectangleF(
+                (dockLeft ? width - DockUnit : 0) + (float)dockLogoX.Value * scale,
+                (dockUp ? height - DockUnit : 0) + (float)dockLogoY.Value * scale,
+                (float)dockLogoSize.Value * scale, (float)dockLogoSize.Value * scale));
             // Only relayout on geometry/profile changes; status polling must not
             // move native controls or recreate tooltip handles.
             LayoutSharedContent(full);
@@ -2096,7 +2085,6 @@ internal sealed class RecorderPanel : Form {
         AudioLevel.Bounds = PanelBounds(66, 32, 18, 18);
         MicrophoneButton.Bounds = PanelBounds(91, 27, 32, 32);
         StopButton.Bounds = PanelBounds(148, 29, 28, 28);
-        CollapseButton.Bounds = PanelBounds(160, 2, 22, 20);
         LayoutBrandHeader();
         Heading.Bounds = showingRecording ? PanelBounds(10, 52, 74, 16) : showingAttention ? PanelBounds(10, 22, 166, 18) : PanelBounds(10, 25, 166, 18);
         Detail.Bounds = PanelBounds(10, 45, 166, 18);
@@ -2111,8 +2099,6 @@ internal sealed class RecorderPanel : Form {
         if (!sharedDock || dockContent == null) return;
         BrandTitle.Bounds = PanelBounds(87, 9, 40, 22);
         BrandTitle.Visible = true;
-        CollapseButton.Bounds = PanelBounds(160, 23, 22, 22);
-        CollapseButton.CollapseToRight = dockLeft;
         Heading.Visible = Detail.Visible = false;
         LayoutQuickActions(false);
         Time.Bounds = PanelBounds(8, 39, 55, 24);
@@ -2128,8 +2114,8 @@ internal sealed class RecorderPanel : Form {
         if (surface == BrandMark) return true;
         if (!sharedDock || surface != this && surface != dockContent) return false;
         if (!dockExpanded) return true; // Includes the edge strip and Logo padding.
-        // During a morph the Logo is painted, not a child HWND. Preserve its
-        // clickable area so a second click can reverse the in-flight animation.
+        // Include the current Logo area on the parent as well as the native
+        // child, so a queued click can reverse an in-flight transition.
         float scale = fontDpi / 96f;
         var bounds = new RectangleF((dockLeft ? Width - DockUnit : 0) + (float)dockLogoX.Value * scale,
             (dockUp ? Height - DockUnit : 0) + (float)dockLogoY.Value * scale,
@@ -2403,7 +2389,7 @@ internal sealed class RecorderPanel : Form {
     }
     protected override void OnSizeChanged(EventArgs e) {
         base.OnSizeChanged(e);
-        UpdatePanelRegion();
+        if (!dockPositioning) UpdatePanelRegion();
     }
     float PanelRadius { get { return sharedDock ? (float)Math.Min(Math.Min(ClientSize.Width, ClientSize.Height) / 2.0, dockRadius.Value * fontDpi / 96.0) : ClientSize.Height / 6f; } }
     void UpdatePanelRegion() {
@@ -2421,7 +2407,13 @@ internal sealed class RecorderPanel : Form {
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        if (sharedDock && dockSnapshot != null && (dockAnimation.Enabled || dockMoving)) PaintDockMorph(g);
+        if (sharedDock && dockSnapshot != null) {
+            PaintDockMorph(g);
+            // Retire the raster only after the last frame was actually
+            // painted. Do not force synchronous Update from inside layout:
+            // native DPI/print messages can reenter that in-progress frame.
+            if (!dockAnimation.Enabled && !dockMoving) ReleaseDockSnapshot();
+        }
         using (var path = Rounded(new RectangleF(.5f, .5f, ClientSize.Width - 1, ClientSize.Height - 1), Math.Max(1, PanelRadius - .5f)))
         using (var pen = new Pen(VerbitUi.Border, 1)) g.DrawPath(pen, path);
         if (processingBusy && (!sharedDock || dockExpanded && !dockAnimation.Enabled)) {
@@ -2472,7 +2464,7 @@ internal sealed class RecorderPanel : Form {
                 graphics.DrawImage(dockSnapshot, new Rectangle(x, y, dockSnapshot.Width, dockSnapshot.Height), 0, 0, dockSnapshot.Width, dockSnapshot.Height, GraphicsUnit.Pixel, attributes);
             }
         }
-        if (dockLogo != null) {
+        if (dockLogo != null && !BrandMark.Visible) {
             graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             graphics.DrawImage(dockLogo, new RectangleF(xLogo, yLogo, size, size));
         }
