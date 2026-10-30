@@ -1460,8 +1460,8 @@ internal static class TestQuickNoteEditor {
                     Check(File.Exists(renamed) && File.ReadAllText(other.Path) == "不能覆盖" && title.Text == "项目想法.md", "Unsafe or duplicate name preserves both files: " + invalid);
                     Check(!editor.ReadOnly && !(bool)Field(window, "workerBusy"), "Failed rename leaves the editor usable");
                 }
-                Call(title, "OnClick", EventArgs.Empty); input.Text = "失焦取消"; editor.Focus(); Pump(20);
-                Check(!input.Visible && File.Exists(renamed), "Leaving the inline editor cancels without moving focus back");
+                Call(title, "OnClick", EventArgs.Empty); input.Text = "项目想法"; editor.Focus(); Settled(window);
+                Check(!input.Visible && File.Exists(renamed) && editor.Focused, "Leaving an unchanged name commits without moving focus back");
                 Call(window, "TryHide"); window.Toggle(); Settled(window);
                 Check(title.Text == "项目想法.md" && window.ReadMarkdown().Contains("改名后保存"), "Hide and reopen retain the renamed file and saved content");
                 // Fixture-only capture; never the user's note or clipboard.
@@ -1580,6 +1580,80 @@ internal static class TestQuickNoteEditor {
         Check(rejected && File.Exists(locked.Path) && Convert.ToBase64String(File.ReadAllBytes(recoveryTarget.RecoveryPath)) == Convert.ToBase64String(recoveryBytes), "A target recovery draft also prevents rename and remains untouched");
         Console.WriteLine("Rename review passed: " + assertions + "; clipboard_access=0; global_input=0");
     }
+    static void CheckRenameBlur(string vault, string root) {
+        var store = new QuickNoteStore(vault, "rename-blur", Path.Combine(root, "rename-blur-recovery"));
+        var original = store.LoadFile("原始名称.md"); store.Save(original, "**保留正文**\n第二行");
+        var other = store.LoadFile("另一篇.md"); store.Save(other, "另一篇原文");
+        string state = Path.Combine(root, "rename-blur-state");
+        using (var window = new QuickNoteWindow(store, state)) {
+            window.Toggle(); Settled(window); Call(window, "RequestNote", "原始名称.md", false); Settled(window);
+            var title = (Label)Field(window, "dateLabel"); var name = (TextBox)Field(window, "titleEditor");
+            var editor = (RichTextBox)Field(window, "editor");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "点击正文保存";
+            editor.Focus(); Settled(window);
+            Check(!name.Visible && File.Exists(Path.Combine(store.FolderPath, "点击正文保存.md")) && !File.Exists(original.Path), "Leaving the name field for the body commits without Enter");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "关闭时保存";
+            Call(window, "TryHide"); Settled(window);
+            Check(!window.Visible && File.Exists(Path.Combine(store.FolderPath, "关闭时保存.md")), "Closing the note commits the name before hiding");
+            window.Toggle(); Settled(window);
+            Check(title.Text == "关闭时保存.md", "Reopening binds the automatically committed name");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "切换时保存";
+            Call(window, "RequestNote", "另一篇.md", false); Settled(window);
+            Check(title.Text == "另一篇.md" && File.Exists(Path.Combine(store.FolderPath, "切换时保存.md")), "Switching notes saves the name and completes the requested switch");
+            Call(window, "RequestNote", "切换时保存.md", false); Settled(window);
+            byte[] untouched = File.ReadAllBytes(other.Path);
+            foreach (string invalid in new string[] { "另一篇", "", "..", "CON", "bad/name", "bad?name" }) {
+                Call(title, "OnClick", EventArgs.Empty); name.Text = invalid; editor.Focus(); Settled(window);
+                Check(name.Visible && name.Text == invalid && (bool)Field(window, "statusError"), "Invalid or duplicate blur keeps the attempted name with a visible error: " + invalid);
+                Check(title.Text == "切换时保存.md" && Convert.ToBase64String(File.ReadAllBytes(other.Path)) == Convert.ToBase64String(untouched), "Rejected rename keeps the source identity and other note bytes");
+                NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Escape), IntPtr.Zero); Pump(20);
+            }
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "另一篇";
+            Call(window, "RequestNote", "另一篇.md", false); Settled(window);
+            Check(title.Text == "切换时保存.md" && name.Visible, "A failed rename cancels the requested switch so the error cannot be lost");
+            name.Text = "修正后保存"; editor.Focus(); Settled(window);
+            Check(title.Text == "修正后保存.md" && !name.Visible, "Correcting a rejected name can be committed on blur again");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "取消不保存";
+            NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Escape), IntPtr.Zero); Pump(30);
+            Check(!name.Visible && !File.Exists(Path.Combine(store.FolderPath, "取消不保存.md")), "Escape remains an explicit cancel without a lost-focus commit");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "右键编辑名称";
+            name.ContextMenuStrip.Show(name, new Point(0, name.Height)); Pump(30);
+            Check(name.Visible && name.Text == "右键编辑名称", "Opening the title context menu does not prematurely commit");
+            name.ContextMenuStrip.Close(); name.Focus(); Pump(20);
+            NativeMessage(name.Handle, 0x10d, IntPtr.Zero, IntPtr.Zero); editor.Focus(); Pump(30);
+            Check(name.Visible && !File.Exists(Path.Combine(store.FolderPath, "右键编辑名称.md")), "Blur during name composition waits for the final IME text");
+            name.Text = "中文组合完成";
+            NativeMessage(name.Handle, 0x10e, IntPtr.Zero, IntPtr.Zero); Settled(window);
+            Check(title.Text == "中文组合完成.md", "The final composed name is committed after composition ends while unfocused");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "最小化时保存";
+            Call(window, "MinimizeNote"); Settled(window);
+            Check(!window.Visible && (bool)Field(window, "noteMinimized") && File.Exists(Path.Combine(store.FolderPath, "最小化时保存.md")), "Minimize waits for name persistence before hiding");
+            window.Toggle(); Settled(window);
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "文件占用不能关闭";
+            string lockedPath = (string)Field(window, "notePath");
+            using (File.Open(lockedPath, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+                Call(window, "TryHide"); Settled(window);
+                Check(window.Visible && name.Visible && name.Text == "文件占用不能关闭" && File.Exists(lockedPath), "A locked source keeps the note and failed name visible instead of silently closing");
+            }
+            name.Text = "解锁后改名"; editor.Focus(); Settled(window);
+            Check(title.Text == "解锁后改名.md", "Correcting and retrying after unlock remains usable");
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "离开应用保存";
+            using (var otherWindow = new Form()) {
+                otherWindow.Show(); otherWindow.Activate(); Settled(window);
+                Check(title.Text == "离开应用保存.md" && otherWindow.ContainsFocus, "Switching to another window commits without stealing its focus");
+            }
+            window.Activate(); editor.Focus();
+            Append(window, "\n改名后自动保存"); Autosaved(window);
+            Call(title, "OnClick", EventArgs.Empty); name.Text = "退出时保存";
+            window.FlushAndClose(); Settled(window);
+            Check(window.IsDisposed && File.ReadAllText(Path.Combine(store.FolderPath, "退出时保存.md")).Contains("改名后自动保存"), "Normal application exit waits for name and body persistence");
+        }
+        using (var reopened = new QuickNoteWindow(store, state)) {
+            reopened.Toggle(); Settled(reopened);
+            Check(Path.GetFileName((string)Field(reopened, "notePath")) == "退出时保存.md", "A fresh window restores the name committed at application exit");
+        }
+        Console.WriteLine("Blur rename passed: " + assertions + "; clipboard_access=0; global_input=0");
+    }
     [STAThread] static int Main(string[] arguments) {
         if (Array.IndexOf(arguments, "--dpi96") >= 0) SetThreadDpiAwarenessContext(new IntPtr(-1));
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -1589,7 +1663,7 @@ internal static class TestQuickNoteEditor {
             string vault = Path.Combine(root, "vault"), recovery = Path.Combine(root, "recovery");
             Directory.CreateDirectory(vault);
             var store = new QuickNoteStore(vault, "速记", recovery);
-            if (Array.IndexOf(arguments, "--rename-only") >= 0) { CheckTitleRename(vault, root); CheckRenameReview(vault, root); return 0; }
+            if (Array.IndexOf(arguments, "--rename-only") >= 0) { CheckRenameBlur(vault, root); CheckTitleRename(vault, root); CheckRenameReview(vault, root); return 0; }
             if (Array.IndexOf(arguments, "--preview-only") >= 0) { CheckPreviewContinuity(vault, root); Console.WriteLine("Preview tests passed: " + assertions + "; clipboard_access=0; global_input=0"); return 0; }
             // Keep each isolated process within the runner's existing deadline.
             // The default entry still executes both groups for manual use.

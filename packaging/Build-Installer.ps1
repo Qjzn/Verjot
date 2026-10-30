@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.11.0',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.11.1',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -32,7 +32,7 @@ $taskFiles = @(
     'documentation\changelog.md', 'documentation\ui-design.md',
     'documentation\install-windows.md', 'documentation\first-use.md',
     'documentation\configuration.md', 'documentation\ai-install.md',
-    'documentation\brand.md', 'documentation\product-scope.md',
+    'documentation\brand.md', 'documentation\product-scope.md', 'documentation\share.md',
     'documentation\quality.md', 'documentation\release-readiness.md',
     'documentation\recording-export-acceptance.md', 'documentation\device-revalidation.md',
     'documentation\local-model-evaluation.md', 'documentation\private-beta-acceptance.md',

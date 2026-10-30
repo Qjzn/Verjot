@@ -92,8 +92,8 @@ internal static class TestVerjotMenus {
                 Check(feedback.Pressed, "Mouse down has immediate pressed feedback");
                 using (var bitmap = new Bitmap(button.Width, button.Height)) {
                     button.DrawToBitmap(bitmap, button.ClientRectangle);
-                    Check(bitmap.GetPixel(button.Width / 2, 5) == VerjotUi.Pressed, "Pressed uses the shared color without moving the icon");
                     bitmap.Save(Path.Combine(folder, button.GetType().Name + "-pressed.png"));
+                    Check(bitmap.GetPixel(button.Width / 2, 5) == VerjotUi.Pressed, "Pressed uses the shared color without moving the icon: " + button.GetType().Name + "; size=" + button.Size + "; dpi=" + button.DeviceDpi + "; pixel=" + bitmap.GetPixel(button.Width / 2, 5));
                 }
                 Event(button, "OnMouseLeave", EventArgs.Empty);
                 Check(!feedback.Pressed, "Dragging outside clears pressed feedback");

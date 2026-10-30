@@ -2,13 +2,19 @@
 
 # Verjot
 
-**随手记下想法，安心留下会议。** Windows 上的轻量速记与会议录音工具。
+**随手记下想法，安心留下会议。** 开源的 Windows 轻量便签与会议录音工具：一个快捷键写文字、贴截图，用贴边标签切换笔记；需要时录下麦克风和电脑声音。
 
 默认仅录音，笔记与音频保存在本机。无需 Python、模型、GPU 或 Obsidian；需要文字时，再连接你选择的音频转写 API。
 
-[下载安装包](https://github.com/Qjzn/Verjot/releases/tag/v0.11.0) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
+[下载安装包](https://github.com/Qjzn/Verjot/releases/latest) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
 
-**Verjot 0.11 · Windows x64**（安装包版本 `0.11.0`）。中文「片言」，Logo 不变。默认仅录音，API 转写可选；公开下载无需 GitHub 登录。安装包及 SHA256 见[版本页](https://github.com/Qjzn/Verjot/releases/tag/v0.11.0)，使用边界见[发布验收](documentation/release-readiness.md)。
+**Verjot 0.11.1 · Windows x64**。中文「片言」，MIT 开源。公开下载无需 GitHub 登录，安装包及 SHA256 见[最新版本](https://github.com/Qjzn/Verjot/releases/latest)，使用边界见[发布验收](documentation/release-readiness.md)。
+
+<img src="assets/screenshots/quick-note.png" width="494" alt="Verjot 多标签便签：贴边切换会议要点、待办和灵感，正文支持文字、列表、图片及自动保存">
+
+*当前原生便签与多标签展示，使用公开演示内容，不含个人笔记。*
+
+**English:** Verjot is an open-source, lightweight Windows sticky notes and meeting recorder. Global hotkeys, local Markdown notes, image paste, edge tabs, autosave, and microphone plus system-audio recording work without Python, a GPU, or Obsidian. Transcription is optional through your own compatible audio API; recordings stay local unless you explicitly approve uploading.
 
 ## 能做什么
 
@@ -26,7 +32,7 @@
 | --- | --- |
 | 轻量安装、原生编辑 | 已发布基础安装包约 6 MB，使用 Windows 原生文本组件；速记和录音无需 Python、模型或 GPU。这里是安装体积，不是运行内存或所有设备的性能承诺。 |
 | 随叫随写 | `Ctrl+Alt+J` 唤出上次便签，置顶输入、自动保存；「＋」可另建一张。 |
-| 贴边标签切换 | 鼠标进入便签时显示最近标签，点击固定切换；可开启悬停预览，从「更多…」搜索最近最多 50 张便签。 |
+| 多便签随手切换 | 贴边标签保留正文空间，点击切换；可开启悬停预览，从「更多…」搜索最近最多 50 张便签。改名离开输入框即保存，同名不会覆盖。 |
 | 文字和图片一起记 | 常用格式、圆点列表续写，粘贴截图、插入／拖入本地图片；图片可缩放并打开原图。 |
 | 阅读大小随手调 | 正文内按住 `Ctrl` 滚动鼠标滚轮，放大／缩小显示；不改写 Markdown 正文的字号。 |
 | 录音与 AI 分开 | 没有转写服务也可先留下 MP3；开关麦克风不打断电脑声，按需再配置音频转写 API。 |
@@ -36,11 +42,9 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 
 ## 界面预览
 
-以下是 Verjot beta.40 候选的原生窗口截图，使用演示文字和模拟输入电平，不包含真实会议或个人笔记；隔离桌面的系统标题栏可能与日常 Windows 主题不同。
+速记主图展示当前版本的真实原生组件与多标签，使用演示文字和图片；下面录音图使用模拟输入电平，不代表真实音频测试。设置图展示可选配置。隔离桌面的系统标题栏可能与日常 Windows 主题不同。
 
 <img src="assets/screenshots/recording.png" width="279" alt="录音浮窗：计时、输入电平、麦克风开关和结束">
-
-<img src="assets/screenshots/quick-note.png" width="330" alt="速记便签：格式、列表、图片入口及自动保存">
 
 <details><summary>查看设置与可选 API 配置</summary>
 
@@ -53,7 +57,7 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 ## 开始使用
 
 1. 使用 Windows 10 1809+／Windows 11 x64，安装 .NET Framework 4.8（系统缺少时需先安装）。
-2. 从版本页下载 `Verjot-0.11.0-setup-x64.exe` 和 `SHA256SUMS.txt`，按[安装教程](documentation/install-windows.md)核对哈希后安装。
+2. 从版本页下载 `Verjot-0.11.1-setup-x64.exe` 和同版本 `SHA256SUMS.txt`，按[安装教程](documentation/install-windows.md)核对哈希后安装。
 3. 首次启动选择保存目录；默认仅录音，无需下载模型。之后从托盘「设置」修改。
 4. 按 `Ctrl+Alt+J` 写便签；按 `Ctrl+Alt+L` 开始／结束会议录音。
 
@@ -66,7 +70,7 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 
 快捷键可在设置中点击后直接按组合键录入。浮窗点击 Logo 展开／收起，右上角 × 隐藏浮窗，录音继续；从托盘可重新显示。
 
-速记左上角「＋」新建，点击顶部文件名可直接修改名称，回车确认，Esc 或点击正文取消；标签列的「更多…」可搜索最近便签。底部支持加粗、斜体、下划线、删除线、列表与图片。右下角文档菜单可切换「鼠标移出自动收起导航栏」；关闭后上下栏保持显示。粘贴图片只读取这次粘贴，不清空或恢复你的剪贴板。
+速记左上角「＋」新建，点击顶部文件名即可改名，回车或点击其他地方自动保存；切换、最小化、关闭和退出也会先保存名称，Esc 取消。同名、非法名称、文件占用或外部修改时保留原笔记并提示修正，不覆盖其他文件。标签列「更多…」可搜索最近便签。底部支持常用格式、列表和图片，右下角文档菜单可切换导航栏自动收起。粘贴图片只读取这次粘贴，不清空或恢复你的剪贴板。
 
 标签预览、Ctrl＋滚轮、图片缩放与原图查看的具体操作见[便签使用教程](documentation/install-windows.md#3-写第一张便签)。
 
@@ -103,6 +107,6 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 
 源码集中在 `src/`，主页只保留产品入口；测试在 `tests/`，说明在 `documentation/`，安装器在 `packaging/`。构建依赖、校验过的 NAudio 获取方式与原生回归命令见[贡献指南](CONTRIBUTING.md)和[CI](https://github.com/Qjzn/Verjot/blob/main/.github/workflows/ci.yml)。旧 Python／本地模型脚本仅用于兼容研究，不属于新用户安装步骤，不自动连接或下载模型。
 
-[架构](documentation/architecture.md) · [测试](documentation/tests.md) · [安全反馈](SECURITY.md) · [AI 安装说明](documentation/ai-install.md) · [开源检查](documentation/open-source-readiness.md)
+[架构](documentation/architecture.md) · [测试](documentation/tests.md) · [安全反馈](SECURITY.md) · [AI 安装说明](documentation/ai-install.md) · [产品介绍与分享材料](documentation/share.md) · [开源检查](documentation/open-source-readiness.md)
 
-源码采用 [MIT](LICENSE)，随包依赖遵守各自许可，见[第三方说明](THIRD_PARTY_NOTICES.md)。项目已按维护者决定改名为 Verjot，中文片言和 Logo 不变；名称及图形的公开使用权仍须单独核验，源码许可不授予第三方商标权。公开仓库另行决定。
+源码采用 [MIT](LICENSE)，随包依赖遵守各自许可，见[第三方说明](THIRD_PARTY_NOTICES.md)。项目现已公开，中文片言和 Logo 不变；名称及图形的使用权仍须单独核验，源码许可不授予第三方商标权。

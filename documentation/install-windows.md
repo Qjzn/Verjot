@@ -1,15 +1,15 @@
 # 安装与使用 Verjot
 
-当前版本为 **Verjot 0.11**（安装包 `0.11.0`）。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
+当前版本为 **Verjot 0.11.1**。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
 
 ## 1. 下载与安装
 
 需要 Windows 10 1809+／Windows 11 x64、.NET Framework 4.8、可写保存目录和可用音频设备。安装包约 6 MB；基础包不含模型，录音临时文件另占磁盘空间。当前安装器未签名，企业策略可能阻止运行，请核对来源，不要关闭全局安全保护。
 
-从 [0.11 版本页](https://github.com/Qjzn/Verjot/releases/tag/v0.11.0) 下载安装包及 `SHA256SUMS.txt`，公开版无需登录 GitHub。对下载文件运行：
+从 [最新版本页](https://github.com/Qjzn/Verjot/releases/latest) 下载安装包及 `SHA256SUMS.txt`，公开版无需登录 GitHub。对下载文件运行：
 
 ```powershell
-Get-FileHash -LiteralPath .\Verjot-0.11.0-setup-x64.exe -Algorithm SHA256
+Get-FileHash -LiteralPath .\Verjot-0.11.1-setup-x64.exe -Algorithm SHA256
 ```
 
 输出应与同版本 `SHA256SUMS.txt` 完全一致。不一致不要安装，重新下载核对。运行安装器，选择可写程序目录。安装后从开始菜单搜索 `Verjot`；旧 beta.38 的菜单仍叫 `verbit`，升级会更新属于本程序的入口。已有安装请更新到原目录，不能为了名称变化另建空目录而丢失原配置。
@@ -28,7 +28,7 @@ Get-FileHash -LiteralPath .\Verjot-0.11.0-setup-x64.exe -Algorithm SHA256
 
 ## 3. 写第一张便签
 
-按 `Ctrl+Alt+J`，输入中文。停顿后自动保存；收起再打开恢复上次文件。左上角＋新建，点文件名查看最近便签。底部按钮可调整常用格式、插入图片；也可主动粘贴截图或拖入本地图片。
+按 `Ctrl+Alt+J`，输入中文。停顿后自动保存；收起再打开恢复上次文件。左上角＋新建，点顶部文件名直接改名，回车或点击别处自动保存，Esc 取消；标签列「更多…」搜索最近便签。底部按钮可调整常用格式、插入图片；也可主动粘贴截图或拖入本地图片。
 
 ![当前原生速记](../assets/screenshots/quick-note.png)
 
@@ -37,6 +37,7 @@ Get-FileHash -LiteralPath .\Verjot-0.11.0-setup-x64.exe -Algorithm SHA256
 | 想做什么 | 操作 |
 | --- | --- |
 | 新建／继续写 | 左上角「＋」或便签内 `Ctrl+N` 新建；下次快捷键打开继续上次文件。 |
+| 修改便签名称 | 点击顶部名称直接输入；点击别处、切换、最小化和关闭都会先提交，Esc 取消。同名或非法名称不覆盖，修正后重试；文件被占用时先关闭占用程序。 |
 | 切换最近便签 | 鼠标进入便签时显示贴边标签，点击标签固定切换；空间不足时从「更多…」搜索，最多列出最近 50 个 Markdown 文件。 |
 | 悬停先看一眼 | 右下角文档菜单勾选「悬停标签预览内容」。预览只读，点击才选中编辑；不喜欢可关闭。 |
 | 放大／缩小文字显示 | 鼠标放在正文，按住 `Ctrl` 上／下滚动滚轮；调整阅读显示，不把字号写进 Markdown。 |

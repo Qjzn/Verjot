@@ -99,6 +99,7 @@ internal sealed class QuickNoteStore {
         title = (title ?? "").Trim();
         if (title.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) title = title.Substring(0, title.Length - 3);
         if (String.IsNullOrWhiteSpace(title) || title.Length > 120) throw new ArgumentException("名称不能为空，且不能超过120个字符。");
+        if (title == "." || title == "..") throw new ArgumentException("请填写可识别的便签名称，不能只使用句点。");
         string target = FilePath(title + ".md"), recovery = RecoveryForPath(target);
         RequireRevision(doc);
         if (String.Equals(target, doc.Path, StringComparison.Ordinal)) return;
