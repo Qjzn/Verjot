@@ -75,7 +75,9 @@ $taskConfig = Join-Path $taskFixture 'config.json'
 $taskConfigHash = (Get-FileHash -LiteralPath $taskConfig).Hash
 $taskPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 & $taskPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskHelper -Worker
-Check ($LASTEXITCODE -eq 0 -and (Get-Content -LiteralPath (Join-Path $taskFixture 'installation\recommended-model.json') -Raw -Encoding UTF8 | ConvertFrom-Json).state -eq 'completed') 'Actual helper worker records completed after child success'
+$taskWorkerExit = $LASTEXITCODE
+$taskWorkerStatus = Get-Content -LiteralPath (Join-Path $taskFixture 'installation\recommended-model.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+Check ($taskWorkerExit -eq 0 -and $taskWorkerStatus.state -eq 'completed') ("Actual helper worker records completed after child success; exit=$taskWorkerExit; state=$($taskWorkerStatus.state); reason=$($taskWorkerStatus.message)")
 Check ((Get-FileHash -LiteralPath $taskConfig).Hash -eq $taskConfigHash) 'Existing config is byte-for-byte preserved'
 [IO.File]::WriteAllText($taskFakeInstaller, 'param([switch]$RuntimeOnly,[string]$Backend,[string]$PythonExe); exit 9', $taskUtf8Test)
 & $taskPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskHelper -Worker
