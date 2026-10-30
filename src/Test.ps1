@@ -17,6 +17,10 @@ $taskOutput = Join-Path $taskRoot ('validation\experience-tests-' + [Guid]::NewG
 $taskDesktopRunner = Join-Path $taskOutput 'TestDesktopRunner.exe'
 & $taskCompiler /nologo /target:exe "/out:$taskDesktopRunner" (Join-Path $taskTests 'TestDesktopRunner.cs')
 if ($LASTEXITCODE -ne 0) { throw "Isolated test desktop runner compilation failed: $LASTEXITCODE" }
+# Fail fast on isolated prerequisite fixtures before running desktop groups.
+& (Join-Path $taskTests 'Test-InstallPrerequisites.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
+if ($LASTEXITCODE -ne 0) { throw "Install prerequisite regression failed: $LASTEXITCODE" }
+& (Join-Path $taskTests 'Test-RecommendedModel.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
 foreach ($taskTest in @('TestVerjotMenus', 'TestVerjotUpdates', 'TestDesktopServices', 'TestSessionCatalog', 'TestJsonReadSharing', 'TestRecorderPanel', 'TestRecorderMotion', 'TestRecorderDockMorph', 'TestMeetingExperience', 'TestCompletionFeedback', 'TestMeetingActions', 'TestMeetingHotkeys', 'TestMeetingSettings', 'TestRecordingProtection', 'TestTimestampedTimeline', 'TestCaptureReliability', 'TestSegmentedTimeline', 'TestRecordingExport', 'TestNativeApiTranscription', 'TestQuickNoteStore', 'TestNativeNoteDocument', 'TestQuickNoteEditor', 'TestQuickNoteResponsiveness', 'TestQuickNoteInput', 'TestQuickNoteNewlines')) {
     $taskFolder = Join-Path $taskOutput $taskTest
     [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
@@ -48,9 +52,6 @@ foreach ($taskTest in @('TestVerjotMenus', 'TestVerjotUpdates', 'TestDesktopServ
         if ($LASTEXITCODE -ne 0) { throw "$taskTest failed: $LASTEXITCODE; fixture: $taskFolder" }
     }
 }
-& (Join-Path $taskTests 'Test-InstallPrerequisites.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
-if ($LASTEXITCODE -ne 0) { throw "Install prerequisite regression failed: $LASTEXITCODE" }
-& (Join-Path $taskTests 'Test-RecommendedModel.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
 $taskModelUiRoot = Join-Path $taskOutput 'model-ui'
 [IO.Directory]::CreateDirectory((Join-Path $taskModelUiRoot 'assets')) | Out-Null
 Copy-Item -LiteralPath (Join-Path $taskRoot 'RecommendedModel.ps1') -Destination $taskModelUiRoot

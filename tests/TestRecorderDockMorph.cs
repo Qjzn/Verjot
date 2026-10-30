@@ -46,6 +46,18 @@ internal static class TestRecorderDockMorph {
         slow.Step(186, 38, 3); Check(slow.Value == 186 && slow.Velocity == 0, "A delayed UI frame settles rather than accumulating catch-up frames");
     }
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct BitmapInfo {
+        public uint size; public int width,height; public ushort planes,bits;
+        public uint compression,imageSize; public int xResolution,yResolution;
+        public uint colors,importantColors;
+    }
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BitmapInfo info, uint usage, out IntPtr bits, IntPtr section, uint offset);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr value);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr value);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern bool GdiFlush();
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="GetWindowLongW")] static extern int GetWindowStyle(IntPtr window,int index);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
@@ -61,18 +73,28 @@ internal static class TestRecorderDockMorph {
         using(var ready=EventWaitHandle.OpenExisting(args[4])) if(!ready.WaitOne(5000)) return 4;
         IntPtr previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {
-        using (var image=new Bitmap(int.Parse(args[2]),int.Parse(args[3]))) {
-            using(var graphics=Graphics.FromImage(image)) {
-                IntPtr dc=graphics.GetHdc();
-                try { if(!PrintWindow(new IntPtr(long.Parse(args[1])),dc,0)) return 2; }
-                finally { graphics.ReleaseHdc(dc); }
-            }
+        int width=int.Parse(args[2]),height=int.Parse(args[3]);
+        var info=new BitmapInfo {size=40,width=width,height=-height,planes=1,bits=32};
+        IntPtr dc=CreateCompatibleDC(IntPtr.Zero),pixels;
+        if(dc==IntPtr.Zero) throw new InvalidOperationException("Native capture DC allocation failed");
+        IntPtr image=CreateDIBSection(dc,ref info,0,out pixels,IntPtr.Zero,0);
+        if(image==IntPtr.Zero) { DeleteDC(dc); throw new InvalidOperationException("Native capture bitmap allocation failed"); }
+        IntPtr previousImage=SelectObject(dc,image);
+        try {
+            // Do not hold a GDI+ Graphics/GetHdc lease across a synchronous
+            // cross-process WM_PRINT. The target paints with GDI+ as well.
+            if(!PrintWindow(new IntPtr(long.Parse(args[1])),dc,0)) return 2;
+            GdiFlush();
+            byte[] data=new byte[checked(width*height*4)];
+            System.Runtime.InteropServices.Marshal.Copy(pixels,data,0,data.Length);
             int cyan=0;
-            for(int y=0;y<image.Height;y++) for(int x=0;x<image.Width;x++) {
-                Color c=image.GetPixel(x,y);
-                if(c.R<120 && c.G>120 && c.B>130 && c.G>c.R+30) cyan++;
+            for(int i=0;i<data.Length;i+=4) {
+                int b=data[i],g=data[i+1],r=data[i+2];
+                if(r<120 && g>120 && b>130 && g>r+30) cyan++;
             }
             return cyan>=5 ? 0 : 3;
+        } finally {
+            SelectObject(dc,previousImage); DeleteObject(image); DeleteDC(dc);
         }
         } finally { if(previous!=IntPtr.Zero) SetThreadDpiAwarenessContext(previous); }
     }
