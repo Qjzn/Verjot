@@ -251,6 +251,7 @@ internal sealed class MeetingSettingsDialog : Form {
     Label shortcutHint;
     public event Action<bool> HotkeyCaptureChanged;
     public Func<VerjotRelease, string, string, string> InstallUpdate;
+    internal Func<string> SaveBlockedReason;
     VerjotUpdateWindow updateWindow;
     internal bool HasPendingChanges {
         get {
@@ -491,6 +492,8 @@ internal sealed class MeetingSettingsDialog : Form {
     void SaveSettings() {
         error.Text = ""; save.Enabled = false;
         try {
+            string blocked = SaveBlockedReason == null ? null : SaveBlockedReason();
+            if (!string.IsNullOrEmpty(blocked)) { error.Text = blocked; return; }
             var edits = new Dictionary<string, object>();
             foreach (string key in new[] { "api_base_url", "api_model", "api_key_env", "asr_terms", "asr_context" }) edits[key] = inputs[key].Text.Trim();
             edits["transcription_mode"] = "api";

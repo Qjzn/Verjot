@@ -3003,13 +3003,14 @@ internal sealed class MeetingContext : ApplicationContext {
     }
     void OpenSettings(bool about = false) {
         if (settingsDialog != null && !settingsDialog.IsDisposed) { if (about) settingsDialog.ShowAbout(); settingsDialog.Activate(); return; }
-        if (recording != null || jobs.Count > 0) { Notice("请稍后修改设置", "请先结束录音并等待后台转写完成。", ToolTipIcon.Info); return; }
         try {
             var snapshot = MeetingSettingsSnapshot.Open(Path.Combine(MeetingFiles.Home, "config.json"));
             settingsDialog = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { return ApplySettings(snapshot, next); });
+            settingsDialog.SaveBlockedReason = SettingsBusyReason;
             settingsDialog.InstallUpdate = BeginUpdate;
             settingsDialog.HotkeyCaptureChanged += delegate(bool capturing) {
-                if (capturing && (recording != null || jobs.Count > 0)) throw new InvalidOperationException("请结束录音并等待转写完成后，再录入快捷键。");
+                string reason = SettingsBusyReason();
+                if (capturing && reason != null) throw new InvalidOperationException(reason);
                 hotkey.SetCaptureMode(capturing);
             };
             settingsDialog.FormClosed += delegate { settingsDialog = null; try { hotkey.SetCaptureMode(false); } catch (Exception failure) { Notice("快捷键恢复失败", failure.Message + " 请从托盘退出后重新启动。", ToolTipIcon.Warning); } };
@@ -3032,8 +3033,13 @@ internal sealed class MeetingContext : ApplicationContext {
         prompt.FormClosed += delegate { preparationPrompts.Remove(session); };
         prompt.Show();
     }
+    string SettingsBusyReason() {
+        return recording != null || jobs.Count > 0 || exiting || updating
+            ? "设置可查看和编辑；请结束录音并等待音频导出、转写或更新完成后，再保存设置或录入快捷键。" : null;
+    }
     string ApplySettings(MeetingSettingsSnapshot snapshot, Dictionary<string, object> next) {
-        if (recording != null || jobs.Count > 0 || exiting || updating) return "请结束录音、等待后台转写或更新完成后再保存。";
+        string busy = SettingsBusyReason();
+        if (busy != null) return busy;
         if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose())
             return "速记正在保存，或输入法尚未完成。请确认文字已保存后再次点击保存。";
         var previous = new Dictionary<string, object>(config);
