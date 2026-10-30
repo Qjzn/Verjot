@@ -25,6 +25,7 @@
 !/documentation/
 /documentation/*
 !/documentation/ai-install.md
+!/documentation/share.md
 !/documentation/configuration.md
 !/documentation/ui-design.md
 !/documentation/product-scope.md
