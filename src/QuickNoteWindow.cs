@@ -8,6 +8,15 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 
+internal sealed class QuickNoteNameBox : TextBox {
+    internal Action<bool> CompositionChanged;
+    protected override void WndProc(ref Message message) {
+        if (message.Msg == 0x10d && CompositionChanged != null) CompositionChanged(true);
+        base.WndProc(ref message);
+        if (message.Msg == 0x10e && CompositionChanged != null) CompositionChanged(false);
+    }
+}
+
 // Import/export commands are controlled; normal text, undo and IME remain in
 // Windows RichEdit. No WPF dispatcher or replacement keyboard engine is loaded.
 internal sealed class QuickNoteInputBox : NativeNoteInputBox {
@@ -636,6 +645,9 @@ internal sealed class QuickNoteWindow : Form {
     readonly QuickNoteInputBox editor;
     readonly NativeNoteDocument nativeDocument;
     readonly Label dateLabel;
+    readonly TextBox titleEditor;
+    bool titleComposing;
+    string renameRequested;
     readonly Panel top, body, viewport;
     readonly QuickNoteHeaderButton newButton, hideButton, closeButton;
     readonly PictureBox brand;
@@ -722,6 +734,16 @@ internal sealed class QuickNoteWindow : Form {
         closeButton = new QuickNoteHeaderButton { ActionIcon = "close", AccessibleName = "保存并关闭便签", Name = "note-close" };
         tips.SetToolTip(newButton, "新建便签 · Ctrl+N"); tips.SetToolTip(pin, "取消置顶"); tips.SetToolTip(hideButton, "最小化"); tips.SetToolTip(closeButton, "保存并关闭便签 · Esc");
         top.Controls.AddRange(new Control[] { newButton, brand, dateLabel, pin, hideButton, closeButton });
+        titleEditor = new QuickNoteNameBox { Visible = false, MaxLength = 123, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "修改当前便签名称", Name = "note-title-editor" };
+        top.Controls.Add(titleEditor);
+        VerjotMenu.AttachTextMenu(titleEditor);
+        ((QuickNoteNameBox)titleEditor).CompositionChanged = delegate(bool value) { titleComposing = value; };
+        titleEditor.KeyDown += delegate(object sender, KeyEventArgs e) {
+            if (titleComposing || e.KeyCode != Keys.Enter && e.KeyCode != Keys.Escape) return;
+            e.Handled = e.SuppressKeyPress = true;
+            if (e.KeyCode == Keys.Enter) CommitTitleEdit(); else { EndTitleEdit(); editor.Focus(); }
+        };
+        titleEditor.LostFocus += delegate { if (!titleComposing) EndTitleEdit(); };
         foreach (Control control in new Control[] { newButton, dateLabel, pin, hideButton, closeButton }) {
             Control target = control;
             target.MouseEnter += delegate { ShowFormatTip(target); };
@@ -779,27 +801,22 @@ internal sealed class QuickNoteWindow : Form {
         MouseEventHandler drag = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xa1, new IntPtr(2), IntPtr.Zero); } };
         top.MouseDown += drag; brand.MouseDown += drag;
         Point titlePress = Point.Empty;
-        dateLabel.MouseDown += delegate(object sender, MouseEventArgs e) { titlePress = e.Location; };
-        dateLabel.MouseMove += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && (Math.Abs(e.X - titlePress.X) >= SystemInformation.DragSize.Width || Math.Abs(e.Y - titlePress.Y) >= SystemInformation.DragSize.Height)) drag(sender, e); };
+        bool titleDragged = false;
+        dateLabel.MouseDown += delegate(object sender, MouseEventArgs e) { titlePress = e.Location; titleDragged = false; };
+        dateLabel.MouseMove += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && (Math.Abs(e.X - titlePress.X) >= SystemInformation.DragSize.Width || Math.Abs(e.Y - titlePress.Y) >= SystemInformation.DragSize.Height)) { titleDragged = true; drag(sender, e); } };
         editor.MouseEnter += delegate { CancelPreview(); RevealForPointer(); };
         editor.MouseLeave += delegate { ScheduleLeave(); };
         top.MouseEnter += delegate { leaveTimer.Stop(); }; top.MouseLeave += delegate { ScheduleLeave(); };
         MouseLeave += delegate { ScheduleLeave(); };
         MouseMove += delegate(object sender, MouseEventArgs e) { if (body.Bounds.Contains(e.Location)) RevealForPointer(); };
         dateLabel.Cursor = Cursors.Hand;
-        tips.SetToolTip(dateLabel, "点击切换便签");
-        dateLabel.Click += delegate { ShowRecentMenu(); };
+        tips.SetToolTip(dateLabel, "点击修改名称");
+        dateLabel.Click += delegate { if (!titleDragged) BeginTitleEdit(); };
         Move += delegate { EraseImageOutline(); if (!movingWindow && tabs != null && tabs.Visible) PositionTabs(); }; Resize += delegate { CancelImageDrag(); LayoutChrome(); if (!movingWindow && tabs != null && tabs.Visible) { UpdateTabs(); PositionTabs(); } };
         VisibleChanged += delegate { if (!Visible) { CancelPreview(); HideTabs(); } };
         Deactivate += delegate { CancelImageDrag(); if (tabs == null || !tabs.Bounds.Contains(Cursor.Position)) { CancelPreview(); HideTabs(); UpdateChromeForPointer(Cursor.Position); } };
         hoverTimer.Tick += delegate { hoverTimer.Stop(); StartPreview(); };
-        leaveTimer.Tick += delegate {
-            leaveTimer.Stop();
-            UpdateChromeForPointer(Cursor.Position);
-            if (tabs != null && tabs.Visible && tabs.Bounds.Contains(Cursor.Position)) return;
-            CancelPreview();
-            if (!Visible || WindowState == FormWindowState.Minimized || !Bounds.Contains(Cursor.Position)) HideTabs();
-        };
+        leaveTimer.Tick += delegate { FinishPointerLeave(Cursor.Position); };
         editor.TextChanged += delegate {
             if (loading) return;
             editVersion++;
@@ -826,6 +843,10 @@ internal sealed class QuickNoteWindow : Form {
         ResizeEnd += delegate { SaveWindowState(); };
         Shown += delegate { editor.Focus(); };
         ObserveHover(this); LayoutChrome(); LayoutHeader(); LayoutEditors();
+        // Both native RichEdit controls must receive the same monitor-DPI
+        // transitions. A late-created overlay can retain the primary monitor's
+        // text scale even when WinForms reports the destination DPI correctly.
+        EnsurePreviewEditor();
     }
     protected override void OnLoad(EventArgs e) {
         base.OnLoad(e);
@@ -864,6 +885,7 @@ internal sealed class QuickNoteWindow : Form {
     }
     void MinimizeNote() {
         if (IsComposing) return;
+        EndTitleEdit();
         CancelPreview(); CancelImageDrag(); RememberView(); SaveWindowState(); HideTabs();
         noteMinimized = true; Hide(); Flush();
         if (Minimized != null) Minimized();
@@ -879,6 +901,7 @@ internal sealed class QuickNoteWindow : Form {
     }
     void TryHide() {
         if (IsComposing) return;
+        EndTitleEdit();
         CancelPreview(); HideTabs();
         hideRequested = true;
         if (Flush()) { hideRequested = false; SaveWindowState(); Hide(); }
@@ -890,6 +913,7 @@ internal sealed class QuickNoteWindow : Form {
         CancelImageDrag();
         if (IsComposing || loadRequested || reloadRequested || (editor.ReadOnly && workerBusy)) return;
         if (queuedImageCount != 0) { SetStatus("图片正在插入，请稍后切换便签。", false); return; }
+        EndTitleEdit();
         CancelPreview(); RememberView();
         if (dirty && !CaptureSave()) return;
         if (note != null && note.Revision == "missing" && !dirty) recentFiles.Remove(Path.GetFileName(notePath));
@@ -905,7 +929,9 @@ internal sealed class QuickNoteWindow : Form {
             // Only this synchronous UI import is writable; queued loading
             // remains read-only and no user message loop is pumped here.
             editor.ReadOnly = false;
+            float zoom = editor.ZoomFactor;
             nativeDocument.ApplyPrepared(prepared);
+            RestoreDisplayZoom(editor, zoom);
             LastLoadError = null;
             loadFailureRecoveryPath = null;
             note = next; CacheNoteMetadata(); documentGeneration++; imageEpoch++;
@@ -959,6 +985,7 @@ internal sealed class QuickNoteWindow : Form {
     void DrainWork() {
         if (workerBusy || IsDisposed) return;
         if (imageQueue.Count > 0) { StartImageWork(imageQueue.Dequeue()); return; }
+        if (pendingText == null && renameRequested != null) { StartRenameWork(); return; }
         if (pendingText == null && deleteRequested != null) { StartDeleteWork(); return; }
         if (pendingText == null && !reloadRequested && !loadRequested) { FinishRequests(); return; }
         bool save = pendingText != null, reload = !save && reloadRequested;
@@ -1011,6 +1038,7 @@ internal sealed class QuickNoteWindow : Form {
                 if (archive != null) { archivedRecovery = archive; archivedRecoverySource = reload ? document.Path : result.Path; archivedRecoveryText = reload ? text : result.RecoveryText; }
                 if (failure != null) {
                     deleteRequested = null;
+                    renameRequested = null;
                     if (!save) { LastLoadError = failure; CacheLoadFailureRecovery(result, archive); }
                     failedText = save ? text : reload ? text : failedText;
                     hideRequested = closeRequested = false; closeContinuation = null;
@@ -1501,7 +1529,7 @@ internal sealed class QuickNoteWindow : Form {
     void UpdateTitle() {
         string file = previewVisible ? previewFile : notePath == null ? null : Path.GetFileName(notePath);
         dateLabel.Text = (file ?? "新便签") + (previewVisible ? " · 预览" : "");
-        Text = file ?? "速记"; tips.SetToolTip(dateLabel, dateLabel.Text); LayoutHeader();
+        Text = file ?? "速记"; tips.SetToolTip(dateLabel, dateLabel.Text + " · 点击修改名称"); LayoutHeader();
     }
     void LayoutHeader() {
         if (closeButton == null || brand == null) return;
@@ -1515,6 +1543,7 @@ internal sealed class QuickNoteWindow : Form {
         int x = left + Math.Max(0, (available - icon - pad - textWidth) / 2);
         brand.Bounds = new Rectangle(x, (h - icon) / 2, icon, icon);
         dateLabel.Bounds = new Rectangle(x + icon + pad, y, textWidth, unit);
+        if (titleEditor != null) titleEditor.Bounds = new Rectangle(left, (h - titleEditor.PreferredHeight) / 2, available, titleEditor.PreferredHeight);
     }
     void LayoutChrome() {
         if (Disposing || IsDisposed || body == null || formatBar == null) return;
@@ -1548,7 +1577,7 @@ internal sealed class QuickNoteWindow : Form {
         UpdateChromeClip();
     }
     void UpdateChromeForPointer(Point screen) {
-        bool held = !autoHideNavigation || statusError || imageDragCp >= 0 || editor.Capture;
+        bool held = !autoHideNavigation || statusError || imageDragCp >= 0 || editor.Capture || titleEditor.Visible;
         foreach (System.ComponentModel.Component component in transientMenus.Components) {
             var menu = component as ContextMenuStrip; if (menu != null && menu.Visible) held = true;
         }
@@ -1670,7 +1699,7 @@ internal sealed class QuickNoteWindow : Form {
     }
     void ShowTabs() {
         leaveTimer.Stop();
-        if (IsDisposed || movingWindow || !Visible || WindowState != FormWindowState.Normal || note == null) return;
+        if (IsDisposed || movingWindow || !Visible || WindowState != FormWindowState.Normal || note == null || titleEditor.Visible || renameRequested != null || editor.ReadOnly && workerBusy) return;
         if (tabs != null && tabs.Visible && tabs.IsRevealed) return;
         if (tabs == null) {
             tabs = new QuickNoteTabs(); tabs.Font = uiFont;
@@ -1726,15 +1755,28 @@ internal sealed class QuickNoteWindow : Form {
         return true;
     }
     void ScheduleLeave() { leaveTimer.Stop(); leaveTimer.Start(); }
+    void FinishPointerLeave(Point pointer) {
+        leaveTimer.Stop();
+        UpdateChromeForPointer(pointer);
+        // The painted tabs remain separate. Their transparent gaps still
+        // belong to one logical browsing corridor, without taking clicks.
+        if (tabs != null && tabs.Visible && tabs.Bounds.Contains(pointer)) return;
+        CancelPreview();
+        if (!Visible || WindowState == FormWindowState.Minimized || !Bounds.Contains(pointer)) HideTabs();
+    }
     void HideTabs() { hoverTimer.Stop(); leaveTimer.Stop(); if (tabs != null) tabs.Conceal(); }
     void HoverNote(string file) {
-        leaveTimer.Stop(); hoverTimer.Stop();
-        if (String.Equals(hoverFile, file, StringComparison.OrdinalIgnoreCase) && previewVisible) return;
-        CancelPreview(); hoverFile = file;
-        if (file != null && previewOnHover && !String.Equals(file, Path.GetFileName(notePath ?? ""), StringComparison.OrdinalIgnoreCase)) hoverTimer.Start();
+        leaveTimer.Stop();
+        if (titleEditor.Visible || renameRequested != null || editor.ReadOnly) { CancelPreview(); return; }
+        if (file != null && String.Equals(hoverFile, file, StringComparison.OrdinalIgnoreCase)) return;
+        hoverTimer.Stop(); previewEpoch++; hoverFile = file;
+        if (file == null || !previewOnHover || String.Equals(file, Path.GetFileName(notePath ?? ""), StringComparison.OrdinalIgnoreCase)) { CancelPreview(); return; }
+        // Keep the visible preview while the next target dwells/loads. Only
+        // its completed result replaces it; never flash the selected note.
+        hoverTimer.Start();
     }
     void StartPreview() {
-        if (!previewOnHover || hoverFile == null || IsComposing || loadRequested || reloadRequested || note == null || !Visible) return;
+        if (!previewOnHover || hoverFile == null || IsComposing || loadRequested || reloadRequested || note == null || !Visible || titleEditor.Visible || renameRequested != null || editor.ReadOnly) return;
         if (previewBusy) { hoverTimer.Start(); return; }
         string file = hoverFile; int epoch = previewEpoch;
         previewBusy = true;
@@ -1751,23 +1793,30 @@ internal sealed class QuickNoteWindow : Form {
             } catch (Exception error) { failure = error.Message; }
             try { BeginInvoke((Action)delegate {
                 previewBusy = false;
-                if (IsDisposed || epoch != previewEpoch || hoverFile != file || IsComposing || loadRequested || !Visible) return;
+                if (IsDisposed || epoch != previewEpoch || hoverFile != file || IsComposing || loadRequested || !Visible || titleEditor.Visible || renameRequested != null || editor.ReadOnly) return;
                 if (failure != null) { if (tabs != null) tabs.ShowFileTip("无法预览：" + failure); return; }
                 try {
                     EnsurePreviewEditor(); previewEditor.ReadOnly = false;
                     previewDocument.ApplyPrepared(prepared); previewEditor.ReadOnly = true;
+                    RestoreDisplayZoom(previewEditor, editor.ZoomFactor);
                     previewEditor.Select(0, 0); QuickNoteScrollBar.SetPosition(previewEditor, Point.Empty);
                     previewFile = file; previewVisible = true;
-                    previewCaretHidden = editor.Focused && HideCaret(editor.Handle);
+                    if (!previewCaretHidden) previewCaretHidden = editor.Focused && HideCaret(editor.Handle);
                     previewEditor.Show(); previewEditor.BringToFront(); scroll.Target = previewEditor;
                     formatBar.Enabled = false; UpdateTitle(); scroll.Invalidate();
                 } catch (Exception error) { CancelPreview(); if (tabs != null) tabs.ShowFileTip("无法预览：" + error.Message); }
             }); } catch (InvalidOperationException) { }
         });
     }
+    static void RestoreDisplayZoom(RichTextBox target, float zoom) {
+        // RTF import resets RichEdit's native zoom while WinForms can retain
+        // the old property value. Reapply it synchronously before painting.
+        target.ZoomFactor = 1;
+        target.ZoomFactor = zoom;
+    }
     void EnsurePreviewEditor() {
         if (previewEditor != null) return;
-        previewEditor = new QuickNoteInputBox { Visible = false, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = editor.ForeColor, Font = editorFont, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, TabStop = false, AccessibleName = "便签只读预览；点击标签切换" };
+        previewEditor = new QuickNoteInputBox { Visible = false, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = editor.ForeColor, Font = editor.Font, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, TabStop = false, AccessibleName = "便签只读预览；点击标签切换" };
         // Every clipboard path is swallowed, including context menus and
         // keyboard fallback. This view never owns editable note state.
         previewEditor.UserCopyOrCut = delegate { }; previewEditor.UserPaste = delegate { }; previewEditor.UserContextMenu = delegate { };
@@ -1809,6 +1858,47 @@ internal sealed class QuickNoteWindow : Form {
         point.X = Math.Max(area.Left, Math.Min(point.X, area.Right - picker.Width - 4));
         point.Y = Math.Max(area.Top, Math.Min(point.Y, area.Bottom - picker.Height - 4));
         menu.Show(this, PointToClient(point));
+    }
+    void BeginTitleEdit() {
+        CancelPreview(); CancelImageDrag();
+        if (note == null || IsComposing || editor.ReadOnly || queuedImageCount != 0 || loadRequested || reloadRequested) return;
+        SetChromeVisible(true); leaveTimer.Stop(); HideTabs();
+        titleEditor.Text = Path.GetFileNameWithoutExtension(notePath);
+        titleEditor.Visible = true; titleEditor.BringToFront(); LayoutHeader();
+        titleEditor.Focus(); titleEditor.SelectAll();
+    }
+    void EndTitleEdit() {
+        titleEditor.Visible = false;
+        if (Visible && !Disposing && !IsDisposed) ScheduleLeave();
+    }
+    void CommitTitleEdit() {
+        if (!titleEditor.Visible || titleComposing || IsComposing || editor.ReadOnly || queuedImageCount != 0) return;
+        if (dirty && !CaptureSave()) return;
+        CancelPreview();
+        RememberView(); renameRequested = titleEditor.Text;
+        EndTitleEdit(); editor.Focus(); editor.ReadOnly = true; DrainWork();
+    }
+    void StartRenameWork() {
+        string title = renameRequested, previous = Path.GetFileName(notePath); renameRequested = null;
+        QuickNoteDocument document = note;
+        workerBusy = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            Exception failure = null;
+            try { store.Rename(document, title); } catch (Exception error) { failure = error; }
+            try { BeginInvoke((Action)delegate {
+                workerBusy = false; if (IsDisposed) return;
+                editor.ReadOnly = false; CacheNoteMetadata();
+                if (failure != null) {
+                    hideRequested = closeRequested = false; closeContinuation = null;
+                    SetStatus("无法修改名称：" + failure.Message, true); return;
+                }
+                string renamed = Path.GetFileName(notePath);
+                NoteView view;
+                if (views.TryGetValue(previous, out view)) { views.Remove(previous); views[renamed] = view; }
+                recentFiles.RemoveAll(delegate(string file) { return String.Equals(file, previous, StringComparison.OrdinalIgnoreCase); });
+                TouchRecent(renamed); UpdateTitle(); UpdateTabs(); SetSavedStatus(); SaveWindowState(); DrainWork();
+            }); } catch (InvalidOperationException) { }
+        });
     }
     void ShowTabMenu(string file, Point position) {
         CancelPreview();

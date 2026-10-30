@@ -38,7 +38,7 @@ foreach ($taskTest in @('TestVerjotMenus', 'TestVerjotUpdates', 'TestDesktopServ
     if ($taskTest -in @('TestQuickNoteEditor', 'TestRecorderDockMorph')) {
         # Preserve every assertion, with a fresh isolated process per group;
         # do not relax the desktop runner's deadline for the aggregate fixture.
-        $taskGroups = if ($taskTest -eq 'TestQuickNoteEditor') { @('--core-only', '--attachments-only') } else { @('--anchor-only', '--native-only', '--review-only', '--experience-only') }
+        $taskGroups = if ($taskTest -eq 'TestQuickNoteEditor') { @('--core-only', '--attachments-only', '--preview-only', '--rename-only') } else { @('--anchor-only', '--native-only', '--review-only', '--experience-only') }
         foreach ($taskGroup in $taskGroups) {
             & $taskDesktopRunner $taskBinary $taskFolder $taskGroup
             if ($LASTEXITCODE -ne 0) { throw "$taskTest $taskGroup failed: $LASTEXITCODE; fixture: $taskFolder" }

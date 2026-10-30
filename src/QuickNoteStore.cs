@@ -94,6 +94,22 @@ internal sealed class QuickNoteStore {
     internal QuickNoteDocument NewNote() {
         return LoadFile("便签 " + DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".md");
     }
+    internal void Rename(QuickNoteDocument doc, string title) {
+        Validate(doc);
+        title = (title ?? "").Trim();
+        if (title.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) title = title.Substring(0, title.Length - 3);
+        if (String.IsNullOrWhiteSpace(title) || title.Length > 120) throw new ArgumentException("名称不能为空，且不能超过120个字符。");
+        string target = FilePath(title + ".md"), recovery = RecoveryForPath(target);
+        RequireRevision(doc);
+        if (String.Equals(target, doc.Path, StringComparison.Ordinal)) return;
+        if (!Same(target, doc.Path) && (File.Exists(target) || Directory.Exists(target))) throw new IOException("已有同名便签，请换一个名称；不会覆盖原文件。");
+        if (File.Exists(doc.RecoveryPath) || File.Exists(recovery)) throw new IOException("存在未处理的恢复草稿，请先处理后再改名。");
+        if (doc.Revision == MissingRevision) Save(doc, doc.Text);
+        // Same-directory move preserves bytes and relative image references.
+        // File.Move fails if another writer creates the target in the meantime.
+        File.Move(doc.Path, target);
+        doc.Path = target; doc.RecoveryPath = recovery;
+    }
     internal string[] RecentFiles() {
         CheckOrdinaryPath(noteRoot);
         if (!Directory.Exists(noteRoot)) return new string[0];

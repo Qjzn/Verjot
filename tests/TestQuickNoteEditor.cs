@@ -743,6 +743,83 @@ internal static class TestQuickNoteEditor {
             Check(window.ReadMarkdown() == "保存后仍需保护外部删除", "Deleted saved note retains its visible content");
         }
     }
+    static void WaitPreview(QuickNoteWindow window, string file) {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while ((!((bool)Field(window, "previewVisible")) || (string)Field(window, "previewFile") != file) && watch.ElapsedMilliseconds < 5000) Pump(10);
+        Check((bool)Field(window, "previewVisible") && (string)Field(window, "previewFile") == file, "Requested readonly preview finishes: " + file);
+    }
+    static void CheckPreviewContinuity(string vault, string root) {
+        foreach (Screen screen in Screen.AllScreens) {
+            string id = Guid.NewGuid().ToString("N");
+            var store = new QuickNoteStore(vault, "preview-" + id, Path.Combine(root, "preview-recovery-" + id));
+            string text = "中文正文与 English\n第二行文字\n第三行";
+            var selected = store.LoadFile("当前.md"); store.Save(selected, text);
+            var first = store.LoadFile("预览甲.md"); store.Save(first, text + "甲");
+            var second = store.LoadFile("预览乙.md"); store.Save(second, text + "乙");
+            using (var window = new QuickNoteWindow(store, Path.Combine(root, "preview-state-" + id))) {
+                window.Location = new Point(screen.WorkingArea.Left + 180, screen.WorkingArea.Top + 80);
+                window.Toggle(); Settled(window); Call(window, "RequestNote", "当前.md", false); Settled(window);
+                window.Location = new Point(screen.WorkingArea.Left + 180, screen.WorkingArea.Top + 80); Pump(80);
+                var input = (QuickNoteInputBox)Field(window, "editor");
+                Call(window, "ShowTabs"); Pump(220);
+                var rail = (QuickNoteTabs)Field(window, "tabs");
+                input.ZoomFactor = 1.75f; input.Select(0, 0); QuickNoteScrollBar.SetPosition(input, Point.Empty);
+                Call(window, "HoverNote", "预览甲.md"); WaitPreview(window, "预览甲.md");
+                var preview = (QuickNoteInputBox)Field(window, "previewEditor");
+                Pump(40);
+                Check(Math.Abs(preview.ZoomFactor - input.ZoomFactor) < .001, "Preview inherits the current native editor zoom at " + window.DeviceDpi + " DPI");
+                int editLine = input.GetPositionFromCharIndex(input.Text.IndexOf('\n') + 1).Y - input.GetPositionFromCharIndex(0).Y;
+                int previewLine = preview.GetPositionFromCharIndex(preview.Text.IndexOf('\n') + 1).Y - preview.GetPositionFromCharIndex(0).Y;
+                var editRect = new NativeRectangle(); var previewRect = new NativeRectangle();
+                FormatRectangle(input.Handle, 0xb2, IntPtr.Zero, ref editRect); FormatRectangle(preview.Handle, 0xb2, IntPtr.Zero, ref previewRect);
+                Console.WriteLine("Native text positions: edit=" + input.GetPositionFromCharIndex(0) + "/" + input.GetPositionFromCharIndex(input.Text.IndexOf('\n') + 1) + "; preview=" + preview.GetPositionFromCharIndex(0) + "/" + preview.GetPositionFromCharIndex(preview.Text.IndexOf('\n') + 1) + "; rectangles=" + editRect.Right + "/" + previewRect.Right + "; lines=" + input.GetLineFromCharIndex(input.Text.IndexOf('\n') + 1) + "/" + preview.GetLineFromCharIndex(preview.Text.IndexOf('\n') + 1));
+                CapturePreviewFrame(window, "preview-zoom-");
+                Console.WriteLine("Preview typography: screen=" + screen.DeviceName + "; dpi=" + window.DeviceDpi + "; editor=" + input.DeviceDpi + "/" + input.ZoomFactor + "; preview=" + preview.DeviceDpi + "/" + preview.ZoomFactor + "; line=" + editLine + "/" + previewLine);
+                Check(editLine > 0 && Math.Abs(editLine - previewLine) <= 1, "Preview and editor render the same line height: " + editLine + "/" + previewLine);
+                int hidden = 0; preview.VisibleChanged += delegate { if (!preview.Visible) hidden++; };
+                string before = preview.Text;
+                Call(rail, "OnMouseLeave", EventArgs.Empty);
+                int row = Math.Max(30, 36 * rail.DeviceDpi / 96);
+                Point gap = new Point(rail.Left + rail.Width / 2, rail.Top + row - 2);
+                Call(window, "FinishPointerLeave", gap);
+                Check((bool)Field(window, "previewVisible") && preview.Text == before, "Transparent gaps belong to the continuous preview rail");
+                Call(window, "HoverNote", "预览乙.md");
+                Check((bool)Field(window, "previewVisible") && preview.Text == before, "Changing hover target keeps the old preview until its replacement is ready");
+                WaitPreview(window, "预览乙.md");
+                for (int i = 0; i < 12; i++) {
+                    string file = i % 2 == 0 ? "预览甲.md" : "预览乙.md";
+                    Call(window, "HoverNote", file);
+                    Check(preview.Visible, "Repeated target changes do not expose the selected note");
+                    Call(window, "StartPreview"); WaitPreview(window, file);
+                }
+                Check(hidden == 0 && window.ReadMarkdown() == text && (string)Field(window, "notePath") == selected.Path,
+                    "Preview swaps never hide the overlay or change the edit/save destination");
+                Call(window, "FinishPointerLeave", new Point(screen.WorkingArea.Right - 2, screen.WorkingArea.Bottom - 2));
+                Check(!(bool)Field(window, "previewVisible") && input.Visible, "Actually leaving the rail restores the selected editor");
+                Call(window, "ShowTabs"); Call(window, "HoverNote", "预览甲.md"); Call(window, "HoverNote", "预览乙.md");
+                WaitPreview(window, "预览乙.md");
+                Call(window, "RequestNote", "预览乙.md", false); Settled(window);
+                Check(Math.Abs(preview.ZoomFactor - input.ZoomFactor) < .001 && !input.ReadOnly, "Clicking a preview preserves its display scale when it becomes editable");
+                int clickedLine = input.GetPositionFromCharIndex(input.Text.IndexOf('\n') + 1).Y - input.GetPositionFromCharIndex(0).Y;
+                Check(clickedLine == editLine, "Clicking a preview keeps the same native rendered line height: " + editLine + "/" + clickedLine);
+                CapturePreviewFrame(window, "edit-zoom-");
+                input.ZoomFactor = 1.25f;
+                Call(window, "ShowTabs"); Call(window, "HoverNote", "预览甲.md"); WaitPreview(window, "预览甲.md");
+                Check(Math.Abs(preview.ZoomFactor - input.ZoomFactor) < .001, "A reused preview picks up later zoom changes");
+                Call(window, "CancelPreview");
+                Check(File.ReadAllText(selected.Path) == text && File.ReadAllText(first.Path) == text + "甲" && File.ReadAllText(second.Path) == text + "乙",
+                    "Preview, gaps and selection changes never rewrite source notes");
+                CapturePreviewFrame(window, "preview-continuity-");
+                Console.WriteLine("Preview continuity: dpi=" + window.DeviceDpi + "; line=" + editLine + "; swaps=12; hidden_during_swaps=0");
+            }
+        }
+    }
+    static void CapturePreviewFrame(QuickNoteWindow window, string prefix) {
+        using (var frame = new Bitmap(window.Width, window.Height)) using (var graphics = Graphics.FromImage(frame)) {
+            IntPtr dc = graphics.GetHdc(); try { Check(PrintWindow(window.Handle, dc, 0), "Capture native preview/edit window"); } finally { graphics.ReleaseHdc(dc); }
+            frame.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, prefix + window.DeviceDpi + ".png"));
+        }
+    }
     static void CheckNavigation(string vault, string root) {
         var store = new QuickNoteStore(vault, "navigation", Path.Combine(root, "navigation-recovery"));
         var seed = store.Load(DateTime.Today); store.Save(seed, "旧版日期便签");
@@ -768,7 +845,7 @@ internal static class TestQuickNoteEditor {
             var header = (Panel)Field(window, "top");
             Call(window, "HideTabs"); Pump(250); Call(header, "OnMouseEnter", EventArgs.Empty); Pump(40);
             Check(Field(window, "tabs") == null || !((Form)Field(window, "tabs")).Visible, "Header hover alone does not reveal the document tabs");
-            Check(window.FormBorderStyle == FormBorderStyle.None && header.Controls.Count == 6, "One header contains new, brand, filename, pin, minimize and close");
+            Check(window.FormBorderStyle == FormBorderStyle.None && header.Controls.Count == 7 && !((Control)Field(window, "titleEditor")).Visible, "One header contains six normal controls and an inline name editor shown only during rename");
             Point edgePoint = new Point(window.Right - 2, window.Bottom - 2);
             Check(NativeMessage(window.Handle, 0x84, IntPtr.Zero, new IntPtr((edgePoint.Y << 16) | (edgePoint.X & 0xffff))).ToInt32() == 17, "The single-header window exposes the native bottom-right resize hit target");
             var pin = (Control)Field(window, "pin"); var minimize = (Control)Field(window, "hideButton"); var close = (Control)Field(window, "closeButton");
@@ -1150,11 +1227,11 @@ internal static class TestQuickNoteEditor {
                         Rectangle area = Screen.FromControl(window).WorkingArea;
                         window.Bounds = area; Call(window, "ShowTabs");
                         Check(!rail.Visible, "No external space hides the rail instead of covering the note");
-                        Call((Label)Field(window, "dateLabel"), "OnClick", EventArgs.Empty); Pump(30);
+                        Call(window, "ShowRecentMenu"); Pump(30);
                         var menus = (System.ComponentModel.Container)Field(window, "transientMenus");
                         var menu = (ContextMenuStrip)menus.Components[0];
                         var picker = (QuickNoteRecentPicker)((ToolStripControlHost)menu.Items[0]).Control;
-                        Check(menu.Visible && area.Contains(menu.Bounds) && picker.Results.Items.Count == 2, "Filename opens the bounded recent picker even with no rail space");
+                        Check(menu.Visible && area.Contains(menu.Bounds) && picker.Results.Items.Count == 2, "The more-notes entry opens a bounded picker even with no rail space");
                         Check(picker.Font.Unit == GraphicsUnit.Pixel && Math.Abs(picker.Font.Size - menu.Font.Size) < .01 && picker.Results.ItemHeight < 40 * window.DeviceDpi / 96, "The actual more-notes entry uses the compact shared-menu font and rows");
                         picker.Search.Text = "不存在"; Check(picker.Results.Items.Count == 0, "The recent picker filters and presents an empty result");
                         picker.Search.Text = Path.GetFileNameWithoutExtension(other.Path);
@@ -1333,6 +1410,176 @@ internal static class TestQuickNoteEditor {
         Console.WriteLine("PASS native shell recycle of one synthetic file; no user note touched");
     }
     static string windowNotePath(QuickNoteWindow window) { return (string)Field(window, "notePath"); }
+    static void CheckTitleRename(string vault, string root) {
+        foreach (Screen screen in Screen.AllScreens) {
+            string folder = "rename-" + screen.DeviceName.Replace("\\", "").Replace(".", "");
+            var store = new QuickNoteStore(vault, folder, Path.Combine(root, folder + "-recovery"));
+            var initial = store.Load(DateTime.Today);
+            string original = "**中文正文**\n![图](附件/test.png)\n末行";
+            store.Save(initial, original);
+            string state = Path.Combine(root, folder + "-state");
+            using (var window = new QuickNoteWindow(store, state)) {
+                window.Toggle(); Settled(window); window.Location = new Point(screen.WorkingArea.Left + 35, screen.WorkingArea.Top + 35); Pump(60);
+                var title = (Label)Field(window, "dateLabel");
+                var input = (TextBox)Field(window, "titleEditor");
+                var editor = (RichTextBox)Field(window, "editor");
+                editor.ZoomFactor = 1.5f; editor.Select(2, 1);
+                Call(title, "OnClick", EventArgs.Empty);
+                Check(input.Visible && input.Focused, "Actual header click edits the current name inline");
+                Check(((System.ComponentModel.Container)Field(window, "transientMenus")).Components.Count == 0, "Title click does not open the search menu");
+                Check(input.Text == Path.GetFileNameWithoutExtension(initial.Path), "Only the current basename is selected, without Markdown extension");
+                Check(((Panel)Field(window, "top")).ClientRectangle.Contains(input.Bounds), "Inline name stays within the DPI-scaled header");
+                Call(window, "UpdateChromeForPointer", new Point(screen.WorkingArea.Right + 100, screen.WorkingArea.Bottom + 100));
+                Check((bool)Field(window, "chromeVisible"), "Name editing keeps the header visible outside the note");
+                input.Text = "取消的名称";
+                NativeMessage(input.Handle, 0x100, new IntPtr((int)Keys.Escape), IntPtr.Zero); Pump(20);
+                Check(!input.Visible && File.Exists(initial.Path), "Escape cancels name editing and keeps the original file");
+                Call(title, "OnClick", EventArgs.Empty);
+                input.Text = "输入法确认";
+                NativeMessage(input.Handle, 0x10d, IntPtr.Zero, IntPtr.Zero);
+                NativeMessage(input.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Pump(20);
+                Check(input.Visible && File.Exists(initial.Path), "IME composition Enter does not rename the file");
+                NativeMessage(input.Handle, 0x10e, IntPtr.Zero, IntPtr.Zero);
+                input.Text = "项目想法.md";
+                Append(window, "\n改名前未保存");
+                string before = window.ReadMarkdown(); int selection = editor.SelectionStart;
+                NativeMessage(input.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Settled(window);
+                string renamed = Path.Combine(store.FolderPath, "项目想法.md");
+                Check(!input.Visible && File.Exists(renamed) && !File.Exists(initial.Path), "Enter renames the Markdown once, without doubling its extension");
+                Check(File.ReadAllText(renamed) == before && window.ReadMarkdown() == before && before.Contains("改名前未保存") && before.Contains("附件/test.png"), "Rename first saves pending edits, preserving current Markdown formatting and relative image references");
+                Check(editor.ZoomFactor == 1.5f && editor.SelectionStart == selection, "Rename does not reload or reset the editor view");
+                Check(title.Text == "项目想法.md" && window.Text == title.Text, "Header and native title update together");
+                var recent = (List<string>)Field(window, "recentFiles");
+                Check(recent.Contains("项目想法.md") && !recent.Contains(Path.GetFileName(initial.Path)), "Recent labels replace the old filename");
+                Append(window, "\n改名后保存"); Autosaved(window);
+                Check(File.ReadAllText(renamed).Contains("改名后保存") && !File.Exists(initial.Path), "Subsequent autosave writes only the new filename");
+                var other = store.LoadFile("已存在.md"); store.Save(other, "不能覆盖");
+                foreach (string invalid in new string[] { "已存在", "../越界", "", "CON", "错误?名称" }) {
+                    Call(title, "OnClick", EventArgs.Empty); input.Text = invalid;
+                    NativeMessage(input.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Settled(window);
+                    Check(File.Exists(renamed) && File.ReadAllText(other.Path) == "不能覆盖" && title.Text == "项目想法.md", "Unsafe or duplicate name preserves both files: " + invalid);
+                    Check(!editor.ReadOnly && !(bool)Field(window, "workerBusy"), "Failed rename leaves the editor usable");
+                }
+                Call(title, "OnClick", EventArgs.Empty); input.Text = "失焦取消"; editor.Focus(); Pump(20);
+                Check(!input.Visible && File.Exists(renamed), "Leaving the inline editor cancels without moving focus back");
+                Call(window, "TryHide"); window.Toggle(); Settled(window);
+                Check(title.Text == "项目想法.md" && window.ReadMarkdown().Contains("改名后保存"), "Hide and reopen retain the renamed file and saved content");
+                // Fixture-only capture; never the user's note or clipboard.
+                Call(title, "OnClick", EventArgs.Empty); input.Text = "项目想法";
+                Call(window, "SetChromeVisible", true); Pump(20);
+                CapturePreviewFrame(window, "rename-");
+                Call(window, "EndTitleEdit"); Call(window, "TryHide");
+            }
+            using (var reopened = new QuickNoteWindow(store, state)) {
+                reopened.Toggle(); Settled(reopened);
+                Check(Path.GetFileName((string)Field(reopened, "notePath")) == "项目想法.md", "A new window restores the renamed last note from navigation state");
+            }
+            var conflict = store.LoadFile("项目想法.md");
+            File.AppendAllText(conflict.Path, "外部修改"); bool rejected = false;
+            try { store.Rename(conflict, "冲突后改名"); } catch (QuickNoteConflictException) { rejected = true; }
+            Check(rejected && File.Exists(conflict.Path), "External edits prevent a stale rename");
+            var empty = store.NewNote(); store.Rename(empty, "空白便签");
+            Check(File.Exists(empty.Path) && File.ReadAllText(empty.Path) == "", "An explicitly named empty note persists for reopening");
+        }
+        Console.WriteLine("Title rename passed: " + assertions + "; clipboard_access=0; global_input=0");
+    }
+    static void CheckRenameReview(string vault, string root) {
+        var store = new QuickNoteStore(vault, "rename-review", Path.Combine(root, "rename-review-recovery"));
+        var first = store.LoadFile("原名.md");
+        string image = store.StoreImage(Png()), imagePath = store.ResolveImage(image);
+        byte[] imageBytes = File.ReadAllBytes(imagePath);
+        store.Save(first, "**带格式正文**\n![图片](<" + image + ">)\n末行");
+        var other = store.LoadFile("另一篇.md"); store.Save(other, "独立内容，不能被改名影响");
+        byte[] otherBytes = File.ReadAllBytes(other.Path);
+        string state = Path.Combine(root, "rename-review-state");
+        using (var entered = new ManualResetEvent(false)) using (var release = new ManualResetEvent(false)) {
+            int blockSave = 0;
+            using (var window = new QuickNoteWindow(store, state, delegate {
+                if (Thread.VolatileRead(ref blockSave) != 0) { entered.Set(); if (!release.WaitOne(5000)) throw new IOException("Synthetic storage deadline"); }
+            })) {
+                window.Toggle(); Settled(window); Call(window, "RequestNote", "原名.md", false); Settled(window);
+                var title = (Label)Field(window, "dateLabel"); var name = (TextBox)Field(window, "titleEditor");
+                var editor = (RichTextBox)Field(window, "editor");
+                Call(window, "ShowTabs"); Pump(180);
+                Call(window, "HoverNote", "另一篇.md"); Call(window, "StartPreview");
+                Call(title, "OnClick", EventArgs.Empty); Pump(80);
+                Check(name.Visible && !(bool)Field(window, "previewVisible"), "Beginning rename cancels a pending preview and targets the selected note");
+                Call(window, "ShowTabs"); Pump(180);
+                var rail = (QuickNoteTabs)Field(window, "tabs");
+                Check(!rail.Visible, "Name editing does not reveal the browsing rail over the editing task");
+                Call(window, "HoverNote", "另一篇.md"); Call(window, "StartPreview"); Pump(150);
+                Check(!(bool)Field(window, "previewVisible") && (string)Field(window, "hoverFile") == null, "Hover cannot replace the document while its name is edited");
+                NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Escape), IntPtr.Zero);
+                Thread.VolatileWrite(ref blockSave, 1); Append(window, "\n第一次输入"); Call(window, "Flush");
+                var deadline = System.Diagnostics.Stopwatch.StartNew(); while (!entered.WaitOne(0) && deadline.ElapsedMilliseconds < 2000) Pump(10);
+                Check(entered.WaitOne(0) && (bool)Field(window, "workerBusy"), "A real asynchronous save is pending before rename");
+                Append(window, "\n第二次输入"); string expected = window.ReadMarkdown();
+                Call(title, "OnClick", EventArgs.Empty); name.Text = "复查后名称";
+                NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero);
+                Call(window, "ShowTabs"); Call(window, "HoverNote", "另一篇.md"); Call(window, "StartPreview");
+                Check(editor.ReadOnly && (string)Field(window, "hoverFile") == null, "Queued rename blocks preview until durable storage completes");
+                release.Set(); Settled(window);
+                string renamed = Path.Combine(store.FolderPath, "复查后名称.md");
+                Check(File.Exists(renamed) && !File.Exists(first.Path) && File.ReadAllText(renamed) == expected, "Pending and newer edits finish before one rename, without resurrecting the old file");
+                Check(window.ReadMarkdown() == expected && !editor.ReadOnly && !(bool)Field(window, "dirty"), "Live document stays editable and clean after queued rename");
+                Check(Convert.ToBase64String(File.ReadAllBytes(imagePath)) == Convert.ToBase64String(imageBytes), "Actual image attachment bytes survive rename");
+                Call(window, "ShowTabs"); Pump(180);
+                Check((string)Field(rail, "current") == "复查后名称.md" && Array.IndexOf((string[])Field(rail, "files"), "原名.md") < 0, "Painted rail replaces its old label and selected identity");
+                Call(window, "ShowRecentMenu"); Pump(30);
+                var menus = (System.ComponentModel.Container)Field(window, "transientMenus");
+                var menu = (ContextMenuStrip)menus.Components[0]; var picker = (QuickNoteRecentPicker)((ToolStripControlHost)menu.Items[0]).Control;
+                picker.Search.Text = "复查后名称";
+                Check(picker.Results.Items.Count == 1 && (string)picker.Results.Items[0] == "复查后名称.md", "More-notes search resolves the new name");
+                picker.Search.Text = "原名"; Check(picker.Results.Items.Count == 0, "More-notes search removes the old name"); menu.Close(); Pump(30);
+                Call(window, "RequestNote", "另一篇.md", false); Settled(window);
+                Call(window, "ShowTabs"); Call(window, "HoverNote", "复查后名称.md"); WaitPreview(window, "复查后名称.md");
+                Check(((RichTextBox)Field(window, "previewEditor")).Text.Contains("第二次输入") && window.ReadMarkdown().Contains("独立内容"), "Renamed-note preview shows the latest saved text without binding another editable note");
+                rail.SelectFile("复查后名称.md"); Settled(window);
+                Check(window.ReadMarkdown() == expected, "Clicking the renamed label opens the complete saved Markdown");
+                Check(Document(window).ObjectPositions().Length == 1, "Clicking the renamed label restores the actual inline image");
+                // Case-only names identify the same Windows file, not a duplicate.
+                Call(title, "OnClick", EventArgs.Empty); name.Text = "Draft";
+                NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Settled(window);
+                Call(title, "OnClick", EventArgs.Empty); name.Text = "DRAFT";
+                NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Settled(window);
+                Check(title.Text == "DRAFT.md" && Array.IndexOf(Directory.GetFiles(store.FolderPath), Path.Combine(store.FolderPath, "DRAFT.md")) >= 0, "A case-only rename updates the actual filename and label");
+                Call(title, "OnClick", EventArgs.Empty); name.Text = "另一篇";
+                NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Settled(window);
+                Check(Convert.ToBase64String(File.ReadAllBytes(other.Path)) == Convert.ToBase64String(otherBytes) && window.ReadMarkdown() == expected, "Duplicate rename never overwrites the other file or current text");
+                Append(window, "\n拒绝同名后继续编辑"); Autosaved(window);
+                Check(File.ReadAllText((string)Field(window, "notePath")).Contains("拒绝同名后继续编辑"), "Autosave stays usable after duplicate rejection");
+                Call(window, "TryHide");
+            }
+        }
+        using (var reopened = new QuickNoteWindow(store, state)) {
+            reopened.Toggle(); Settled(reopened);
+            Check(Path.GetFileName((string)Field(reopened, "notePath")) == "DRAFT.md" && reopened.ReadMarkdown().Contains("拒绝同名后继续编辑"), "A fresh process-style window restores the final renamed note and later edits");
+            string path = (string)Field(reopened, "notePath");
+            File.AppendAllText(path, "\n外部程序的新内容");
+            Append(reopened, "\n尚未保存的本地内容");
+            Call((Label)Field(reopened, "dateLabel"), "OnClick", EventArgs.Empty);
+            var name = (TextBox)Field(reopened, "titleEditor"); name.Text = "冲突时不能改名";
+            NativeMessage(name.Handle, 0x100, new IntPtr((int)Keys.Enter), IntPtr.Zero); Settled(reopened);
+            Check((string)Field(reopened, "renameRequested") == null && !File.Exists(Path.Combine(store.FolderPath, "冲突时不能改名.md")), "Failed save cancels the queued rename instead of moving stale state");
+            Check(File.ReadAllText(path).Contains("外部程序的新内容") && !File.ReadAllText(path).Contains("尚未保存的本地内容"), "External save conflict does not overwrite the existing note");
+            var document = (QuickNoteDocument)Field(reopened, "note");
+            Check(document.HasRecovery && File.Exists(document.RecoveryPath) && reopened.ReadMarkdown().Contains("尚未保存的本地内容"), "Failed save preserves local text in the editor and recovery draft");
+        }
+        var locked = store.LoadFile("锁定原文件.md"); store.Save(locked, "原样 **Markdown**\r\n");
+        byte[] lockedBytes = File.ReadAllBytes(locked.Path);
+        bool rejected = false;
+        using (File.Open(locked.Path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+            try { store.Rename(locked, "锁定后新名"); } catch (IOException) { rejected = true; }
+        }
+        Check(rejected && File.Exists(locked.Path) && !File.Exists(Path.Combine(store.FolderPath, "锁定后新名.md")), "A move blocked by another editor preserves the source and binding");
+        store.Rename(locked, "解锁后新名");
+        Check(Convert.ToBase64String(File.ReadAllBytes(locked.Path)) == Convert.ToBase64String(lockedBytes), "Retry after unlock moves the exact original bytes");
+        var recoveryTarget = store.LoadFile("有草稿的新名.md"); store.SaveRecovery(recoveryTarget, "不可覆盖的恢复资料");
+        byte[] recoveryBytes = File.ReadAllBytes(recoveryTarget.RecoveryPath); rejected = false;
+        try { store.Rename(locked, "有草稿的新名"); } catch (IOException) { rejected = true; }
+        Check(rejected && File.Exists(locked.Path) && Convert.ToBase64String(File.ReadAllBytes(recoveryTarget.RecoveryPath)) == Convert.ToBase64String(recoveryBytes), "A target recovery draft also prevents rename and remains untouched");
+        Console.WriteLine("Rename review passed: " + assertions + "; clipboard_access=0; global_input=0");
+    }
     [STAThread] static int Main(string[] arguments) {
         if (Array.IndexOf(arguments, "--dpi96") >= 0) SetThreadDpiAwarenessContext(new IntPtr(-1));
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -1342,6 +1589,8 @@ internal static class TestQuickNoteEditor {
             string vault = Path.Combine(root, "vault"), recovery = Path.Combine(root, "recovery");
             Directory.CreateDirectory(vault);
             var store = new QuickNoteStore(vault, "速记", recovery);
+            if (Array.IndexOf(arguments, "--rename-only") >= 0) { CheckTitleRename(vault, root); CheckRenameReview(vault, root); return 0; }
+            if (Array.IndexOf(arguments, "--preview-only") >= 0) { CheckPreviewContinuity(vault, root); Console.WriteLine("Preview tests passed: " + assertions + "; clipboard_access=0; global_input=0"); return 0; }
             // Keep each isolated process within the runner's existing deadline.
             // The default entry still executes both groups for manual use.
             if (Array.IndexOf(arguments, "--attachments-only") < 0) {
