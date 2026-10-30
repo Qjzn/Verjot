@@ -408,8 +408,12 @@ internal sealed class MeetingSettingsDialog : Form {
     }
     string CheckApiConfiguration() {
         Uri address;
-        if (!Uri.TryCreate(inputs["api_base_url"].Text.Trim(), UriKind.Absolute, out address) ||
-            (address.Scheme != Uri.UriSchemeHttps && address.Scheme != Uri.UriSchemeHttp) || !string.IsNullOrEmpty(address.UserInfo)) return "请填写有效的 HTTP(S) 地址，不含用户名或密钥。";
+        string prefix = inputs["api_base_url"].Text.Trim();
+        if (System.Text.RegularExpressions.Regex.IsMatch(prefix, @"\s") ||
+            !Uri.TryCreate(prefix, UriKind.Absolute, out address) ||
+            (address.Scheme != Uri.UriSchemeHttps && address.Scheme != Uri.UriSchemeHttp) || string.IsNullOrEmpty(address.Host) ||
+            !string.IsNullOrEmpty(address.UserInfo) || !string.IsNullOrEmpty(address.Query) || !string.IsNullOrEmpty(address.Fragment))
+            return "请填写有效的 HTTP(S) API 前缀，不含用户名、密钥、查询参数、片段或空格。";
         if (string.IsNullOrWhiteSpace(inputs["api_model"].Text)) return "请填写服务商提供的模型名称。";
         string keyName = inputs["api_key_env"].Text.Trim();
         if (!System.Text.RegularExpressions.Regex.IsMatch(keyName, "^[A-Za-z_][A-Za-z0-9_]*$")) return "请填写 Windows 密钥变量名，不要填写密钥。";

@@ -587,6 +587,10 @@ internal static class TestMeetingSettings {
             var status = (Label)form.Controls.Find("api_configuration_status",true)[0];
             Input(form,"api_base_url").Text="not-a-url"; check.PerformClick();
             Check(status.Text.Contains("HTTP(S)"),"Configuration check explains invalid addresses without network access");
+            foreach (string invalid in new[] { "https://example.invalid/v1?token=synthetic", "https://example.invalid/v1#synthetic", "https://example.invalid/a b", "https://user:synthetic@example.invalid/v1" }) {
+                Input(form,"api_base_url").Text=invalid; check.PerformClick();
+                Check(status.Text.Contains("HTTP(S)"),"Inline API check rejects parameters, fragments, whitespace and credentials before saving");
+            }
             Input(form,"api_base_url").Text="https://example.invalid/v1"; Input(form,"api_model").Text=""; check.PerformClick();
             Check(status.Text.Contains("模型名称"),"Missing model gets an actionable inline reason");
             Input(form,"api_model").Text="synthetic";Input(form,"api_key_env").Text="VERBIT_SYNTHETIC_UNSET_KEY";check.PerformClick();

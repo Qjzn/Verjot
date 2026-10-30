@@ -1,4 +1,4 @@
-verbit beta.11 · Windows x64
+verbit · Windows x64
 
 需要 Windows 10 1809+ / Windows 11 x64 和 .NET Framework 4.8。
 速记、录音和新 API 转写无需 Python、模型或开发环境。
