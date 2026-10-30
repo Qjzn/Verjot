@@ -8,7 +8,7 @@
 
 [下载安装包](https://github.com/Qjzn/Verjot/releases/latest) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
 
-**Verjot 0.11.1 · Windows x64**。中文「片言」，MIT 开源。公开下载无需 GitHub 登录，安装包及 SHA256 见[最新版本](https://github.com/Qjzn/Verjot/releases/latest)，使用边界见[发布验收](documentation/release-readiness.md)。
+**Verjot 0.11.2 · Windows x64**。中文「片言」，MIT 开源。公开下载无需 GitHub 登录，安装包及 SHA256 见[最新版本](https://github.com/Qjzn/Verjot/releases/latest)，使用边界见[发布验收](documentation/release-readiness.md)。
 
 <img src="assets/screenshots/quick-note.png" width="494" alt="Verjot 多标签便签：贴边切换会议要点、待办和灵感，正文支持文字、列表、图片及自动保存">
 
@@ -57,7 +57,7 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 ## 开始使用
 
 1. 使用 Windows 10 1809+／Windows 11 x64，安装 .NET Framework 4.8（系统缺少时需先安装）。
-2. 从版本页下载 `Verjot-0.11.1-setup-x64.exe` 和同版本 `SHA256SUMS.txt`，按[安装教程](documentation/install-windows.md)核对哈希后安装。
+2. 从版本页下载 `Verjot-0.11.2-setup-x64.exe` 和同版本 `SHA256SUMS.txt`，按[安装教程](documentation/install-windows.md)核对哈希后安装。
 3. 首次启动选择保存目录；默认仅录音，无需下载模型。之后从托盘「设置」修改。
 4. 按 `Ctrl+Alt+J` 写便签；按 `Ctrl+Alt+L` 开始／结束会议录音。
 

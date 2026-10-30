@@ -158,6 +158,7 @@ internal static class NativeAudioExport {
         string manifest=Path.Combine(session,"native_audio.json"),lockPath=Path.Combine(session,"audio-export.lock");
         MeetingConfig.CheckOrdinaryPath(lockPath);
         using(var gate=new FileStream(lockPath,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
+            WriteStatus(session,"正在检查录音分段","processing","encode");
             string metadataHash=Hash(metadataPath);var tracks=Tracks(session,metadata);
             string temporary=null;
             try {
@@ -174,7 +175,7 @@ internal static class NativeAudioExport {
                     }
                 }
                 if(File.Exists(output))throw new IOException("目标 MP3 已存在且无法确认归属，不自动覆盖");
-                WriteStatus(session,"正在合并并导出 MP3，原始分轨保留","processing","encode");
+                WriteStatus(session,"正在对齐音轨并检查音量","processing","encode");
                 long frames=checked((long)Math.Round(Number(metadata,"duration_seconds")*Rate));
                 foreach(var track in tracks)frames=Math.Max(frames,track.Frames);
                 if(frames<=0)throw new IOException("录音为空");
@@ -188,6 +189,7 @@ internal static class NativeAudioExport {
                 Directory.CreateDirectory(Path.GetDirectoryName(output));MeetingConfig.CheckOrdinaryPath(output);
                 temporary=Path.Combine(Path.GetDirectoryName(output),".meeting-"+Guid.NewGuid().ToString("N")+".tmp");
                 int bitrate=checked((int)Number(metadata,"mp3_bitrate_kbps",192));
+                WriteStatus(session,"正在合并并编码录音","processing","encode");
                 using(var encoder=new NativeMp3Encoder(home,temporary,bitrate)) {
                     for(long p=0;p<frames;p+=4096) {
                         int n=(int)Math.Min(4096,frames-p);float[] block=new float[n*2];foreach(var track in tracks)track.AddBlock(block,n);
@@ -195,6 +197,7 @@ internal static class NativeAudioExport {
                         encoder.Write(pcm,n);
                     }
                 }
+                WriteStatus(session,"正在校验 MP3 文件","processing","encode");
                 int mpegFrames=NativeMp3Encoder.Validate(temporary,frames,bitrate);
                 if(Hash(metadataPath)!=metadataHash || MeetingFiles.Json.Serialize(Inputs(tracks))!=MeetingFiles.Json.Serialize(inputs))throw new IOException("导出期间原始录音发生变化，已保留资料");
                 string digest=Hash(temporary);MeetingConfig.CheckOrdinaryPath(output);

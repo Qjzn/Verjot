@@ -1660,6 +1660,11 @@ internal sealed class RecorderNotice : Form {
     internal readonly Label LocationText = new ReceiptPathLabel();
     readonly System.Windows.Forms.Timer dismiss = new System.Windows.Forms.Timer { Interval = 3000 };
     readonly ToolTip tip = new ToolTip();
+    readonly System.Windows.Forms.Timer activity = new System.Windows.Forms.Timer { Interval = 40 };
+    readonly Stopwatch activityClock = new Stopwatch();
+    internal bool IsWorking { get; private set; }
+    Rectangle noticeAnchor;
+    int activityDpi;
     Font noticeFont;
     int noticeDpi;
     Action clicked;
@@ -1678,10 +1683,17 @@ internal sealed class RecorderNotice : Form {
         StartPosition = FormStartPosition.Manual; BackColor = VerjotUi.Surface; DoubleBuffered = true;
         Controls.AddRange(new Control[] { Caption, LocationText });
         foreach (Control surface in new Control[] { this, Caption, LocationText }) surface.Click += delegate { ActivateNotice(); };
-        dismiss.Tick += delegate { Hide(); };
+        dismiss.Tick += delegate { DismissIfAway(Cursor.Position); };
+        activity.Tick += delegate {
+            UpdateActivity();
+            int band = (int)Math.Ceiling(6 * noticeDpi / 96.0);
+            Invalidate(new Rectangle(0, Height - band, Width, band));
+        };
     }
     internal void Present(string caption, string location, Action action, Rectangle anchor, int dpi) {
+        IsWorking = false; UpdateActivity();
         dismiss.Stop(); clicked = action;
+        noticeAnchor = anchor;
         Caption.Text = caption; Caption.ForeColor = VerjotUi.Ink;
         LocationText.Text = location; LocationText.ForeColor = VerjotUi.Muted;
         AccessibleName = caption; AccessibleDescription = location;
@@ -1693,6 +1705,31 @@ internal sealed class RecorderNotice : Form {
         // Restore the pixel roles after it rather than retaining scaled copies.
         LayoutReceipt(anchor, DeviceDpi);
         Invalidate(); dismiss.Start();
+    }
+    internal void PresentWorking(string detail, Rectangle anchor, int dpi) {
+        bool layout = !IsWorking || !Visible || noticeAnchor != anchor || activityDpi != dpi;
+        dismiss.Stop(); clicked = null; Cursor = Cursors.Default;
+        if (!IsWorking) activityClock.Restart();
+        IsWorking = true;
+        Caption.Text = "正在生成 MP3"; Caption.ForeColor = VerjotUi.Ink;
+        if (LocationText.Text != detail) LocationText.Text = detail;
+        LocationText.ForeColor = VerjotUi.Muted;
+        AccessibleName = Caption.Text; AccessibleDescription = detail;
+        // The visible elapsed time changes every second. Keep that changing
+        // suffix out of the native tooltip to avoid restarting it on hover.
+        int elapsedAt = detail.IndexOf(" · 已等待 ", StringComparison.Ordinal);
+        string stableTip = elapsedAt < 0 ? detail : detail.Substring(0, elapsedAt);
+        if (tip.GetToolTip(LocationText) != stableTip) tip.SetToolTip(LocationText, stableTip);
+        if (layout) {
+            noticeAnchor = anchor; activityDpi = dpi;
+            LayoutReceipt(anchor, dpi); Show(); LayoutReceipt(anchor, DeviceDpi);
+        }
+        UpdateActivity();
+    }
+    void UpdateActivity() {
+        activity.Enabled = IsWorking && Visible && RecorderMotionPreferences.Enabled;
+        if (!IsWorking || !Visible) activityClock.Stop();
+        else if (!activityClock.IsRunning) activityClock.Start();
     }
     void LayoutReceipt(Rectangle anchor, int dpi) {
         int unit = Math.Max(96, dpi); float scale = unit / 96f;
@@ -1719,8 +1756,23 @@ internal sealed class RecorderNotice : Form {
             Region old = Region; Region = new Region(path); if (old != null) old.Dispose();
         }
     }
-    internal void ActivateNotice() { Action action = clicked; Hide(); if (action != null) action(); }
-    protected override void OnVisibleChanged(EventArgs e) { if (!Visible) { dismiss.Stop(); clicked = null; } base.OnVisibleChanged(e); }
+    void DismissIfAway(Point pointer) {
+        if (IsWorking) return;
+        if (Visible && Bounds.Contains(pointer)) { dismiss.Stop(); dismiss.Start(); return; }
+        Hide();
+    }
+    internal void ActivateNotice() {
+        if (IsWorking) return;
+        Action action = clicked; Rectangle anchor = noticeAnchor; int dpi = DeviceDpi;
+        Hide();
+        try { if (action != null) action(); }
+        catch (Exception error) {
+            MeetingFiles.Log(error);
+            if (!IsDisposed) Present("暂时无法打开", "请从最近会议重试：" + error.Message, null, anchor, dpi);
+        }
+    }
+    internal void EndWorking() { if (!IsWorking) return; IsWorking = false; Hide(); UpdateActivity(); }
+    protected override void OnVisibleChanged(EventArgs e) { if (!Visible) { dismiss.Stop(); clicked = null; } UpdateActivity(); base.OnVisibleChanged(e); }
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -1730,9 +1782,19 @@ internal sealed class RecorderNotice : Form {
             path.AddArc(Width - d - 1.5f, Height - d - 1.5f, d, d, 0, 90); path.AddArc(.5f, Height - d - 1.5f, d, d, 90, 90); path.CloseFigure();
             e.Graphics.DrawPath(pen, path);
         }
+        if (IsWorking) {
+            float scale = noticeDpi / 96f, left = 12 * scale, width = Width - 24 * scale, y = Height - 4 * scale;
+            using (var track = new Pen(VerjotUi.Border, 2 * scale)) e.Graphics.DrawLine(track, left, y, left + width, y);
+            float phase = RecorderMotionPreferences.Enabled ? (float)(activityClock.Elapsed.TotalMilliseconds % 1500 / 1500) : .5f;
+            float offset = (float)((1 - Math.Cos(phase * Math.PI * 2)) * .5) * (width - 36 * scale);
+            using (var ink = new Pen(Color.FromArgb(67, 128, 192), 2 * scale)) {
+                ink.StartCap = ink.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                e.Graphics.DrawLine(ink, left + offset, y, left + offset + 36 * scale, y);
+            }
+        }
     }
     protected override void Dispose(bool disposing) {
-        if (disposing) { dismiss.Dispose(); tip.Dispose(); if (noticeFont != null) noticeFont.Dispose(); }
+        if (disposing) { dismiss.Dispose(); activity.Dispose(); activityClock.Stop(); tip.Dispose(); if (noticeFont != null) noticeFont.Dispose(); }
         base.Dispose(disposing);
     }
 }
@@ -3362,6 +3424,7 @@ internal sealed class MeetingContext : ApplicationContext {
                 PreviousStatusWriteUtc = previous, WorkerStartedUtc = started });
             catalog.SaveWorker(session, process, started, previous, true, transcribeAfterExport);
             SaveLastSessionWithAttempt(session, process, started, previous);
+            RefreshFeedback();
         } catch (Exception error) {
             if (process == null) RecordLaunchFailure(session, error.Message);
             MeetingFiles.Log(error); Notice("MP3 导出需要检查", error.Message + " 原始分轨已保留。", ToolTipIcon.Warning);
@@ -3496,7 +3559,7 @@ internal sealed class MeetingContext : ApplicationContext {
                 DateTime statusWrite = File.GetLastWriteTimeUtc(statusPath);
                 bool fresh = File.Exists(statusPath) && statusWrite >= job.WorkerStartedUtc &&
                     (job.PreviousStatusWriteUtc == DateTime.MinValue || statusWrite > job.PreviousStatusWriteUtc);
-                if (fresh) job.LastMessage = SessionCatalog.DisplayTitle(status);
+                if (fresh) job.LastMessage = job.AudioExport ? MeetingFiles.Text(status, "message", "正在处理录音") : SessionCatalog.DisplayTitle(status);
                 if (!workerExited) continue;
                 var record = catalog.Get(job.Session);
                 if (job.AudioExport) {
@@ -3507,7 +3570,8 @@ internal sealed class MeetingContext : ApplicationContext {
                     } else {
                         string exportError = MeetingFiles.Text(status, "error", "MP3 导出中断，原始分轨已保留，可重试。");
                         RecordLaunchFailure(job.Session, exportError);
-                        Notice("MP3 导出失败", exportError, ToolTipIcon.Warning);
+                        string failedSession = job.Session;
+                        ShowReceipt("MP3 生成失败，点击查看", "原始录音已保留：" + exportError, delegate { OpenFolder(failedSession); });
                     }
                     jobs.Remove(job); job.Process.Dispose();
                     continue;
@@ -3542,7 +3606,24 @@ internal sealed class MeetingContext : ApplicationContext {
         RefreshFeedback();
     }
     void SetTrayText(string value) { tray.Text = value.Length > 63 ? value.Substring(0, 62) + "…" : value; }
+    void RefreshExportFeedback() {
+        TranscriptionJob export = jobs.Find(delegate(TranscriptionJob job) { return job.AudioExport && !job.Reported; });
+        if (export == null || exiting || updating) {
+            if (receipt != null && !receipt.IsDisposed) receipt.EndWorking();
+            return;
+        }
+        // Let a result notice finish its three-second lifetime before showing
+        // another background export. Never steal focus or expand the dock.
+        if (receipt != null && !receipt.IsDisposed && receipt.Visible && !receipt.IsWorking) return;
+        if (receipt == null || receipt.IsDisposed) receipt = new RecorderNotice();
+        TimeSpan waited = export.WorkerStartedUtc == DateTime.MinValue ? TimeSpan.Zero : DateTime.UtcNow - export.WorkerStartedUtc;
+        if (waited < TimeSpan.Zero) waited = TimeSpan.Zero;
+        string elapsed = ((int)waited.TotalMinutes).ToString("00") + ":" + waited.Seconds.ToString("00");
+        string phase = string.IsNullOrEmpty(export.LastMessage) ? "正在准备录音" : export.LastMessage;
+        receipt.PresentWorking(phase + " · 已等待 " + elapsed, panel.Bounds, panel.DeviceDpi);
+    }
     void RefreshFeedback() {
+        RefreshExportFeedback();
         panel.SetRetryAvailable(recording == null && focusedRecord != null && focusedRecord.CanRetry && !ActiveJob(focusedRecord.DirectoryPath));
         bookmark.Enabled = recording != null && !recording.Stopping;
         rename.Enabled = recording == null && focusedRecord != null && focusedRecord.State == "completed" && !focusedRecord.WorkerAlive;
@@ -3555,7 +3636,7 @@ internal sealed class MeetingContext : ApplicationContext {
         if (focusedSession != null) {
             foreach (var job in jobs) {
                 if (string.Equals(job.Session, focusedSession, StringComparison.OrdinalIgnoreCase) && !job.Reported) {
-                    string title = string.IsNullOrEmpty(job.LastMessage) ? "准备转写" : job.LastMessage == "转写完成" ? "正在整理文件" : job.LastMessage;
+                    string title = job.AudioExport ? "正在生成 MP3" : string.IsNullOrEmpty(job.LastMessage) ? "准备转写" : job.LastMessage == "转写完成" ? "正在整理文件" : job.LastMessage;
                     string label = focusedRecord == null ? Path.GetFileName(focusedSession) : focusedRecord.Label;
                     panel.ShowWorking(title, label);
                     summary.Text = label + " · " + title + (jobs.Count > 1 ? " · 后台 " + jobs.Count + " 场" : "");

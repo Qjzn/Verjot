@@ -1,6 +1,6 @@
 ﻿param(
     [string]$OutputPath = 'ObsidianMeeting.exe',
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.11.1'
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.11.2'
 )
 $ErrorActionPreference = 'Stop'
 

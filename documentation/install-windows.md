@@ -1,6 +1,6 @@
 # 安装与使用 Verjot
 
-当前版本为 **Verjot 0.11.1**。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
+当前版本为 **Verjot 0.11.2**。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
 
 ## 1. 下载与安装
 
@@ -9,7 +9,7 @@
 从 [最新版本页](https://github.com/Qjzn/Verjot/releases/latest) 下载安装包及 `SHA256SUMS.txt`，公开版无需登录 GitHub。对下载文件运行：
 
 ```powershell
-Get-FileHash -LiteralPath .\Verjot-0.11.1-setup-x64.exe -Algorithm SHA256
+Get-FileHash -LiteralPath .\Verjot-0.11.2-setup-x64.exe -Algorithm SHA256
 ```
 
 输出应与同版本 `SHA256SUMS.txt` 完全一致。不一致不要安装，重新下载核对。运行安装器，选择可写程序目录。安装后从开始菜单搜索 `Verjot`；旧 beta.38 的菜单仍叫 `verbit`，升级会更新属于本程序的入口。已有安装请更新到原目录，不能为了名称变化另建空目录而丢失原配置。

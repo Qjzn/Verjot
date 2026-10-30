@@ -83,9 +83,12 @@ internal static class TestRecordingExport {
         try {
             string session=Path.Combine(MeetingFiles.Home,"work","20261022-115900");Fixture("20261022-115900");
             typeof(MeetingContext).GetMethod("LaunchWorker",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(context,new object[]{session});
+            var progress = (RecorderNotice)typeof(MeetingContext).GetField("receipt", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(context);
+            Check(progress != null && progress.Visible && progress.IsWorking && progress.Caption.Text == "正在生成 MP3", "The real native exporter launch immediately shows progress before the first controller timer tick");
             var clock=Stopwatch.StartNew();
             while(starts==0&&clock.ElapsedMilliseconds<20000) {Thread.Sleep(40);Application.DoEvents();typeof(MeetingContext).GetMethod("Tick",BindingFlags.NonPublic|BindingFlags.Instance).Invoke(context,null);}
             Check(starts==1,"Native export completion hands off to transcription exactly once");
+            Check(!progress.IsWorking && progress.Caption.Text.Contains("已保存"), "Verified MP3 publication replaces processing with a clickable destination before transcription starts");
         } finally {
             if (child != null) child.WaitForExit(5000);
             // Match the controller's normal exit path so native windows and

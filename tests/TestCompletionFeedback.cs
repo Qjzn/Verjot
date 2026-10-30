@@ -10,6 +10,7 @@ using System.Windows.Forms;
 internal static class TestCompletionFeedback {
     static int assertions;
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     static void Check(bool value, string message) { assertions++; if (!value) throw new Exception(message); }
     static object Field(object target, string name) {
         var field = target.GetType().GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -25,7 +26,7 @@ internal static class TestCompletionFeedback {
         DateTime end = DateTime.UtcNow.AddMilliseconds(milliseconds);
         do { Application.DoEvents(); Thread.Sleep(10); } while (DateTime.UtcNow < end);
     }
-    static Bitmap Snapshot(RecorderPanel panel, string file) {
+    static Bitmap Snapshot(Form panel, string file) {
         var bitmap = new Bitmap(panel.Width, panel.Height); panel.DrawToBitmap(bitmap, panel.ClientRectangle);
         if (file != null) bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png); return bitmap;
     }
@@ -60,6 +61,62 @@ internal static class TestCompletionFeedback {
         try {
             Application.EnableVisualStyles();
             RecorderMotionPreferences.Mode = "on";
+            using (var editor = new Form()) using (var notice = new RecorderNotice()) {
+                editor.Show(); editor.Activate(); Pump(30);
+                IntPtr foreground = GetForegroundWindow();
+                notice.PresentWorking("正在合并并编码录音 · 已等待 02:13", editor.Bounds, editor.DeviceDpi);
+                Pump(40);
+                var activity = (System.Windows.Forms.Timer)Field(notice, "activity");
+                var clock = (System.Diagnostics.Stopwatch)Field(notice, "activityClock");
+                Check(notice.Visible && notice.IsWorking && !notice.PendingDismiss && activity.Enabled, "MP3 generation has a persistent visible animated notice, without a success timeout");
+                Check(GetForegroundWindow() == foreground && notice.TopMost && !notice.ShowInTaskbar, "Export feedback never takes focus or adds a taskbar window");
+                using (var first = Snapshot(notice, Path.Combine(MeetingFiles.Home, "export-working-first.png"))) {
+                    Pump(180);
+                    using (var second = Snapshot(notice, Path.Combine(MeetingFiles.Home, "export-working-second.png")))
+                        Check(Different(first, second), "The export activity strip changes across real message-loop frames");
+                }
+                long before = clock.ElapsedMilliseconds;
+                for (int i = 0; i < 6; i++) { notice.PresentWorking("正在校验 MP3 文件 · 已等待 02:14", editor.Bounds, editor.DeviceDpi); Pump(15); }
+                Check(clock.ElapsedMilliseconds >= before + 60, "Status polling never resets the animation clock");
+                notice.ActivateNotice(); Pump(3100);
+                Check(notice.Visible && notice.IsWorking && !notice.PendingDismiss, "A long export cannot disappear on click or the normal three-second receipt timeout");
+                foreach (int dpi in new[] { 96, 120, 144, 192 }) {
+                    Call(notice, "LayoutReceipt", editor.Bounds, dpi);
+                    Check(notice.ClientRectangle.Contains(notice.Caption.Bounds) && notice.ClientRectangle.Contains(notice.LocationText.Bounds), "Export copy fits at DPI " + dpi);
+                    using (var image = Snapshot(notice, Path.Combine(MeetingFiles.Home, "export-working-" + dpi + ".png"))) { }
+                }
+                notice.Hide(); Check(!activity.Enabled, "Hidden export feedback stops its repaint timer");
+                RecorderMotionPreferences.Mode = "off";
+                notice.PresentWorking("正在校验 MP3 文件 · 已等待 02:15", editor.Bounds, editor.DeviceDpi);
+                Check(notice.Visible && notice.IsWorking && !activity.Enabled, "Reduced motion retains a readable static processing state");
+                RecorderMotionPreferences.Mode = "on";
+                bool opened = false;
+                notice.Present("录音已保存，点击查看", "synthetic.mp3", delegate { opened = true; }, editor.Bounds, editor.DeviceDpi);
+                notice.EndWorking();
+                Check(notice.Visible && !notice.IsWorking && notice.PendingDismiss && !activity.Enabled, "Success replaces progress on the same notice and retains its full three-second lifetime");
+                notice.ActivateNotice(); Check(opened && !notice.Visible, "Completion still opens the exact recording action");
+                notice.Present("录音已保存，点击查看", "synthetic.mp3", delegate { throw new IOException("测试文件已移动或无法访问"); }, editor.Bounds, editor.DeviceDpi);
+                Rectangle noticeBounds = notice.Bounds;
+                bool escaped = false;
+                try { notice.ActivateNotice(); } catch (IOException) { escaped = true; }
+                Check(!escaped && notice.Visible && notice.Caption.Text.Contains("无法打开") && notice.LocationText.Text.Contains("测试文件已移动"), "A stale destination callback never escapes to the UI thread; it shows a recoverable reason without touching the file");
+                Check(notice.Bounds == noticeBounds, "Callback failure feedback stays anchored to the same panel instead of jumping above its own old window");
+                notice.Present("录音已保存，点击查看", "synthetic.mp3", delegate { opened = true; }, editor.Bounds, editor.DeviceDpi);
+                Call(notice, "DismissIfAway", new Point(notice.Left + 8, notice.Top + 8));
+                Check(notice.Visible && notice.PendingDismiss, "Reading or approaching a result notice keeps it alive while the pointer is inside");
+                Call(notice, "DismissIfAway", new Point(notice.Left - 20, notice.Top - 20));
+                Check(!notice.Visible && !notice.PendingDismiss, "An expired notice away from the pointer hides and stops its timer");
+                notice.PresentWorking("正在准备录音", editor.Bounds, editor.DeviceDpi);
+                var workingTip = (ToolTip)Field(notice, "tip");
+                notice.PresentWorking("正在合并并编码录音 · 已等待 02:15", editor.Bounds, editor.DeviceDpi);
+                string stableTip = workingTip.GetToolTip(notice.LocationText);
+                notice.PresentWorking("正在合并并编码录音 · 已等待 02:16", editor.Bounds, editor.DeviceDpi);
+                Check(workingTip.GetToolTip(notice.LocationText) == stableTip, "Elapsed updates do not reset the native hovered tooltip every second");
+                Call(notice, "DismissIfAway", new Point(notice.Left - 20, notice.Top - 20));
+                Check(notice.Visible && notice.IsWorking, "A queued completion timeout cannot hide a newer in-progress notice");
+                notice.Present("MP3 生成失败，点击查看", "原始录音已保留：磁盘写入失败", delegate { }, editor.Bounds, editor.DeviceDpi);
+                Check(!notice.IsWorking && !activity.Enabled && notice.LocationText.Text.Contains("磁盘写入失败"), "Export failure stops animation and gives its concrete recovery reason");
+            }
             using (var panel = new RecorderPanel()) {
                 Call(panel, "ShowWorking", "转写 23/80 段", "10-15 12:00:00"); panel.Show(); Pump(60);
                 Check(panel.Heading.Text == "转写 23/80 段", "Loading must preserve actual segment progress");
@@ -163,6 +220,23 @@ internal static class TestCompletionFeedback {
             Check(located == null, "An explicit removed-audio action must not invoke an artifact locator");
             Call(context, "OpenSessionFolder", a);
             Check(located == noteA, "Remaining transcript must stay reachable after audio deletion");
+            var jobs = (List<TranscriptionJob>)Field(context, "jobs");
+            var exporting = new TranscriptionJob { Session = a, AudioExport = true, WorkerStartedUtc = DateTime.UtcNow.AddSeconds(-42) };
+            receipt.Hide(); resultPanel.Hide(); Set(context, "focusedSession", a); jobs.Add(exporting);
+            try {
+                Call(context, "RefreshFeedback");
+                Check(receipt.Visible && receipt.IsWorking && receipt.Caption.Text == "正在生成 MP3" && receipt.LocationText.Text.Contains("00:42"), "The real controller shows export feedback immediately, before the child publishes a status, even with the dock hidden");
+                Check(resultPanel.Heading.Text == "正在生成 MP3" && !resultPanel.Visible, "MP3 export is never mislabeled as preparing transcription or forced to expand");
+                exporting.LastMessage = "正在校验 MP3 文件";
+                Call(context, "RefreshFeedback");
+                Check(receipt.LocationText.Text.Contains("正在校验 MP3 文件"), "Export stages reach the real visible feedback path");
+                receipt.Present("录音已保存，点击查看", "synthetic.mp3", delegate { }, resultPanel.Bounds, resultPanel.DeviceDpi);
+                Call(context, "RefreshFeedback");
+                Check(!receipt.IsWorking && receipt.PendingDismiss, "A concurrent export does not overwrite another meeting's result notice");
+            } finally { jobs.Remove(exporting); }
+            receipt.PresentWorking("正在准备录音", resultPanel.Bounds, resultPanel.DeviceDpi);
+            Call(context, "RefreshFeedback");
+            Check(!receipt.IsWorking && !receipt.Visible, "Clearing the last export stops the persistent feedback");
             Console.WriteLine("Completion feedback: " + assertions + " assertions passed; synthetic files only, no audio or external file opening."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { if (context != null) { Call(context, "RequestExit"); context.Dispose(); } }
