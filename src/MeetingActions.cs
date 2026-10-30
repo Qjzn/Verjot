@@ -25,7 +25,7 @@ internal sealed class MeetingPlaybackRequest {
             !Uri.TryCreate(text, UriKind.Absolute, out uri) ||
             uri.Scheme != "pianyan" || uri.Host != "play" || uri.UserInfo.Length != 0 || !uri.IsDefaultPort ||
             (uri.AbsolutePath != "" && uri.AbsolutePath != "/") || uri.Fragment.Length != 0)
-            throw new InvalidOperationException("这不是有效的verbit回听链接。");
+            throw new InvalidOperationException("这不是有效的Verlog回听链接。");
         string session = null, seconds = null;
         foreach (string part in uri.Query.Substring(1).Split('&')) {
             if (part.StartsWith("session=", StringComparison.Ordinal) && session == null) session = part.Substring(8);
@@ -138,7 +138,7 @@ internal sealed class MeetingPlaybackWindow : Form {
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, WrapContents = false };
             var go = new Button { Text = "定位", AutoSize = true };
             actions.Controls.Add(toggle); actions.Controls.Add(seek); actions.Controls.Add(go);
-            VerbitMenu.AttachTextMenu(seek);
+            VerlogMenu.AttachTextMenu(seek);
             Controls.Add(timeline); Controls.Add(position); Controls.Add(actions);
             toggle.Click += delegate {
                 try {
@@ -288,11 +288,11 @@ internal sealed class MeetingNameDialog : Form {
         StartPosition = FormStartPosition.CenterScreen;
         var label = new Label { Text = "会议名称（转录文件名）", Dock = DockStyle.Top, Height = 25 };
         name.Text = current;
-        VerbitMenu.AttachTextMenu(name);
+        VerlogMenu.AttachTextMenu(name);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, FlowDirection = FlowDirection.RightToLeft };
         var save = new Button { Text = "保存", DialogResult = DialogResult.OK, AutoSize = true };
         var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, AutoSize = true };
-        VerbitUi.StyleButton(save, true); VerbitUi.StyleButton(cancel, false);
+        VerlogUi.StyleButton(save, true); VerlogUi.StyleButton(cancel, false);
         actions.Controls.Add(save); actions.Controls.Add(cancel);
         Controls.Add(name); Controls.Add(label); Controls.Add(actions);
         AcceptButton = save; CancelButton = cancel;

@@ -1,6 +1,6 @@
 # 权限范围
 
-> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `Verlog年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 
 
 安装器使用 `PrivilegesRequired=lowest`，默认当前用户安装。程序不绕过 Windows 文件权限，不自带多用户或角色授权。

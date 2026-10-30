@@ -20,7 +20,7 @@ internal static class TestMeetingSettings {
             { "hotkey", "Ctrl+Alt+L" }, { "pause_hotkey", "Alt+Space" },
             { "bookmark_hotkey", "Ctrl+Alt+K" }, { "quick_note_hotkey", "Ctrl+Alt+J" },
             { "api_base_url", "https://example.invalid/v1" }, { "api_model", "unchanged-model" },
-            { "api_key_env", "VERBIT_SETTINGS_SYNTHETIC_KEY" }, { "asr_context", "保持未展示的模型配置" },
+            { "api_key_env", "VERLOG_SETTINGS_SYNTHETIC_KEY" }, { "asr_context", "保持未展示的模型配置" },
             { "mp3_bitrate_kbps", 192 }, { "silence_warning_seconds", 90 }, { "open_in_obsidian", false }
         };
     }
@@ -105,7 +105,7 @@ internal static class TestMeetingSettings {
             string guideFolder = Path.Combine(MeetingFiles.Home, "documentation"); Directory.CreateDirectory(guideFolder);
             File.WriteAllText(Path.Combine(guideFolder, "first-use.md"), "# 首次使用\n隔离说明夹具", new UTF8Encoding(false));
             Call(context, "OpenFirstUseGuide");
-            using (var reader = Application.OpenForms.OfType<Form>().Single(delegate(Form form) { return form.Text == "verbit · 离线说明"; })) {
+            using (var reader = Application.OpenForms.OfType<Form>().Single(delegate(Form form) { return form.Text == "Verlog · 离线说明"; })) {
                 Check(((TextBox)reader.Controls["document_text"]).ReadOnly, "Tray first-use guide uses the internal reader without a Markdown association");
                 reader.Close();
             }
@@ -232,18 +232,18 @@ internal static class TestMeetingSettings {
         Check(Reject(delegate { MeetingSettingsSnapshot.Open(path); }), "Unknown schema keys fail safely");
         Check(unknownBytes.SequenceEqual(File.ReadAllBytes(path)), "Unknown original data stays byte-exact");
         var api = Config(root); api["transcription_mode"] = "api"; Write(path, api);
-        string previousKey = Environment.GetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY");
-        Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", null);
+        string previousKey = Environment.GetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY");
+        Environment.SetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY", null);
         try {
             Check(MeetingSettingsSnapshot.Open(path) != null, "Missing API credentials must not prevent opening repair settings");
             Check(Reject(delegate { MeetingConfig.Validate(ConfigWithApi(root)); }), "Transcription validation requires an API key");
             snapshot = MeetingSettingsSnapshot.Open(path); snapshot.Commit(Candidate(snapshot, nextRoot));
             Check((string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "api", "Settings can be saved before an API key is installed");
-            Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", "synthetic-test-only");
+            Environment.SetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY", "synthetic-test-only");
             snapshot = MeetingSettingsSnapshot.Open(path); snapshot.Commit(Candidate(snapshot, nextRoot));
-            Check((string)MeetingSettingsSnapshot.Open(path).Values["api_key_env"] == "VERBIT_SETTINGS_SYNTHETIC_KEY", "API secret variable reference survives settings");
+            Check((string)MeetingSettingsSnapshot.Open(path).Values["api_key_env"] == "VERLOG_SETTINGS_SYNTHETIC_KEY", "API secret variable reference survives settings");
             Check(!File.ReadAllText(path).Contains("synthetic-test-only"), "Saving never embeds the environment secret");
-        } finally { Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", previousKey); }
+        } finally { Environment.SetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY", previousKey); }
         byte[] invalidEncoding = new byte[] { 0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d };
         File.WriteAllBytes(path, invalidEncoding); bool invalidUtf8 = false;
         try { MeetingSettingsSnapshot.Open(path); } catch (DecoderFallbackException) { invalidUtf8 = true; }
@@ -285,7 +285,7 @@ internal static class TestMeetingSettings {
         var snapshot = MeetingSettingsSnapshot.CreateNew(path, root);
         Check(!File.Exists(path), "Preparing first-run settings does not create a config");
         Check(!(bool)snapshot.Values["open_in_obsidian"] && (string)snapshot.Values["transcription_mode"] == "api" && !(bool)snapshot.Values["auto_transcribe"], "New installs use ordinary notes and record only without connecting to a service");
-        Check((string)snapshot.Values["meeting_folder"] == "verbit", "New installs save meetings under verbit; old configurations retain their folders");
+        Check((string)snapshot.Values["meeting_folder"] == "Verlog", "New installs save meetings under Verlog; old configurations retain their folders");
         using(var form = new MeetingSettingsDialog(snapshot, delegate { return null; }, true)) {
             form.Show();form.ShowTranscription();Application.DoEvents();
             Check(form.Controls.Find("download_recommended_model",true).Length==0,"First-run settings contain no model download entry");
@@ -307,7 +307,7 @@ internal static class TestMeetingSettings {
                 Application.Idle -= idle;
                 try {
                     appeared = true;
-                    Check(form.Text == "verbit · 首次设置", "Missing config opens the real first-run settings dialog");
+                    Check(form.Text == "Verlog · 首次设置", "Missing config opens the real first-run settings dialog");
                     Check(!File.Exists(path), "First-run config remains absent until Save succeeds");
                     Check(((Button)form.AcceptButton).Text == "保存并启动", "First-run action explains startup after saving without starting a recording");
                     CheckLayout(form, Path.Combine(directory, "first-run-dialog-" + currentRound + ".png"));
@@ -392,7 +392,7 @@ internal static class TestMeetingSettings {
         var snapshot = MeetingSettingsSnapshot.Open(path); int calls = 0;
         using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> value) { calls++; return "测试：快捷键被占用，请更换"; })) {
             form.Show(); Application.DoEvents();
-            Check(form.Text == "verbit · 设置", "Dialog displays the new product name");
+            Check(form.Text == "Verlog · 设置", "Dialog displays the new product name");
             Check(!form.HasPendingChanges, "Fresh settings do not block the updater with a false unsaved-change warning");
             Check(form.TopMost && !form.ShowInTaskbar && form.FormBorderStyle == FormBorderStyle.FixedDialog, "Settings remain a lightweight native tool window");
             foreach (string key in new[] { "vault_root", "meeting_folder", "quick_note_folder", "hotkey", "pause_hotkey", "bookmark_hotkey", "quick_note_hotkey", "recording_protection_seconds" })
@@ -463,8 +463,8 @@ internal static class TestMeetingSettings {
     static Dictionary<string, object> ConfigWithApi(string root) { var config = Config(root); config["transcription_mode"] = "api"; return config; }
     static void ApiCredentialRecovery(string directory, string root) {
         string path = Path.Combine(directory, "missing-key-recovery.json"); Write(path, ConfigWithApi(root));
-        string previous = Environment.GetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY");
-        Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", null);
+        string previous = Environment.GetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY");
+        Environment.SetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY", null);
         try {
             var snapshot = MeetingSettingsSnapshot.Open(path);
             using (var form = new MeetingSettingsDialog(snapshot, delegate(Dictionary<string, object> next) { snapshot.Commit(next); return null; })) {
@@ -475,7 +475,7 @@ internal static class TestMeetingSettings {
                 Check(!form.Visible && (string)MeetingSettingsSnapshot.Open(path).Values["transcription_mode"] == "api" && !(bool)MeetingSettingsSnapshot.Open(path).Values["auto_transcribe"], "Missing API credentials do not prevent saving record-only settings, without inventing a local model");
             }
             var api = ConfigWithApi(root);
-            // Never contend with the user's running verbit default shortcuts.
+            // Never contend with the user's running Verlog default shortcuts.
             api["hotkey"] = "Ctrl+Alt+Shift+F21"; api["pause_hotkey"] = "Ctrl+Alt+Shift+F22";
             api["bookmark_hotkey"] = "Ctrl+Alt+Shift+F23"; api["quick_note_hotkey"] = "Ctrl+Alt+Shift+F24";
             using (var context = new MeetingContext(api, delegate { throw new Exception("No worker may launch"); }, delegate { throw new Exception("No external app may open"); })) {
@@ -485,7 +485,7 @@ internal static class TestMeetingSettings {
                 Check(MeetingConfig.Validate(new Dictionary<string, object>(api), false) != null, "Native recording accepts a configured API mode without credentials");
                 context.ExitThread();
             }
-        } finally { Environment.SetEnvironmentVariable("VERBIT_SETTINGS_SYNTHETIC_KEY", previous); }
+        } finally { Environment.SetEnvironmentVariable("VERLOG_SETTINGS_SYNTHETIC_KEY", previous); }
     }
     static void ExtendedInterface(string directory, string root) {
         string path = Path.Combine(directory, "extended-settings.json"); Write(path, Config(root));
@@ -530,7 +530,7 @@ internal static class TestMeetingSettings {
             Check(Input(form, "asr_terms").Visible && Input(form, "api_model").Visible, "Advanced terms expand alongside explicit API fields");
             var mode = (CheckBox)form.Controls.Find("auto_transcribe", true)[0]; mode.Checked = true; Application.DoEvents();
             Check(Input(form, "api_model").Enabled, "Choosing API exposes API model fields");
-            Input(form, "api_key_env").Text = "VERBIT_SYNTHETIC_UNSET_KEY";
+            Input(form, "api_key_env").Text = "VERLOG_SYNTHETIC_UNSET_KEY";
             Input(form, "asr_terms").Text = "产品名,术语";
             CheckChildren(tabs.SelectedTab, form.DeviceDpi);
             using (var image = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(image, new Rectangle(0, 0, form.Width, form.Height)); image.Save(Path.Combine(directory, "settings-models.png")); }
@@ -593,12 +593,12 @@ internal static class TestMeetingSettings {
             }
             Input(form,"api_base_url").Text="https://example.invalid/v1"; Input(form,"api_model").Text=""; check.PerformClick();
             Check(status.Text.Contains("模型名称"),"Missing model gets an actionable inline reason");
-            Input(form,"api_model").Text="synthetic";Input(form,"api_key_env").Text="VERBIT_SYNTHETIC_UNSET_KEY";check.PerformClick();
+            Input(form,"api_model").Text="synthetic";Input(form,"api_key_env").Text="VERLOG_SYNTHETIC_UNSET_KEY";check.PerformClick();
             Check(status.Text.Contains("尚未设置"),"Missing credential is not mislabeled as connected");
-            string previous=Environment.GetEnvironmentVariable("VERBIT_SETTINGS_CHECK_ONLY");
-            try { Environment.SetEnvironmentVariable("VERBIT_SETTINGS_CHECK_ONLY","synthetic-not-a-key");Input(form,"api_key_env").Text="VERBIT_SETTINGS_CHECK_ONLY";check.PerformClick();
+            string previous=Environment.GetEnvironmentVariable("VERLOG_SETTINGS_CHECK_ONLY");
+            try { Environment.SetEnvironmentVariable("VERLOG_SETTINGS_CHECK_ONLY","synthetic-not-a-key");Input(form,"api_key_env").Text="VERLOG_SETTINGS_CHECK_ONLY";check.PerformClick();
                 Check(status.Text.Contains("尚未验证实际转写"),"A locally present key never claims actual transcription success");
-            } finally {Environment.SetEnvironmentVariable("VERBIT_SETTINGS_CHECK_ONLY",previous);}
+            } finally {Environment.SetEnvironmentVariable("VERLOG_SETTINGS_CHECK_ONLY",previous);}
             Check(original.SequenceEqual(File.ReadAllBytes(path)),"Mode switches and configuration checks never save or start transcription");
             form.Close();
         }

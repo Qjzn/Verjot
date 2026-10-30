@@ -13,7 +13,7 @@ using System.Windows.Forms;
 
 // Shared visual roles; native input, menu navigation and DPI ownership stay
 // with their existing controls. No polling or application-wide repaint hook.
-internal static class VerbitUi {
+internal static class VerlogUi {
     internal static Color Surface { get { return SystemInformation.HighContrast ? SystemColors.Window : Color.White; } }
     internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(34, 46, 63); } }
     internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : Color.FromArgb(85, 101, 123); } }
@@ -51,9 +51,9 @@ internal static class VerbitUi {
 
 // CheckBox preserves the existing boolean binding; radio semantics describe
 // the two mutually exclusive modes to assistive technology.
-internal sealed class VerbitModeButton : CheckBox {
+internal sealed class VerlogModeButton : CheckBox {
     bool hovered;
-    internal VerbitModeButton() {
+    internal VerlogModeButton() {
         AutoCheck = false; Appearance = Appearance.Button; FlatStyle = FlatStyle.Flat;
         AccessibleRole = AccessibleRole.RadioButton; TextAlign = ContentAlignment.MiddleCenter;
         Dock = DockStyle.Fill; Margin = Padding.Empty; Cursor = Cursors.Hand;
@@ -65,7 +65,7 @@ internal sealed class VerbitModeButton : CheckBox {
     protected override void OnKeyDown(KeyEventArgs e) {
         if (Parent != null && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)) {
             foreach (Control child in Parent.Controls) {
-                var next = child as VerbitModeButton;
+                var next = child as VerlogModeButton;
                 if (next != null && next != this && next.Enabled && next.Visible) {
                     next.Focus(); next.OnClick(EventArgs.Empty); e.Handled = e.SuppressKeyPress = true; return;
                 }
@@ -74,10 +74,10 @@ internal sealed class VerbitModeButton : CheckBox {
         base.OnKeyDown(e);
     }
     protected override void OnPaint(PaintEventArgs e) {
-        Color fill = Checked || hovered ? VerbitUi.Hover : VerbitUi.Surface;
-        Color ink = (Checked || hovered) && SystemInformation.HighContrast ? SystemColors.HighlightText : Checked ? VerbitUi.Accent : VerbitUi.Ink;
+        Color fill = Checked || hovered ? VerlogUi.Hover : VerlogUi.Surface;
+        Color ink = (Checked || hovered) && SystemInformation.HighContrast ? SystemColors.HighlightText : Checked ? VerlogUi.Accent : VerlogUi.Ink;
         e.Graphics.Clear(fill);
-        using (var pen = new Pen(Checked ? VerbitUi.Accent : VerbitUi.Border)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        using (var pen = new Pen(Checked ? VerlogUi.Accent : VerlogUi.Border)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
         TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4), ink, fill);
     }
@@ -85,11 +85,11 @@ internal sealed class VerbitModeButton : CheckBox {
 
 // One renderer for app-owned menus. Native menu navigation, focus and dismissal
 // stay with WinForms; no animation timer or editor repaint is involved.
-internal sealed class VerbitMenu : ContextMenuStrip {
+internal sealed class VerlogMenu : ContextMenuStrip {
     Font menuFont;
     int menuDpi;
-    public VerbitMenu() { ApplyStyle(96); }
-    public VerbitMenu(System.ComponentModel.IContainer owner) : base(owner) { ApplyStyle(96); }
+    public VerlogMenu() { ApplyStyle(96); }
+    public VerlogMenu(System.ComponentModel.IContainer owner) : base(owner) { ApplyStyle(96); }
     [StructLayout(LayoutKind.Sequential)] struct PointValue { public int X, Y; }
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(PointValue point, uint flags);
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
@@ -113,9 +113,9 @@ internal sealed class VerbitMenu : ContextMenuStrip {
         if (previous != null) previous.Dispose();
     }
     void StyleDropDown(ToolStripDropDown menu) {
-        bool first = !(menu.Renderer is VerbitMenuRenderer);
-        menu.Renderer = VerbitMenuRenderer.Shared; menu.Font = menuFont;
-        menu.BackColor = VerbitMenuRenderer.Surface; menu.ForeColor = VerbitMenuRenderer.Ink;
+        bool first = !(menu.Renderer is VerlogMenuRenderer);
+        menu.Renderer = VerlogMenuRenderer.Shared; menu.Font = menuFont;
+        menu.BackColor = VerlogMenuRenderer.Surface; menu.ForeColor = VerlogMenuRenderer.Ink;
         int pad = Math.Max(1, 4 * menuDpi / 96);
         // A hosted search/list popup owns its inner layout and must not be resized.
         bool hosted = menu.Items.Count == 1 && menu.Items[0] is ToolStripControlHost;
@@ -151,7 +151,7 @@ internal sealed class VerbitMenu : ContextMenuStrip {
     }
     internal static void AttachTextMenu(TextBoxBase field) {
         if (field.ContextMenuStrip != null) return;
-        var menu = new VerbitMenu();
+        var menu = new VerlogMenu();
         var undo = menu.Items.Add("撤销", null, delegate { field.Undo(); });
         menu.Items.Add(new ToolStripSeparator());
         var cut = menu.Items.Add("剪切", null, delegate { field.Cut(); });
@@ -187,15 +187,15 @@ internal sealed class VerbitMenu : ContextMenuStrip {
     }
 }
 
-internal sealed class VerbitMenuRenderer : ToolStripProfessionalRenderer {
-    internal static readonly VerbitMenuRenderer Shared = new VerbitMenuRenderer();
+internal sealed class VerlogMenuRenderer : ToolStripProfessionalRenderer {
+    internal static readonly VerlogMenuRenderer Shared = new VerlogMenuRenderer();
     internal static Color Surface { get { return SystemInformation.HighContrast ? SystemColors.Menu : Color.White; } }
-    internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.MenuText : VerbitUi.Ink; } }
-    internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : VerbitUi.Muted; } }
-    internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.MenuText : VerbitUi.Accent; } }
-    internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : VerbitUi.Hover; } }
+    internal static Color Ink { get { return SystemInformation.HighContrast ? SystemColors.MenuText : VerlogUi.Ink; } }
+    internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : VerlogUi.Muted; } }
+    internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.MenuText : VerlogUi.Accent; } }
+    internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : VerlogUi.Hover; } }
     internal static readonly Color Danger = Color.FromArgb(174, 47, 47);
-    VerbitMenuRenderer() { RoundedEdges = false; }
+    VerlogMenuRenderer() { RoundedEdges = false; }
     static float Scale(ToolStrip strip) { return strip.Font.Size / 12f; }
     static bool Destructive(ToolStripItem item) { return item.Name == "deleteNote"; }
     static Color Foreground(ToolStripItem item) {
@@ -206,7 +206,7 @@ internal sealed class VerbitMenuRenderer : ToolStripProfessionalRenderer {
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) { e.Graphics.Clear(Surface); }
     protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) {
-        using (var pen = new Pen(SystemInformation.HighContrast ? SystemColors.WindowFrame : VerbitUi.Border))
+        using (var pen = new Pen(SystemInformation.HighContrast ? SystemColors.WindowFrame : VerlogUi.Border))
             e.Graphics.DrawRectangle(pen, 0, 0, Math.Max(0, e.ToolStrip.Width - 1), Math.Max(0, e.ToolStrip.Height - 1));
     }
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
@@ -274,7 +274,7 @@ internal static class DesktopServices {
             if (window.IsHandleCreated && !window.IsDisposed) window.BeginInvoke(fit);
         };
     }
-    public const string Repository = "https://github.com/Qjzn/verbit";
+    public const string Repository = "https://github.com/Qjzn/Verlog";
     public const int ShowMessage = 0x802a;
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr child, string className, string title);
     [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
@@ -325,11 +325,11 @@ internal static class DesktopServices {
         });
         return owned;
     }
-    static string[] StartupPaths { get { return new[] { Path.Combine(StartupFolder, "verbit installed.lnk"), Path.Combine(StartupFolder, "verbit.lnk") }; } }
+    static string[] StartupPaths { get { return new[] { Path.Combine(StartupFolder, "Verlog installed.lnk"), Path.Combine(StartupFolder, "Verlog.lnk"), Path.Combine(StartupFolder, "verbit installed.lnk"), Path.Combine(StartupFolder, "verbit.lnk") }; } }
     public static bool StartsWithWindows { get { foreach (string path in StartupPaths) if (Owns(path)) return true; return false; } }
     public static void SetStartup(bool enabled) {
         if (enabled) {
-            if (StartsWithWindows) return;
+            if (Owns(StartupPaths[0]) || Owns(StartupPaths[1])) return;
             Directory.CreateDirectory(StartupFolder);
             string path = StartupPaths[0];
             if (File.Exists(path)) throw new IOException("开机启动入口属于另一份安装，请先移除旧版的自启设置。");
@@ -341,6 +341,7 @@ internal static class DesktopServices {
                 type.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
             });
             if (!Owns(path)) throw new IOException("无法验证开机启动快捷方式。");
+            for (int index = 2; index < StartupPaths.Length; index++) if (Owns(StartupPaths[index])) File.Delete(StartupPaths[index]);
         } else foreach (string path in StartupPaths) if (Owns(path)) File.Delete(path);
     }
     public static void Open(string url) {
@@ -355,13 +356,13 @@ internal static class DesktopServices {
         MeetingConfig.CheckOrdinaryPath(path);
         if (new FileInfo(path).Length > 2 * 1024 * 1024) throw new IOException("说明文件过大，请检查程序目录。");
         string text = File.ReadAllText(path, new System.Text.UTF8Encoding(false, true));
-        var window = new System.Windows.Forms.Form { Text = "verbit · 离线说明", Icon = MeetingBrand.IdleIcon,
+        var window = new System.Windows.Forms.Form { Text = "Verlog · 离线说明", Icon = MeetingBrand.IdleIcon,
             AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi, AutoScaleDimensions = new System.Drawing.SizeF(96, 96),
             ClientSize = new System.Drawing.Size(560, 420), StartPosition = System.Windows.Forms.FormStartPosition.CenterParent,
             Font = System.Drawing.SystemFonts.MessageBoxFont, MinimizeBox = false, TopMost = true };
         var reader = new System.Windows.Forms.TextBox { Name = "document_text", Text = text, ReadOnly = true, Multiline = true,
             Dock = System.Windows.Forms.DockStyle.Fill, ScrollBars = System.Windows.Forms.ScrollBars.Vertical, WordWrap = true };
-        VerbitMenu.AttachTextMenu(reader);
+        VerlogMenu.AttachTextMenu(reader);
         window.Controls.Add(reader);
         KeepWindowOnScreen(window);
         return window;
@@ -397,7 +398,7 @@ internal static class DesktopServices {
         return Newer(latest, current) ? "发现新版本 " + latest + "，请打开设置中的更新窗口完成更新。" : "当前没有更高版本。";
     }
     public static string CheckUpdates() {
-        var release = VerbitUpdateClient.Check(Version, false, System.Threading.CancellationToken.None);
+        var release = VerlogUpdateClient.Check(Version, false, System.Threading.CancellationToken.None);
         return release == null ? "当前没有可安装的新版本。" : "发现新版本 " + release.Version + "，请打开设置的更新窗口完成更新。";
     }
 }

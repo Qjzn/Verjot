@@ -851,7 +851,7 @@ internal static class TestQuickNoteEditor {
             Check(((string[])Field(rail, "files")).Length < 5, "Short windows reduce visible tab count");
             window.ClientSize = new Size(360, 420); window.PerformLayout(); Call(window, "ShowTabs"); Pump(250);
             var label = (Label)Field(window, "dateLabel");
-            Check(label.Text == "产品讨论.md" && !label.Text.Contains("verbit"), "Header shows logo and current filename without old branding");
+            Check(label.Text == "产品讨论.md" && !label.Text.Contains("Verlog"), "Header shows logo and current filename without old branding");
             input.Select(0, 0); QuickNoteScrollBar.SetPosition(input, Point.Empty);
             using (var screenshot = new Bitmap(window.Width + rail.Width, window.Height)) {
                 using (Graphics g = Graphics.FromImage(screenshot)) g.Clear(Color.FromArgb(240, 240, 238));
@@ -1320,8 +1320,8 @@ internal static class TestQuickNoteEditor {
             Check(!File.Exists(seed.Path) && !File.Exists(other.Path) && windowNotePath(reopened) != other.Path, "Reopening never restores or recreates a deleted note from old navigation state");
         }
         Console.WriteLine("PASS tab deletion; recycle spy is isolated; clipboard_access=0; global_input=0");
-        if (Environment.GetEnvironmentVariable("VERBIT_TEST_NATIVE_RECYCLE") != "1") {
-            Console.WriteLine("SKIP native shell recycle: opt in with VERBIT_TEST_NATIVE_RECYCLE=1 on a local Windows desktop"); return;
+        if (Environment.GetEnvironmentVariable("VERLOG_TEST_NATIVE_RECYCLE") != "1") {
+            Console.WriteLine("SKIP native shell recycle: opt in with VERLOG_TEST_NATIVE_RECYCLE=1 on a local Windows desktop"); return;
         }
         var nativeStore = new QuickNoteStore(vault, "native-recycle", Path.Combine(root, "native-recycle-recovery"));
         var nativeSeed = nativeStore.Load(DateTime.Today); nativeStore.Save(nativeSeed, "仅用于回收的合成测试便签");

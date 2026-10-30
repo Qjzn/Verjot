@@ -1,9 +1,9 @@
-# verbit 第一版范围
+# Verlog 第一版范围
 
-> 当前 beta.38：新用户默认仅录音，无推荐模型下载；速记、原生 MP3 导出与可选 API 均无需 Python 或模型。API 提交完整 MP3，身份信息仅来自服务返回；旧模型与配置文件保留，但桌面端不探测或自动连接，历史 Python 流程仅供研究。会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+> 当前 beta.38：新用户默认仅录音，无推荐模型下载；速记、原生 MP3 导出与可选 API 均无需 Python 或模型。API 提交完整 MP3，身份信息仅来自服务返回；旧模型与配置文件保留，但桌面端不探测或自动连接，历史 Python 流程仅供研究。会议按 `Verlog年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 
 
-verbit 面向需要保存中文会议录音与转录的 Windows 用户。新人由 AI 完成安装和配置，日常通过快捷键、浮窗与托盘完成记录；成品可以保存到普通文件夹，也可以进入 Obsidian 笔记库。
+Verlog 面向需要保存中文会议录音与转录的 Windows 用户。新人由 AI 完成安装和配置，日常通过快捷键、浮窗与托盘完成记录；成品可以保存到普通文件夹，也可以进入 Obsidian 笔记库。
 
 ## 第一版四项功能
 
@@ -31,7 +31,7 @@ verbit 面向需要保存中文会议录音与转录的 Windows 用户。新人�
 
 三个配置字段 `show_processing_window`、`notify_device_changes`、`auto_open_completed_note` 均为布尔值并默认 `true`。旧配置省略 `animation_mode` 时使用 `"auto"`，其他已确认字段保留原值。关闭 `show_processing_window` 只关闭自动展开：结束时收起已有窗，仍可从托盘手动展开查看。「最近会议」以秒级时间标识各场，最多显示 20 场，优先包含需要关注的记录；更早的本机资料可从 `work/` 查看。内部 `controller.json` 只记录本机控制身份与提示状态，不增加笔记库附件。
 
-输入波形平滑变化，按钮使用约 120–180 毫秒短过渡。`animation_mode: "auto"` 跟随 Windows 客户区动画及高对比设置；`"on"` 只为 verbit 开启动效，适合系统关闭动画但希望 verbit 有动效的情况；`"off"` 关闭非必要动画。均不修改 Windows 设置，停用动效时仍保留静态等待状态、真实输入和进度反馈。新会议的成品只有一条 MP3 和一份 Markdown。
+输入波形平滑变化，按钮使用约 120–180 毫秒短过渡。`animation_mode: "auto"` 跟随 Windows 客户区动画及高对比设置；`"on"` 只为 Verlog 开启动效，适合系统关闭动画但希望 Verlog 有动效的情况；`"off"` 关闭非必要动画。均不修改 Windows 设置，停用动效时仍保留静态等待状态、真实输入和进度反馈。新会议的成品只有一条 MP3 和一份 Markdown。
 
 `bookmark_hotkey` 默认 `"Ctrl+Alt+K"`；`silence_warning_seconds` 默认整数 `60`，允许 `0`–`3600`，`0` 关闭。无声判定使用正在录制的输入峰值持续低于 `0.003`，是检查输入的提醒，不是设备故障判定或转写质量结论。
 

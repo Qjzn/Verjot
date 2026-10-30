@@ -83,16 +83,20 @@ internal static class TestDesktopServices {
             Check(!DesktopServices.StartsWithWindows, "Fresh isolated startup disabled");
             DesktopServices.SetStartup(true); Check(DesktopServices.StartsWithWindows, "Real COM shortcut enables autostart in fixture");
             DesktopServices.SetStartup(true); Check(Directory.GetFiles(folder).Length == 1, "Autostart is idempotent");
+            File.Move(Path.Combine(folder,"Verlog installed.lnk"),Path.Combine(folder,"verbit installed.lnk"));
+            Check(DesktopServices.StartsWithWindows,"Existing brand startup setting is recognized");
+            DesktopServices.SetStartup(true);
+            Check(File.Exists(Path.Combine(folder,"Verlog installed.lnk"))&&!File.Exists(Path.Combine(folder,"verbit installed.lnk")),"Owned legacy shortcut migrates to the current name without duplicate startup");
             DesktopServices.SetStartup(false); Check(!DesktopServices.StartsWithWindows && Directory.GetFiles(folder).Length == 0, "Disable removes owned shortcut");
             object shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-            object link = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { Path.Combine(folder, "verbit installed.lnk") });
+            object link = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { Path.Combine(folder, "Verlog installed.lnk") });
             link.GetType().InvokeMember("TargetPath", BindingFlags.SetProperty, null, link, new object[] { Path.Combine(folder, "other.exe") });
             link.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
             Marshal.FinalReleaseComObject(link); Marshal.FinalReleaseComObject(shell);
-            byte[] before = File.ReadAllBytes(Path.Combine(folder, "verbit installed.lnk"));
-            DesktopServices.SetStartup(false); Check(File.Exists(Path.Combine(folder, "verbit installed.lnk")), "Does not remove another installation's entry");
+            byte[] before = File.ReadAllBytes(Path.Combine(folder, "Verlog installed.lnk"));
+            DesktopServices.SetStartup(false); Check(File.Exists(Path.Combine(folder, "Verlog installed.lnk")), "Does not remove another installation's entry");
             bool collision = false; try { DesktopServices.SetStartup(true); } catch (IOException) { collision = true; }
-            Check(collision && Convert.ToBase64String(before) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(folder, "verbit installed.lnk"))), "Foreign entry is never overwritten");
+            Check(collision && Convert.ToBase64String(before) == Convert.ToBase64String(File.ReadAllBytes(Path.Combine(folder, "Verlog installed.lnk"))), "Foreign entry is never overwritten");
             Console.WriteLine("PASS TestDesktopServices: " + count + " assertions; no network, user startup, clipboard or audio."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }

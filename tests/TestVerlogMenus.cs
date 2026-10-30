@@ -5,7 +5,7 @@ using System.Reflection;
 using System.Windows.Forms;
 
 // Synthetic menus on a private desktop; no clipboard, input injection or audio.
-internal static class TestVerbitMenus {
+internal static class TestVerlogMenus {
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window, IntPtr dc);
@@ -92,7 +92,7 @@ internal static class TestVerbitMenus {
                 Check(feedback.Pressed, "Mouse down has immediate pressed feedback");
                 using (var bitmap = new Bitmap(button.Width, button.Height)) {
                     button.DrawToBitmap(bitmap, button.ClientRectangle);
-                    Check(bitmap.GetPixel(button.Width / 2, 5) == VerbitUi.Pressed, "Pressed uses the shared color without moving the icon");
+                    Check(bitmap.GetPixel(button.Width / 2, 5) == VerlogUi.Pressed, "Pressed uses the shared color without moving the icon");
                     bitmap.Save(Path.Combine(folder, button.GetType().Name + "-pressed.png"));
                 }
                 Event(button, "OnMouseLeave", EventArgs.Empty);
@@ -118,11 +118,11 @@ internal static class TestVerbitMenus {
             Application.EnableVisualStyles();
             string folder = args[0];
             CheckPartialPainting();
-            using (var owner = new Form { Text = "verbit synthetic menu fixture", Size = new Size(800, 600) }) {
+            using (var owner = new Form { Text = "Verlog synthetic menu fixture", Size = new Size(800, 600) }) {
                 owner.Show(); Pump();
                 CheckButtonStates(owner, folder);
-                foreach (int dpi in new[] { 96, 120, 144, 192, 240, 288 }) using (var menu = new VerbitMenu()) {
-                    menu.Items.Add(new ToolStripMenuItem("verbit已就绪") { Enabled = false });
+                foreach (int dpi in new[] { 96, 120, 144, 192, 240, 288 }) using (var menu = new VerlogMenu()) {
+                    menu.Items.Add(new ToolStripMenuItem("Verlog已就绪") { Enabled = false });
                     var note = new ToolStripMenuItem("速记便签 · Ctrl+Alt+J"); menu.Items.Add(note);
                     var mic = new ToolStripMenuItem("暂停麦克风 · Alt+Space") { Enabled = false }; menu.Items.Add(mic);
                     menu.Items.Add(new ToolStripSeparator());
@@ -133,7 +133,7 @@ internal static class TestVerbitMenus {
                     menu.Items.Add("设置…");
                     menu.Items.Add(new ToolStripMenuItem(new string('长', 180)));
                     menu.Show(owner, new Point(8, 8)); menu.ApplyStyle(dpi); note.Select(); Pump();
-                    Check(menu.Renderer is VerbitMenuRenderer, "Every root uses the shared renderer");
+                    Check(menu.Renderer is VerlogMenuRenderer, "Every root uses the shared renderer");
                     Check(menu.Font.Unit == GraphicsUnit.Pixel && Math.Abs(menu.Font.Size - 12f * dpi / 96) < .01f, "Compact font scales once at " + dpi);
                     Check(menu.Width <= 360 * dpi / 96 + 16 * dpi / 96, "Long labels cannot create an unbounded menu: " + menu.Width + " at " + dpi);
                     Check(menu.Items[0].Height >= menu.Font.Height + 8 * dpi / 96 && menu.Items[0].Height <= 28 * dpi / 96, "Chinese text fits the compact row at " + dpi);
@@ -150,7 +150,7 @@ internal static class TestVerbitMenus {
                         Check(arrowVisible, "The submenu arrow remains visibly discoverable with long names at " + dpi);
                     }
                     recent.ShowDropDown(); Pump();
-                    Check(recent.DropDown.Renderer is VerbitMenuRenderer && recent.DropDown.Font == menu.Font, "Dynamically rebuilt submenu inherits renderer and DPI font");
+                    Check(recent.DropDown.Renderer is VerlogMenuRenderer && recent.DropDown.Font == menu.Font, "Dynamically rebuilt submenu inherits renderer and DPI font");
                     Check(recent.DropDownItems.Count == 2, "Submenu still populates before styling");
                     Capture(recent.DropDown, Path.Combine(folder, "submenu-" + dpi + ".png"));
                     recent.HideDropDown();
@@ -158,10 +158,10 @@ internal static class TestVerbitMenus {
                     Check(clicked, "Selection still dispatches the original command"); menu.Close();
                 }
                 using (var field = new TextBox { Text = "中文输入 abc", Width = 250 }) {
-                    owner.Controls.Add(field); VerbitMenu.AttachTextMenu(field);
+                    owner.Controls.Add(field); VerlogMenu.AttachTextMenu(field);
                     var menu = field.ContextMenuStrip;
-                    Check(menu is VerbitMenu, "Settings/search/text fields share the same style");
-                    VerbitMenu.AttachTextMenu(field); Check(menu == field.ContextMenuStrip, "Repeated settings styling does not allocate another menu");
+                    Check(menu is VerlogMenu, "Settings/search/text fields share the same style");
+                    VerlogMenu.AttachTextMenu(field); Check(menu == field.ContextMenuStrip, "Repeated settings styling does not allocate another menu");
                     field.Select(0, 2); menu.Show(field, new Point(0, field.Height)); Pump();
                     Check(menu.Items[2].Enabled && menu.Items[3].Enabled && menu.Items[4].Enabled, "Editable selection allows clipboard commands without probing clipboard");
                     Capture(menu, Path.Combine(folder, "text-menu.png")); menu.Close();
@@ -172,7 +172,7 @@ internal static class TestVerbitMenus {
                     menu.Items[6].PerformClick(); Check(field.SelectionLength == field.TextLength, "Select all uses the field's native selection");
                     field.Dispose(); Check(menu.IsDisposed, "Text-menu resources follow their owning field");
                 }
-                foreach (var screen in Screen.AllScreens) using (var hosted = new VerbitMenu()) {
+                foreach (var screen in Screen.AllScreens) using (var hosted = new VerlogMenu()) {
                     owner.Location = new Point(screen.WorkingArea.Left + 20, screen.WorkingArea.Top + 20); Pump();
                     hosted.ApplyStyle(owner.DeviceDpi);
                     var noteNames = new string[41]; noteNames[0] = "演示便签.md";
@@ -186,9 +186,9 @@ internal static class TestVerbitMenus {
                     Check(hosted.ClientSize.Width <= picker.Width + hosted.Padding.Horizontal + 1,
                         "Hosted picker has no reserved right command gutter: menu=" + hosted.ClientSize + "; picker=" + picker.Size);
                     Check(picker.Width <= 280 * owner.DeviceDpi / 96, "Picker width follows compact filename measure rather than a fixed wide sheet");
-                    Check(picker.Search.ContextMenuStrip is VerbitMenu, "The recent-note search field also uses the common menu");
+                    Check(picker.Search.ContextMenuStrip is VerlogMenu, "The recent-note search field also uses the common menu");
                     Check(picker.Font.Unit == GraphicsUnit.Pixel && Math.Abs(picker.Font.Size - 12f * owner.DeviceDpi / 96) < .01, "More-notes text uses the common menu font rather than the editor font");
-                    Check(picker.BackColor == VerbitMenuRenderer.Surface && picker.Results.ForeColor == VerbitMenuRenderer.Ink, "More-notes surface and foreground match every other menu");
+                    Check(picker.BackColor == VerlogMenuRenderer.Surface && picker.Results.ForeColor == VerlogMenuRenderer.Ink, "More-notes surface and foreground match every other menu");
                     Console.WriteLine("Recent dpi=" + owner.DeviceDpi + "; picker=" + picker.Size + "; viewport=" + picker.Results.Parent.Bounds + "; list=" + picker.Results.Bounds + "; bar=" + picker.ListScroll.Bounds + "; font=" + picker.Font);
                     Check(picker.Results.ItemHeight <= 28 * owner.DeviceDpi / 96 && picker.Results.ItemHeight >= picker.Font.Height + 8 * owner.DeviceDpi / 96, "More-notes uses compact rows with complete Chinese glyphs");
                     CaptureHosted(hosted, Path.Combine(folder, "recent-picker.png"));
@@ -235,7 +235,7 @@ internal static class TestVerbitMenus {
                     CheckPresentedRows(picker, Path.Combine(folder, "presented-reopen-" + owner.DeviceDpi + ".png"));
                     hosted.Close();
                     }
-                    using (var freshMenu = new VerbitMenu()) {
+                    using (var freshMenu = new VerlogMenu()) {
                         freshMenu.ApplyStyle(owner.DeviceDpi);
                         using (var freshPicker = new QuickNoteRecentPicker(noteNames, noteNames[2], freshMenu.Font, owner.DeviceDpi, new Size(350 * owner.DeviceDpi / 96, 450 * owner.DeviceDpi / 96))) {
                             freshMenu.ShowImageMargin = freshMenu.ShowCheckMargin = false; freshMenu.Padding = new Padding(1);
@@ -249,7 +249,7 @@ internal static class TestVerbitMenus {
                 }
                 owner.Close();
             }
-            Console.WriteLine("Verbit menu tests passed: " + assertions + " assertions; isolated DPI layout simulation, no clipboard/audio."); return 0;
+            Console.WriteLine("Verlog menu tests passed: " + assertions + " assertions; isolated DPI layout simulation, no clipboard/audio."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 }

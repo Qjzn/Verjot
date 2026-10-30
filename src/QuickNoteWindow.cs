@@ -196,10 +196,10 @@ internal sealed class QuickNoteTabs : Form {
         tip.OwnerDraw = true; tip.UseAnimation = tip.UseFading = false;
         tip.Popup += delegate(object sender, PopupEventArgs e) { e.ToolTipSize = fileTipSize; };
         tip.Draw += delegate(object sender, DrawToolTipEventArgs e) {
-            e.Graphics.Clear(VerbitUi.Surface);
-            using (var border = new Pen(VerbitUi.Border)) e.Graphics.DrawRectangle(border, 0, 0, e.Bounds.Width - 1, e.Bounds.Height - 1);
+            e.Graphics.Clear(VerlogUi.Surface);
+            using (var border = new Pen(VerlogUi.Border)) e.Graphics.DrawRectangle(border, 0, 0, e.Bounds.Width - 1, e.Bounds.Height - 1);
             TextRenderer.DrawText(e.Graphics, e.ToolTipText, fileTipFont,
-                new Rectangle(8, 6, Math.Max(1, e.Bounds.Width - 16), Math.Max(1, e.Bounds.Height - 12)), VerbitUi.Ink,
+                new Rectangle(8, 6, Math.Max(1, e.Bounds.Width - 16), Math.Max(1, e.Bounds.Height - 12)), VerlogUi.Ink,
                 TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
         };
         animation.Tick += delegate {
@@ -310,7 +310,7 @@ internal sealed class QuickNoteTabs : Form {
             if (width < 8) continue;
             Rectangle r = new Rectangle(Width - width, i * Row + 2, width + 6, height);
             if (OnRight) r.X = -6;
-            Color color = selected ? VerbitUi.Hover : VerbitUi.Surface;
+            Color color = selected ? VerlogUi.Hover : VerlogUi.Surface;
             using (var path = new System.Drawing.Drawing2D.GraphicsPath()) {
                 int radius = 6 * DeviceDpi / 96;
                 if (OnRight) { path.AddLine(r.Left, r.Top, r.Right - radius, r.Top); path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90); path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddLine(r.Right - radius, r.Bottom, r.Left, r.Bottom); path.CloseFigure(); }
@@ -362,7 +362,7 @@ internal sealed class QuickNoteRecentScrollBar : Control {
     protected override void OnPaint(PaintEventArgs e) {
         e.Graphics.Clear(BackColor); Rectangle r = ThumbBounds; if (r.IsEmpty) return;
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using (var pen = new Pen(hover || dragging ? VerbitUi.Muted : Color.FromArgb(188, 194, 200), r.Width)) {
+        using (var pen = new Pen(hover || dragging ? VerlogUi.Muted : Color.FromArgb(188, 194, 200), r.Width)) {
             pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
             e.Graphics.DrawLine(pen, r.Left + r.Width / 2f, r.Top + r.Width / 2f, r.Left + r.Width / 2f, r.Bottom - r.Width / 2f);
         }
@@ -404,11 +404,11 @@ internal sealed class QuickNoteRecentPicker : UserControl {
     readonly string current;
     internal QuickNoteRecentPicker(string[] names, string selected, Font font, int dpi, Size maximum) {
         files = names; current = selected; AutoScaleMode = AutoScaleMode.None; Font = Search.Font = font;
-        BackColor = Results.BackColor = Search.BackColor = VerbitMenuRenderer.Surface;
+        BackColor = Results.BackColor = Search.BackColor = VerlogMenuRenderer.Surface;
         Search.HandleCreated += delegate { SendMessage(Search.Handle, 0x1501, new IntPtr(1), "搜索便签名称…"); };
-        VerbitMenu.AttachTextMenu(Search);
-        ForeColor = Results.ForeColor = Search.ForeColor = VerbitMenuRenderer.Ink;
-        heading.ForeColor = VerbitMenuRenderer.Ink; count.ForeColor = empty.ForeColor = VerbitMenuRenderer.Muted;
+        VerlogMenu.AttachTextMenu(Search);
+        ForeColor = Results.ForeColor = Search.ForeColor = VerlogMenuRenderer.Ink;
+        heading.ForeColor = VerlogMenuRenderer.Ink; count.ForeColor = empty.ForeColor = VerlogMenuRenderer.Muted;
         int unit = Math.Max(1, dpi), pad = Math.Max(6, 10 * unit / 96), gap = Math.Max(4, 6 * unit / 96);
         int row = Math.Max(28 * unit / 96, font.Height + 8 * unit / 96), header = Math.Max(20 * unit / 96, font.Height);
         int searchHeight = Math.Max(30 * unit / 96, font.Height + 12 * unit / 96);
@@ -427,7 +427,7 @@ internal sealed class QuickNoteRecentPicker : UserControl {
         searchFrame.Paint += delegate(object sender, PaintEventArgs e) {
             Rectangle r = new Rectangle(0, 0, searchFrame.Width - 1, searchFrame.Height - 1); int radius = 6 * unit / 96;
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (var path = new System.Drawing.Drawing2D.GraphicsPath()) using (var pen = new Pen(Search.Focused ? VerbitUi.Accent : VerbitUi.Border)) {
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath()) using (var pen = new Pen(Search.Focused ? VerlogUi.Accent : VerlogUi.Border)) {
                 path.AddArc(r.Left, r.Top, radius * 2, radius * 2, 180, 90); path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90);
                 path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90); path.AddArc(r.Left, r.Bottom - radius * 2, radius * 2, radius * 2, 90, 90); path.CloseFigure();
                 e.Graphics.DrawPath(pen, path);
@@ -446,13 +446,13 @@ internal sealed class QuickNoteRecentPicker : UserControl {
         Results.DrawItem += delegate(object sender, DrawItemEventArgs e) {
             if (e.Index < 0) return;
             bool active = (e.State & DrawItemState.Selected) != 0;
-            using (var brush = new SolidBrush(VerbitMenuRenderer.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
+            using (var brush = new SolidBrush(VerlogMenuRenderer.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
             Rectangle rowBounds = new Rectangle(0, e.Bounds.Top, viewport.Width, e.Bounds.Height);
-            if (active) VerbitUi.ToolBackground(e.Graphics, Rectangle.Inflate(rowBounds, 0, -2 * unit / 96), VerbitMenuRenderer.Surface, VerbitMenuRenderer.Hover, 1, unit);
-            Color ink = active && SystemInformation.HighContrast ? SystemColors.HighlightText : VerbitMenuRenderer.Ink;
+            if (active) VerlogUi.ToolBackground(e.Graphics, Rectangle.Inflate(rowBounds, 0, -2 * unit / 96), VerlogMenuRenderer.Surface, VerlogMenuRenderer.Hover, 1, unit);
+            Color ink = active && SystemInformation.HighContrast ? SystemColors.HighlightText : VerlogMenuRenderer.Ink;
             string name = (string)Results.Items[e.Index]; bool isCurrent = String.Equals(name, current, StringComparison.OrdinalIgnoreCase);
             Rectangle text = Rectangle.Inflate(rowBounds, -8 * unit / 96, 0);
-            if (isCurrent) { int diameter = 5 * unit / 96; using (var brush = new SolidBrush(active && SystemInformation.HighContrast ? ink : VerbitMenuRenderer.Accent)) e.Graphics.FillEllipse(brush, text.Left, text.Top + (text.Height - diameter) / 2, diameter, diameter); }
+            if (isCurrent) { int diameter = 5 * unit / 96; using (var brush = new SolidBrush(active && SystemInformation.HighContrast ? ink : VerlogMenuRenderer.Accent)) e.Graphics.FillEllipse(brush, text.Left, text.Top + (text.Height - diameter) / 2, diameter, diameter); }
             text.X += 13 * unit / 96; text.Width -= 13 * unit / 96;
             TextRenderer.DrawText(e.Graphics, Path.GetFileNameWithoutExtension(name), Font, text, ink, TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
         };
@@ -534,15 +534,15 @@ internal sealed class QuickNoteHeaderButton : Button {
     public QuickNoteHeaderButton() {
         hover = new QuickNoteHoverFeedback(this);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
-        BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Accent;
+        BackColor = VerlogUi.Surface; ForeColor = VerlogUi.Accent;
         TabStop = true; Size = new Size(32, 30); Cursor = Cursors.Hand;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
     }
     protected override void OnPaint(PaintEventArgs e) {
-        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, hover.Pressed ? VerbitUi.Pressed : VerbitUi.Hover, Enabled ? (hover.Pressed ? 1 : hover.Value) : 0, DeviceDpi);
+        VerlogUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, hover.Pressed ? VerlogUi.Pressed : VerlogUi.Hover, Enabled ? (hover.Pressed ? 1 : hover.Value) : 0, DeviceDpi);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, cx = Width / 2f, cy = Height / 2f;
-        Color ink = !Enabled ? SystemColors.GrayText : SystemInformation.HighContrast && (hover.Pressed || hover.Value > .5f) ? SystemColors.HighlightText : IsPin && Pinned ? VerbitUi.Accent : ForeColor;
+        Color ink = !Enabled ? SystemColors.GrayText : SystemInformation.HighContrast && (hover.Pressed || hover.Value > .5f) ? SystemColors.HighlightText : IsPin && Pinned ? VerlogUi.Accent : ForeColor;
         using (var pen = new Pen(ink, 1.6f * scale)) {
             pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
             if (IsPin) {
@@ -586,11 +586,11 @@ internal sealed class QuickNoteFormatButton : Button {
         hover = new QuickNoteHoverFeedback(this);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TabStop = true;
         Size = new Size(34, 30); Margin = new Padding(0, 0, 2, 0);
-        BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Ink; Cursor = Cursors.Hand;
+        BackColor = VerlogUi.Surface; ForeColor = VerlogUi.Ink; Cursor = Cursors.Hand;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
     }
     protected override void OnPaint(PaintEventArgs e) {
-        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, hover.Pressed ? VerbitUi.Pressed : VerbitUi.Hover, Enabled ? (hover.Pressed || Active ? 1 : hover.Value) : 0, DeviceDpi);
+        VerlogUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, hover.Pressed ? VerlogUi.Pressed : VerlogUi.Hover, Enabled ? (hover.Pressed || Active ? 1 : hover.Value) : 0, DeviceDpi);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, x = Width / 2f, y = Height / 2f;
         Color ink = !Enabled ? SystemColors.GrayText : SystemInformation.HighContrast && (hover.Pressed || Active || hover.Value > .5f) ? SystemColors.HighlightText : ForeColor;
@@ -712,10 +712,10 @@ internal sealed class QuickNoteWindow : Form {
         MaximizeBox = false; MinimizeBox = true; FormBorderStyle = FormBorderStyle.None;
         Padding = new Padding(4); SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer, true);
         ClientSize = new Size(360, 420); MinimumSize = new Size(280, 240);
-        StartPosition = FormStartPosition.Manual; BackColor = VerbitUi.Surface;
+        StartPosition = FormStartPosition.Manual; BackColor = VerlogUi.Surface;
         top = new QuickNoteChromePanel { Dock = DockStyle.Top, Height = 40, BackColor = BackColor };
         dateLabel = new QuickNoteTitle { TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, UseMnemonic = false, ForeColor = Color.FromArgb(36, 59, 83), AccessibleName = "当前便签文件名" };
-        brand = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Image = MeetingBrand.LogoBitmap(48), AccessibleName = "verbit Logo" };
+        brand = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Image = MeetingBrand.LogoBitmap(48), AccessibleName = "Verlog Logo" };
         newButton = new QuickNoteHeaderButton { ActionIcon = "new", AccessibleName = "新建便签", Name = "note-new" };
         pin = new QuickNoteHeaderButton { IsPin = true, Pinned = true, AccessibleName = "取消置顶", Name = "note-pin" };
         hideButton = new QuickNoteHeaderButton { AccessibleName = "最小化", Name = "note-minimize" };
@@ -729,8 +729,8 @@ internal sealed class QuickNoteWindow : Form {
             target.MouseDown += delegate { tips.Hide(target); };
         }
         top.Layout += delegate { LayoutHeader(); };
-        status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Visible = false, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = VerbitUi.Accent, ActiveLinkColor = Color.FromArgb(40, 104, 168), AccessibleName = "速记保存提示" };
-        editor = new QuickNoteInputBox { BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = VerbitUi.Ink, Font = editorFont, AcceptsTab = true, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, HideSelection = false, AllowDrop = true, AccessibleName = "速记正文", Name = "quick-note-editor", ReadOnly = true };
+        status = new LinkLabel { Dock = DockStyle.Bottom, Height = 32, Visible = false, Padding = new Padding(14, 0, 12, 0), TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, LinkBehavior = LinkBehavior.HoverUnderline, ForeColor = Color.FromArgb(88, 107, 128), LinkColor = VerlogUi.Accent, ActiveLinkColor = Color.FromArgb(40, 104, 168), AccessibleName = "速记保存提示" };
+        editor = new QuickNoteInputBox { BorderStyle = BorderStyle.None, BackColor = BackColor, ForeColor = VerlogUi.Ink, Font = editorFont, AcceptsTab = true, WordWrap = true, ScrollBars = RichTextBoxScrollBars.ForcedVertical, HideSelection = false, AllowDrop = true, AccessibleName = "速记正文", Name = "quick-note-editor", ReadOnly = true };
         body = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Padding = new Padding(14, 12, 4, 8) };
         viewport = new Panel { Dock = DockStyle.Fill, BackColor = BackColor };
         scroll = new QuickNoteScrollBar { Dock = DockStyle.Right, Width = 10, BackColor = BackColor, Target = editor };
@@ -989,7 +989,7 @@ internal sealed class QuickNoteWindow : Form {
                     result = reload ? store.LoadFile(Path.GetFileName(document.Path)) : create ? store.NewNote() : file == null ? store.Load(date) : store.LoadFile(file);
                     // Empty notes deliberately have no file. Reopening that
                     // same virtual note is valid; a saved note deleted outside
-                    // verbit must still take the protected failure path.
+                    // Verlog must still take the protected failure path.
                     bool currentEmpty = document != null && document.Revision == "missing" &&
                         String.Equals(document.Path, result.Path, StringComparison.OrdinalIgnoreCase);
                     if (!reload && !create && file != null && result.Revision == "missing" && !result.HasRecovery && !currentEmpty) {
@@ -1057,11 +1057,11 @@ internal sealed class QuickNoteWindow : Form {
         if (continueExit && continuation != null) continuation();
     }
     void SetStatus(string message, bool error, bool show = true) {
-        status.Text = message; status.LinkColor = error ? Color.FromArgb(155, 73, 33) : VerbitUi.Accent;
+        status.Text = message; status.LinkColor = error ? Color.FromArgb(155, 73, 33) : VerlogUi.Accent;
         statusShown = show; statusError = error && show;
         if (statusError) SetChromeVisible(true);
         LayoutChrome();
-        location.ForeColor = error ? Color.FromArgb(155, 73, 33) : VerbitUi.Ink; location.Invalidate();
+        location.ForeColor = error ? Color.FromArgb(155, 73, 33) : VerlogUi.Ink; location.Invalidate();
         status.AccessibleName = message;
         string tip = !error && notePath != null ? notePath : message;
         if (!error && nativeDocument.TextImageFallback) tip += "\n图片较多，部分图片以 Markdown 引用显示；原图已保留。";
@@ -1115,9 +1115,9 @@ internal sealed class QuickNoteWindow : Form {
         menu.Items.Add("全选", null, delegate { editor.SelectAll(); });
         menu.Show(editor, editor.PointToClient(Cursor.Position));
     }
-    VerbitMenu CreateTransientMenu() {
+    VerlogMenu CreateTransientMenu() {
         SetChromeVisible(true); leaveTimer.Stop();
-        var menu = new VerbitMenu(transientMenus);
+        var menu = new VerlogMenu(transientMenus);
         menu.Closed += delegate {
             // WinForms still uses the menu handle after Closed returns.
             // The container owns cleanup if the host closes before this runs.

@@ -1,4 +1,4 @@
-"""verbit：AI 安装、自检与明确授权的首次使用验收。"""
+"""Verlog：AI 安装、自检与明确授权的首次使用验收。"""
 from __future__ import annotations
 
 import argparse
@@ -53,7 +53,7 @@ def doctor(full=False, check_devices=True):
     mode = config["transcription_mode"]
     if mode == "api":
         key_exists = bool(os.environ.get(config["api_key_env"], "").strip())
-        add("api_key", key_exists, "密钥环境变量已设置（不显示值）" if key_exists else "请设置环境变量 " + config["api_key_env"] + "，再重启 verbit")
+        add("api_key", key_exists, "密钥环境变量已设置（不显示值）" if key_exists else "请设置环境变量 " + config["api_key_env"] + "，再重启 Verlog")
         add("api_transport", config["api_base_url"].startswith("https://"),
             "API 使用 HTTPS" if config["api_base_url"].startswith("https://") else "API 使用 HTTP；适用于你信任的本机或内网服务", warning=True)
     packages = {**COMMON_PACKAGES, **(LOCAL_PACKAGES if mode == "local" else {})}
@@ -168,7 +168,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
-class VerbitFirstUse {
+class VerlogFirstUse {
     static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     [STAThread]
     static int Main(string[] args) {
@@ -213,7 +213,7 @@ class VerbitFirstUse {
 
 def verify_plan(*, transcribe=False, play_test=None):
     """Describe effects without creating files, querying devices or loading models."""
-    return {"ok": True, "product": "verbit", "plan_only": True,
+    return {"ok": True, "product": "Verlog", "plan_only": True,
             "audio_recorded": False, "api_called": False,
             "stages": ["隔离目录采集麦克风和电脑声音", "检查来源、分段和信号能量", "合并并完整校验 MP3"]
                       + (["通过当前配置进行真实转写，生成 Markdown"] if transcribe else []),
@@ -273,7 +273,7 @@ def _verify_capture(directory, config, args):
     source = runtime / "FirstUse.cs"
     source.write_text(VERIFY_BRIDGE, encoding="utf-8-sig")
     compiler = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-    executable = runtime / "VerbitFirstUse.exe"
+    executable = runtime / "VerlogFirstUse.exe"
     compilation = subprocess.run([str(compiler), "/nologo", "/target:exe", "/reference:System.Web.Extensions.dll",
                                   "/out:" + str(executable), str(source)],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
@@ -365,7 +365,7 @@ def verify(args):
     directory = ordinary_path(HOME / "validation") / ("first-use-" + uuid.uuid4().hex)
     directory.mkdir(parents=True)
     started = time.monotonic()
-    report = {"ok": False, "product": "verbit", "plan_only": False,
+    report = {"ok": False, "product": "Verlog", "plan_only": False,
               "scope": "recording_and_transcription" if args.transcribe else "recording_only",
               "recording_attempted": False, "audio_recorded": False, "api_called": False,
               "playback_requested": bool(args.play_test),
@@ -409,7 +409,7 @@ def verify(args):
             report["checks"].append({"id": "transcription", "ok": complete,
                                      "message": "实际转写返回非空完整正文；准确率及说话人归属需人工对照"})
             note = output / "first-use.md"
-            text = "# verbit 首次使用验收\n\n[测试录音](first-use.mp3)\n\n"
+            text = "# Verlog 首次使用验收\n\n[测试录音](first-use.mp3)\n\n"
             text += "\n\n".join(f"[{timestamp(row['start'])}] {row['speaker']}：{clean_transcript_text(row['text'])}" for row in transcript)
             note.write_text(text + "\n", encoding="utf-8")
             report["note_path"] = str(note)

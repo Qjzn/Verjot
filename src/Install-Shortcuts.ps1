@@ -4,8 +4,8 @@ $taskExe = Join-Path $PSScriptRoot 'ObsidianMeeting.exe'
 if (-not (Test-Path -LiteralPath $taskExe -PathType Leaf)) { throw 'Meeting recorder executable missing' }
 $taskShell = New-Object -ComObject WScript.Shell
 foreach ($taskPair in @(
-    $(if ($StartWithWindows) { @{ folder=[Environment]::GetFolderPath('Startup'); name='verbit.lnk'; legacy='Obsidian 会议录音快捷键.lnk' } }),
-    @{ folder=[Environment]::GetFolderPath('Programs'); name='verbit.lnk'; legacy='Obsidian 会议录音.lnk' }
+    $(if ($StartWithWindows) { @{ folder=[Environment]::GetFolderPath('Startup'); name='Verlog.lnk'; legacy='Obsidian 会议录音快捷键.lnk' } }),
+    @{ folder=[Environment]::GetFolderPath('Programs'); name='Verlog.lnk'; legacy='Obsidian 会议录音.lnk' }
 ) | Where-Object { $_ }) {
     $taskPath = Join-Path $taskPair.folder $taskPair.name
     $taskShortcut = $taskShell.CreateShortcut($taskPath)
@@ -17,7 +17,7 @@ foreach ($taskPair in @(
     $taskShortcut.WindowStyle = 7
     $taskShortcut.Save()
     # Remove only this recorder's old alias, preventing duplicate login starts.
-    foreach ($taskLegacyName in @($taskPair.legacy, '听记.lnk', '片言.lnk')) {
+    foreach ($taskLegacyName in @($taskPair.legacy, '听记.lnk', '片言.lnk', 'verbit.lnk', 'verbit installed.lnk')) {
         $taskLegacyPath = Join-Path $taskPair.folder $taskLegacyName
         if (Test-Path -LiteralPath $taskLegacyPath -PathType Leaf) {
             $taskLegacy = $taskShell.CreateShortcut($taskLegacyPath)

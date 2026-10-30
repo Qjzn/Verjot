@@ -13,10 +13,10 @@
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-CleanWindows.ps1 `
-  -InstallerPath 'C:\Validation\verbit-setup-x64.exe'
+  -InstallerPath 'C:\Validation\Verlog-setup-x64.exe'
 ```
 
-打开生成的 `verbit-clean.wsb`。输入目录只读，仅含安装器、哈希清单和测试辅助程序；专用输出目录只接收报告，不映射宿主源码、Python、模型、缓存或笔记。默认 4 GiB 内存、关闭网络与剪贴板/麦克风/摄像头重定向。
+打开生成的 `Verlog-clean.wsb`。输入目录只读，仅含安装器、哈希清单和测试辅助程序；专用输出目录只接收报告，不映射宿主源码、Python、模型、缓存或笔记。默认 4 GiB 内存、关闭网络与剪贴板/麦克风/摄像头重定向。
 
 客体检查没有现成 Python 和开发命令后，执行实际安装、首次设置和速记自动保存/重开。`reports/result.json` 必须同时具备 `passed: true`、`clean_baseline_verified: true`，且有 `new-user-journey.json` 和完整日志才算对应范围通过。默认流程不录音、不调用真实 API；不能据此宣布设备、API 或卸载已验证。
 
@@ -30,12 +30,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-Clea
 ```powershell
 # 在源码仓库根目录运行；替换为实际候选安装包和合成样本路径
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-CleanWindows.ps1 `
-  -InstallerPath 'C:\Validation\verbit-setup-x64.exe' `
+  -InstallerPath 'C:\Validation\Verlog-setup-x64.exe' `
   -LegacyLocalTranscription `
   -SpeechA 'C:\Validation\known-a.wav' -SpeechB 'C:\Validation\known-b.wav'
 ```
 
-研究模式的 `verbit-clean.wsb` 输入目录只读，额外包含合成样本；给沙箱 16 GiB 内存并启用网络，以下载依赖与模型。**不映射源码目录、个人笔记、宿主模型或缓存**，关闭剪贴板、麦克风、摄像头和打印机重定向。禁止为了通过测试映射现有模型或借用宿主 Python。
+研究模式的 `Verlog-clean.wsb` 输入目录只读，额外包含合成样本；给沙箱 16 GiB 内存并启用网络，以下载依赖与模型。**不映射源码目录、个人笔记、宿主模型或缓存**，关闭剪贴板、麦克风、摄像头和打印机重定向。禁止为了通过测试映射现有模型或借用宿主 Python。
 
 仅研究模式继续执行以下完整流程：
 
@@ -53,10 +53,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-Clea
 
 ### 没有沙箱时使用干净虚拟机
 
-准备脚本仍用于生成显式输入包。在全新 Windows 虚拟机中，将生成的 `input` 文件夹复制为 `C:\verbit-input`，新建空目录 `C:\verbit-reports`，在客体终端执行：
+准备脚本仍用于生成显式输入包。在全新 Windows 虚拟机中，将生成的 `input` 文件夹复制为 `C:\Verlog-input`，新建空目录 `C:\Verlog-reports`，在客体终端执行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\verbit-input\Test-CleanWindowsGuest.ps1 -Environment VM
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Verlog-input\Test-CleanWindowsGuest.ps1 -Environment VM
 ```
 
 只在可丢弃的客体执行。脚本检查虚拟机型号及输入校验清单，再检查 Python/开发命令的空白基线；不支持或无法读取型号时拒绝，不用物理主机开启了 Hyper-V 作为客体证明。支持 Hyper-V、VMware、VirtualBox、KVM/QEMU、Parallels 常见型号。客体不共享宿主模型、缓存、个人目录或剪贴板。按原检查清单读取报告，失败退出码为2；失败后保留报告，再新建干净客体重测，不在已装过依赖的客体重写“首次安装通过”。

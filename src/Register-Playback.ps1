@@ -16,7 +16,7 @@ if ($Plan) {
 }
 if ($Unregister) {
     if ($taskExistingOwner) { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($taskRegistryPath, $false) }
-    Write-Output '已移除本目录的 verbit 时间点回放协议。录音与笔记未修改。'
+    Write-Output '已移除本目录的 Verlog 时间点回放协议。录音与笔记未修改。'
     exit 0
 }
 if (-not (Test-Path -LiteralPath $taskExe -PathType Leaf)) { throw '请先运行 Build.ps1 生成正式程序。' }
@@ -25,7 +25,7 @@ try {
     $taskKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($taskRegistryPath)
     try {
         $taskKey.SetValue('OwnerExecutable', $taskExe)
-        $taskKey.SetValue('', 'URL:verbit 音频回放')
+        $taskKey.SetValue('', 'URL:Verlog 音频回放')
         $taskIconKey = $taskKey.CreateSubKey('DefaultIcon')
         try { $taskIconKey.SetValue('', '"' + $taskExe + '",0') } finally { $taskIconKey.Dispose() }
         $taskSubkey = $taskKey.CreateSubKey('shell\open\command')

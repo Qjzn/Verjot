@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.39',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.40',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -25,9 +25,9 @@ $taskFiles = @(
     'prepare_audio.py', 'merge_audio.py', 'audio_sources.py', 'mp3_audio.py',
     'download_models.py', 'download_torch.py', 'requirements.txt', 'requirements-api.txt',
     'Install.ps1', 'check_local_engine.py', 'Build.ps1', 'Install-Shortcuts.ps1', 'Register-Playback.ps1',
-    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'NativeAudioExport.cs', 'Restore-Encoder.ps1', 'MeetingSettings.cs', 'DesktopServices.cs', 'VerbitUpdates.cs',
+    'ObsidianMeeting.cs', 'SessionCatalog.cs', 'MeetingActions.cs', 'NativeAudioExport.cs', 'Restore-Encoder.ps1', 'MeetingSettings.cs', 'DesktopServices.cs', 'VerlogUpdates.cs',
     'QuickNoteStore.cs', 'QuickNoteWindow.cs', 'NativeNoteDocument.cs', 'app.manifest',
-    'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\verbit-logo.png', 'assets\github-mark.png',
+    'assets\tingji.ico', 'assets\tingji-recording.ico', 'assets\Verlog-logo.png', 'assets\github-mark.png',
     'assets\engine-check.wav', 'assets\engine-check-source.md',
     'documentation\changelog.md', 'documentation\ui-design.md',
     'documentation\install-windows.md', 'documentation\first-use.md',
@@ -79,11 +79,11 @@ $taskUpdateFiles = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | So
 [IO.File]::WriteAllText((Join-Path $taskPayload 'update-manifest.json'), ([ordered]@{version=$Version;files=$taskUpdateFiles}|ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
 $taskManifestFiles = @(Get-ChildItem -LiteralPath $taskPayload -File -Recurse | Sort-Object FullName | ForEach-Object { [ordered]@{ path = $_.FullName.Substring($taskPayload.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } })
 $taskUtf8 = New-Object Text.UTF8Encoding($false)
-[IO.File]::WriteAllText((Join-Path $taskBuildRoot 'payload-manifest.json'), ([ordered]@{ product = 'verbit'; version = $Version; files = $taskManifestFiles; personal_config_included = $false; models_included = $false; python_environment_included = $false } | ConvertTo-Json -Depth 5), $taskUtf8)
+[IO.File]::WriteAllText((Join-Path $taskBuildRoot 'payload-manifest.json'), ([ordered]@{ product = 'Verlog'; version = $Version; files = $taskManifestFiles; personal_config_included = $false; models_included = $false; python_environment_included = $false } | ConvertTo-Json -Depth 5), $taskUtf8)
 $taskNumericVersion = ($Version -split '-')[0] + '.0'
-& $CompilerPath '/Qp' ('/DPayloadDir=' + $taskPayload) ('/DOutputDir=' + $taskOutput) ('/DReleaseVersion=' + $Version) ('/DNumericVersion=' + $taskNumericVersion) (Join-Path $PSScriptRoot 'verbit.iss')
+& $CompilerPath '/Qp' ('/DPayloadDir=' + $taskPayload) ('/DOutputDir=' + $taskOutput) ('/DReleaseVersion=' + $Version) ('/DNumericVersion=' + $taskNumericVersion) (Join-Path $PSScriptRoot 'Verlog.iss')
 if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed: $LASTEXITCODE" }
-$taskInstaller = Join-Path $taskOutput "verbit-$Version-setup-x64.exe"
+$taskInstaller = Join-Path $taskOutput "Verlog-$Version-setup-x64.exe"
 if (-not (Test-Path -LiteralPath $taskInstaller -PathType Leaf)) { throw 'Compiler did not produce the expected installer.' }
 $taskHash = (Get-FileHash -LiteralPath $taskInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText((Join-Path $taskOutput 'SHA256SUMS.txt'), ($taskHash + '  ' + [IO.Path]::GetFileName($taskInstaller) + "`n"), $taskUtf8)

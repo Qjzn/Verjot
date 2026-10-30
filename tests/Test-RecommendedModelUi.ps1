@@ -9,7 +9,7 @@ $taskUiTimer.Interval = 300
 $taskUiResult = @{ captured=$false; failure=$null; clicked=$false; clickTime=$null }
 $taskUiClock = [Diagnostics.Stopwatch]::StartNew()
 $taskUiTimer.Add_Tick({
-    $taskForm = @([Windows.Forms.Application]::OpenForms | Where-Object { $_.Text -eq 'verbit · 下载推荐模型' }) | Select-Object -First 1
+    $taskForm = @([Windows.Forms.Application]::OpenForms | Where-Object { $_.Text -eq 'Verlog · 下载推荐模型' }) | Select-Object -First 1
     if (-not $taskForm) { return }
     try {
         $taskButton = $taskForm.Controls.Find('download_recommended', $true)

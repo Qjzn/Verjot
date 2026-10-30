@@ -39,18 +39,19 @@ internal static class TestNativeApiTranscription {
         }
         public void Dispose() {listener.Stop();thread.Join(15000);if(Error!=null)throw Error;}
     }
-    static Dictionary<string,object> Fixture(string id,out string session) {
+    static Dictionary<string,object> Fixture(string id,out string session,bool legacy=false) {
         string vault=Path.Combine(MeetingFiles.Home,"vault");Directory.CreateDirectory(vault);
-        var config=MeetingConfig.Validate(new Dictionary<string,object>{{"vault_root",vault},{"meeting_folder","verbit"},{"open_in_obsidian",false},
-            {"transcription_mode","api"},{"api_key_env","VERBIT_TEST_ONLY_API_KEY"}},false);
+        var config=MeetingConfig.Validate(new Dictionary<string,object>{{"vault_root",vault},{"meeting_folder","Verlog"},{"open_in_obsidian",false},
+            {"transcription_mode","api"},{"api_key_env","VERLOG_TEST_ONLY_API_KEY"}},false);
         session=Path.Combine(MeetingFiles.Home,"work",id);Directory.CreateDirectory(session);
-        string name=MeetingArtifacts.AvailableName(config,new DateTimeOffset(2026,10,27,14,30,0,TimeSpan.FromHours(8)));
+        if(legacy)config["meeting_folder"]="verbit";
+        string name=legacy?"verbit202610271430":MeetingArtifacts.AvailableName(config,new DateTimeOffset(2026,10,27,14,30,0,TimeSpan.FromHours(8)));
         using(var writer=new WaveFileWriter(Path.Combine(session,"mic.wav"),WaveFormat.CreateIeeeFloatWaveFormat(16000,1)))
             for(int i=0;i<100000;i++)writer.WriteSample((float)(.1*Math.Sin(2*Math.PI*440*i/16000)));
         MeetingFiles.WriteJson(Path.Combine(session,"session.json"),new Dictionary<string,object>{{"state","recorded"},{"start_time","2026-10-27T14:30:00+08:00"},
             {"session_dir",session},{"duration_seconds",6.25},{"storage_mode","minimal"},{"audio_format","mp3"},{"audio_export_version",1},
-            {"output_layout","verbit-v1"},{"output_basename",name},{"transcription_mode","api"},
-            {"audio_output_dir",Path.Combine(vault,"verbit",name)},{"sources",new object[]{new Dictionary<string,object>{{"source","mic"},{"path","mic.wav"},{"kind","microphone"}}}}});
+            {"output_layout",legacy?"verbit-v1":"Verlog-v1"},{"output_basename",name},{"transcription_mode","api"},
+            {"audio_output_dir",Path.Combine(vault,(string)config["meeting_folder"],name)},{"sources",new object[]{new Dictionary<string,object>{{"source","mic"},{"path","mic.wav"},{"kind","microphone"}}}}});
         NativeAudioExport.Export(MeetingFiles.Home,session,config);return config;
     }
     static void Bind(string session,Dictionary<string,object> config) {
@@ -61,18 +62,18 @@ internal static class TestNativeApiTranscription {
         if(args.Length==2&&args[0]=="--transcribe-api")return NativeApiTranscription.Run(args[1]);
         if(args.Length==2&&args[0]=="--export-audio")return NativeAudioExport.Run(args[1]);
         try {
-            Environment.SetEnvironmentVariable("VERBIT_TEST_ONLY_API_KEY","synthetic-test-key");
+            Environment.SetEnvironmentVariable("VERLOG_TEST_ONLY_API_KEY","synthetic-test-key");
             Check((string)NativeApiTranscription.ParseResponse("{\"text\":\"中文测试\"}")["text"]=="中文测试","Plain JSON text is preserved");
             Reject(delegate{NativeApiTranscription.ParseResponse("{\"text\":\"\"}");},"Empty text cannot masquerade as a completed transcription");
             Reject(delegate{NativeApiTranscription.ParseResponse("{\"segments\":[{\"start\":2,\"end\":1,\"text\":\"bad\"}]}");},"Invalid provider timeline is rejected");
             string session;var config=Fixture("20261027-143001",out session);
             var metadata=MeetingFiles.ReadJson(Path.Combine(session,"session.json"));
             string output=MeetingArtifacts.AudioPath(config,session,metadata);
-            Check(output.EndsWith("verbit202610271430\\verbit202610271430.mp3"),"New public folder and MP3 follow verbit+year-month-day-hour-minute");
-            Check(MeetingArtifacts.AvailableName(config,new DateTimeOffset(2026,10,27,14,30,59,TimeSpan.FromHours(8)))=="verbit202610271430-02","Same-minute recordings receive a readable collision suffix");
+            Check(output.EndsWith("Verlog202610271430\\Verlog202610271430.mp3"),"New public folder and MP3 follow Verlog+year-month-day-hour-minute");
+            Check(MeetingArtifacts.AvailableName(config,new DateTimeOffset(2026,10,27,14,30,59,TimeSpan.FromHours(8)))=="Verlog202610271430-02","Same-minute recordings receive a readable collision suffix");
             string pending=Path.Combine(MeetingFiles.Home,"work","20261027-143059");Directory.CreateDirectory(pending);
-            MeetingFiles.WriteJson(Path.Combine(pending,"session.json"),new {output_layout="verbit-v1",output_basename="verbit202610271430-02",audio_output_dir=Path.Combine((string)config["vault_root"],"verbit","verbit202610271430-02")});
-            Check(MeetingArtifacts.AvailableName(config,new DateTimeOffset(2026,10,27,14,30,59,TimeSpan.FromHours(8)))=="verbit202610271430-03","A recording still awaiting export reserves its public name before the directory exists");
+            MeetingFiles.WriteJson(Path.Combine(pending,"session.json"),new {output_layout="Verlog-v1",output_basename="Verlog202610271430-02",audio_output_dir=Path.Combine((string)config["vault_root"],"Verlog","Verlog202610271430-02")});
+            Check(MeetingArtifacts.AvailableName(config,new DateTimeOffset(2026,10,27,14,30,59,TimeSpan.FromHours(8)))=="Verlog202610271430-03","A recording still awaiting export reserves its public name before the directory exists");
             string original=NativeAudioExport.Hash(output);
             MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home,"config.json"),config);
             using(var child=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
@@ -116,6 +117,17 @@ internal static class TestNativeApiTranscription {
             string wrongOutput=MeetingArtifacts.AudioPath(failedConfig,failed,failedMetadata);File.AppendAllText(wrongOutput,"modified");
             Reject(delegate{MeetingArtifacts.VerifiedAudio(failedConfig,failed,failedMetadata);},"Modified MP3 cannot be submitted or authorize raw cleanup");
             Check(!Directory.Exists(Path.Combine(MeetingFiles.Home,".venv"))&&!Directory.Exists(Path.Combine(MeetingFiles.Home,"models")),"All native API scenarios run without Python or a model");
+            string legacySession;var legacyConfig=Fixture("20261027-legacy",out legacySession,true);
+            var legacyMetadata=MeetingFiles.ReadJson(Path.Combine(legacySession,"session.json"));
+            string legacyOutput=MeetingArtifacts.AudioPath(legacyConfig,legacySession,legacyMetadata);
+            Check(legacyOutput.EndsWith("verbit202610271430\\verbit202610271430.mp3"),"Existing meeting filenames and output folder remain unchanged after rename");
+            Check(MeetingArtifacts.VerifiedAudio(legacyConfig,legacySession,legacyMetadata)!=null,"Legacy MP3 export credentials remain valid");
+            using(var server=new Server("{\"text\":\"旧会议继续转写。\"}")) {
+                legacyConfig["api_base_url"]=server.Url;legacyConfig["api_model"]="legacy-compatible-asr";Bind(legacySession,legacyConfig);
+                NativeApiTranscription.Process(legacySession,legacyConfig);
+            }
+            Check(File.ReadAllText(Path.ChangeExtension(legacyOutput,".md")).Contains("verbit202610271430.mp3"),"Legacy transcription keeps its original relative audio reference");
+            Check(!File.Exists(Path.Combine(legacySession,"mic.wav")),"Legacy successful processing still safely cleans its verified temporary track");
             Console.WriteLine("PASS native API: "+assertions+" assertions; loopback synthetic audio only; no external upload");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

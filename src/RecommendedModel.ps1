@@ -138,11 +138,11 @@ if ($Worker) {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type 'using System; using System.Runtime.InteropServices; public static class VerbitSetupDpi { [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value); }'
-$null = [VerbitSetupDpi]::SetProcessDpiAwarenessContext([IntPtr](-4))
+Add-Type 'using System; using System.Runtime.InteropServices; public static class VerlogSetupDpi { [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value); }'
+$null = [VerlogSetupDpi]::SetProcessDpiAwarenessContext([IntPtr](-4))
 [Windows.Forms.Application]::EnableVisualStyles()
 $taskWindow = New-Object Windows.Forms.Form
-$taskWindow.Text = 'verbit · 下载推荐模型'
+$taskWindow.Text = 'Verlog · 下载推荐模型'
 $taskWindow.AutoScaleMode = 'Dpi'; $taskWindow.AutoScaleDimensions = New-Object Drawing.SizeF(96,96); $taskWindow.ClientSize = New-Object Drawing.Size(480, 300)
 $taskWindow.StartPosition = 'CenterScreen'; $taskWindow.MinimumSize = $taskWindow.Size
 $taskWindow.TopMost = $true

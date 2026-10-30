@@ -2,7 +2,7 @@
 
 将以下内容交给安装助手：
 
-> 安装 verbit 0.1.0-beta.38，按 documentation/install-windows.md 使用官方仓库的 Windows x64 EXE 和同版本 SHA256。确认 .NET Framework 4.8、可写保存目录与系统兼容性，默认仅录音。不安装 Python、模型、CUDA 或 FFmpeg，不自动连接旧模型。首次确认保存目录和快捷键，先验证速记可用。保留已有配置、模型、笔记、录音与 work 恢复资料；不要强杀程序，不操作用户剪贴板。实际录音、播放或 API 上传须先取得明确同意。分别报告通过、失败、跳过和未测，不用自检或合成测试代替真实设备结果。
+> 安装 Verlog 0.1.0-beta.38，按 documentation/install-windows.md 使用官方仓库的 Windows x64 EXE 和同版本 SHA256。确认 .NET Framework 4.8、可写保存目录与系统兼容性，默认仅录音。不安装 Python、模型、CUDA 或 FFmpeg，不自动连接旧模型。首次确认保存目录和快捷键，先验证速记可用。保留已有配置、模型、笔记、录音与 work 恢复资料；不要强杀程序，不操作用户剪贴板。实际录音、播放或 API 上传须先取得明确同意。分别报告通过、失败、跳过和未测，不用自检或合成测试代替真实设备结果。
 
 ## API 可选配置
 
@@ -16,4 +16,4 @@
 
 更新使用程序正常保存与退出，检查没有进行中的录音／转写后再安装到原目录。安全检查拒绝时调查原因，不绕过。私有仓库需对应访问权限，窗口更新不能匿名获取时改用登录后的手动下载。
 
-开发者请查[贡献指南](../CONTRIBUTING.md)、[测试说明](tests.md)和[打包说明](https://github.com/Qjzn/verbit/blob/main/packaging/README.md)。`Install.ps1`、`RecommendedModel.ps1` 和 Python worker 是历史研究／兼容工具，不属于当前新用户安装流程。
+开发者请查[贡献指南](../CONTRIBUTING.md)、[测试说明](tests.md)和[打包说明](https://github.com/Qjzn/Verlog/blob/main/packaging/README.md)。`Install.ps1`、`RecommendedModel.ps1` 和 Python worker 是历史研究／兼容工具，不属于当前新用户安装流程。

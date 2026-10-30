@@ -50,7 +50,7 @@ internal static class TestInstalledJourney {
     static void Click(IntPtr window, string caption) { var button = Children(window).Single(delegate(IntPtr item) {return Text(item) == caption;}); Check(PostMessage(button, 0xF5, IntPtr.Zero, IntPtr.Zero), "Native button posted: " + caption); }
     static void Launch(string app) {
         var start = new ProcessStartInfo(Path.Combine(app, "ObsidianMeeting.exe")) {UseShellExecute=false, CreateNoWindow=true, WorkingDirectory=app};
-        start.EnvironmentVariables.Remove("VERBIT_REVIEW_SYNTHETIC_MISSING_KEY");
+        start.EnvironmentVariables.Remove("VERLOG_REVIEW_SYNTHETIC_MISSING_KEY");
         child = Process.Start(start);
     }
     static void Quit() { Check(PostMessage(ControlWindow(), 0x10, IntPtr.Zero, IntPtr.Zero), "Normal exit posted to owned controller"); Check(child.WaitForExit(12000) && child.ExitCode == 0, "Actual EXE exited normally"); child.Dispose(); child = null; }
@@ -59,22 +59,22 @@ internal static class TestInstalledJourney {
         string config = Path.Combine(app, "config.json");
         try {
             Check(!File.Exists(config) && !Directory.Exists(Path.Combine(app, ".venv")), "Fresh installed payload has no config or Python environment");
-            Launch(app); Until(delegate { return Window("verbit · 首次设置") != IntPtr.Zero; }, "Real Program.Main opens first-run settings");
-            Click(Window("verbit · 首次设置"), "取消"); Check(child.WaitForExit(8000) && child.ExitCode == 0, "First-run cancel exits normally"); child.Dispose(); child = null;
+            Launch(app); Until(delegate { return Window("Verlog · 首次设置") != IntPtr.Zero; }, "Real Program.Main opens first-run settings");
+            Click(Window("Verlog · 首次设置"), "取消"); Check(child.WaitForExit(8000) && child.ExitCode == 0, "First-run cancel exits normally"); child.Dispose(); child = null;
             Check(!File.Exists(config), "Cancel did not create config"); steps.Add("first-run-cancel");
-            Launch(app); Until(delegate { return Window("verbit · 首次设置") != IntPtr.Zero; }, "First-run settings reappears after cancel");
-            var dialog = Window("verbit · 首次设置");
+            Launch(app); Until(delegate { return Window("Verlog · 首次设置") != IntPtr.Zero; }, "First-run settings reappears after cancel");
+            var dialog = Window("Verlog · 首次设置");
             var edits = Children(dialog).Where(delegate(IntPtr item) {return Class(item).IndexOf("EDIT", StringComparison.OrdinalIgnoreCase) >= 0;}).OrderBy(delegate(IntPtr item) {Rect rect; GetWindowRect(item, out rect); return rect.Top;}).ToList();
             Check(edits.Count == 8, "All eight configuration fields are present");
             SendMessage(edits[0], 0xC, IntPtr.Zero, notes);
             Click(dialog, "保存并启动");
             Until(delegate { return string.Join(" ", Children(dialog).Select(Text).ToArray()).Contains("保存目录不存在"); }, "New output directory has an actionable validation message");
-            Check(!File.Exists(config) && Window("verbit · 首次设置") != IntPtr.Zero, "Invalid save location keeps setup editable without config");
+            Check(!File.Exists(config) && Window("Verlog · 首次设置") != IntPtr.Zero, "Invalid save location keeps setup editable without config");
             Directory.CreateDirectory(notes); // User creates/selects their output folder before saving.
             Click(dialog, "保存并启动"); Until(delegate { return File.Exists(config) && ControlWindow() != IntPtr.Zero; }, "Real EXE saved config and registered controller");
             var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(config));
             Check((string)values["vault_root"] == notes && (string)values["quick_note_hotkey"] == "Ctrl+Alt+J", "Save location and default shortcut persisted"); steps.Add("first-run-save");
-            Check((string)values["meeting_folder"] == "verbit" && (string)values["transcription_mode"] == "api" && !(bool)values["auto_transcribe"], "Fresh EXE starts record-only, with verbit output and unconfigured optional API");
+            Check((string)values["meeting_folder"] == "Verlog" && (string)values["transcription_mode"] == "api" && !(bool)values["auto_transcribe"], "Fresh EXE starts record-only, with Verlog output and unconfigured optional API");
             PostMessage(ControlWindow(), 0x312, new IntPtr(7414), IntPtr.Zero);
             Until(delegate { return NoteWindow() != IntPtr.Zero; }, "Registered quick-note handler opens actual native note");
             var note = NoteWindow(); Check((GetWindowLong(note, -20) & 8) != 0, "Quick note is topmost");
@@ -96,10 +96,10 @@ internal static class TestInstalledJourney {
             steps.Add("missing-runtime-keeps-notes;hardware-capture-not-tested");
             Quit(); string before = File.ReadAllText(config);
             Launch(app); Until(delegate {return ControlWindow() != IntPtr.Zero;}, "Existing-config launch reaches controller directly");
-            Check(Window("verbit · 首次设置") == IntPtr.Zero && File.ReadAllText(config) == before, "Restart skips setup and preserves exact config"); Quit(); steps.Add("restart-preserves-config");
+            Check(Window("Verlog · 首次设置") == IntPtr.Zero && File.ReadAllText(config) == before, "Restart skips setup and preserves exact config"); Quit(); steps.Add("restart-preserves-config");
             var apiConfig = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(before);
             apiConfig["transcription_mode"] = "api"; apiConfig["api_base_url"] = "https://example.invalid/v1";
-            apiConfig["api_model"] = "synthetic-never-called"; apiConfig["api_key_env"] = "VERBIT_REVIEW_SYNTHETIC_MISSING_KEY";
+            apiConfig["api_model"] = "synthetic-never-called"; apiConfig["api_key_env"] = "VERLOG_REVIEW_SYNTHETIC_MISSING_KEY";
             File.WriteAllText(config, new JavaScriptSerializer().Serialize(apiConfig), new UTF8Encoding(false));
             Launch(app); Until(delegate { return ControlWindow() != IntPtr.Zero; }, "Missing API key still allows actual desktop startup");
             PostMessage(ControlWindow(), 0x312, new IntPtr(7414), IntPtr.Zero);

@@ -18,7 +18,7 @@
 !/assets/tingji.png
 !/assets/tingji-recording.png
 !/assets/Create-Icons.ps1
-!/assets/verbit-logo.png
+!/assets/Verlog-logo.png
 !/assets/github-mark.png
 
 # Reviewed installation and configuration documentation.
@@ -56,7 +56,7 @@
 !/.github/workflows/ci.yml
 !/packaging/
 /packaging/*
-!/packaging/verbit.iss
+!/packaging/Verlog.iss
 !/packaging/INSTALL.txt
 !/packaging/Get-InnoCompiler.ps1
 !/packaging/Build-Installer.ps1
@@ -200,9 +200,9 @@
 !/documentation/new-user-validation.md
 !/documentation/clean-windows-validation.md
 !/src/DesktopServices.cs
-!/src/VerbitUpdates.cs
+!/src/VerlogUpdates.cs
 !/tests/TestDesktopServices.cs
 !/tests/TestNativeApiTranscription.cs
-!/tests/TestVerbitMenus.cs
-!/tests/TestVerbitUpdates.cs
+!/tests/TestVerlogMenus.cs
+!/tests/TestVerlogUpdates.cs
 !/documentation/changelog.md

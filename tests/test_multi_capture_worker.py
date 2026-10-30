@@ -149,7 +149,7 @@ class CheckpointRetrySafetyTests(unittest.TestCase):
         self.session.mkdir(parents=True)
         self.vault.mkdir()
         output = self.vault / "会议记录" / "附件" / self.session.name
-        self.config = {"vault_root": str(self.vault)}
+        self.config = {"vault_root": str(self.vault), "transcription_mode": self.mode}
         if self.mode == "api":
             self.config.update(transcription_mode="api", api_model="fixture-transcribe",
                                api_base_url="https://provider.example/v1")
@@ -295,7 +295,7 @@ class CaptureFailureRetentionTests(unittest.TestCase):
         self.session = self.home / "work" / "20261015-120231-synthetic"
         self.session.mkdir(parents=True)
         self.vault.mkdir()
-        self.config = {"vault_root": str(self.vault)}
+        self.config = {"vault_root": str(self.vault), "transcription_mode": "local"}
         (self.home / "config.json").write_text(json.dumps(self.config), encoding="utf8")
         self.metadata = {"start_time": "2026-10-15T12:02:31+08:00", "duration_seconds": .1,
                          "state": "recorded_with_error", "capture_error": "fixture endpoint stopped early",

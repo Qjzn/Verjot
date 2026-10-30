@@ -24,7 +24,7 @@ internal sealed class DeviceRevalidation : Form {
     readonly Stopwatch countdownClock = new Stopwatch();
     readonly string[] phases = {
         "电脑声基线：无需讲话，听一下测试音是否可听。",
-        "请完整朗读：这是 verbit 麦克风测试，今天检查录音和本地转写。\n本阶段有 20 秒，不需要赶时间。",
+        "请完整朗读：这是 Verlog 麦克风测试，今天检查录音和本地转写。\n本阶段有 20 秒，不需要赶时间。",
         "麦克风已关闭，电脑声继续。\n可以说“关闭期间不应录入”，用于核对麦克风关闭是否生效。",
         "麦克风已恢复。\n请说：麦克风恢复后，这句话应该被保留。",
         "请将 Windows 默认播放设备切到可外放的扬声器，并保持。\n稍后播放测试音；麦克风能听见时才能验证真实双路相对延迟。",
@@ -36,7 +36,7 @@ internal sealed class DeviceRevalidation : Form {
     static readonly int[] playAt = { 2, 36, 68, 95, 136 };
 
     DeviceRevalidation() {
-        Text = "verbit · 集中设备复验（隔离测试）";
+        Text = "Verlog · 集中设备复验（隔离测试）";
         Size = new Size(650, 300); StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Microsoft YaHei UI", 10); Padding = new Padding(16); TopMost = true;
         Controls.Add(instruction); Controls.Add(time); Controls.Add(start);
@@ -131,7 +131,7 @@ internal sealed class DeviceRevalidation : Form {
         if (args.Length != 1 || args[0] != "--consent-record-and-play") return 64;
         // Never overlap a formal controller. This check does not stop it.
         if (Process.GetProcessesByName("ObsidianMeeting").Length != 0) {
-            MessageBox.Show("verbit 正在运行。请先保存速记、结束会议并等待转写完成，再从托盘退出。不会强制退出正式程序。", "无法开始隔离复验"); return 2;
+            MessageBox.Show("Verlog 正在运行。请先保存速记、结束会议并等待转写完成，再从托盘退出。不会强制退出正式程序。", "无法开始隔离复验"); return 2;
         }
         var config = MeetingConfig.Load();
         string expected = Path.GetFullPath(Path.Combine(MeetingFiles.Home, "output"));

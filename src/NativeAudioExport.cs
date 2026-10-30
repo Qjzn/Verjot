@@ -310,19 +310,23 @@ internal sealed class NativeMp3Encoder : IDisposable {
     }
 }
 
-// Explicit metadata opts new meetings into the public verbit folder layout.
+// Explicit metadata opts new meetings into the public Verlog folder layout.
 // Old meetings retain their original filenames, paths and lossless workflow.
 internal static class MeetingArtifacts {
-    internal static bool IsNew(Dictionary<string,object> metadata) { return MeetingFiles.Text(metadata,"output_layout","")=="verbit-v1"; }
+    internal static bool IsNew(Dictionary<string,object> metadata) {
+        string layout=MeetingFiles.Text(metadata,"output_layout","");
+        return layout=="Verlog-v1"||layout=="verbit-v1";
+    }
     internal static string Basename(Dictionary<string,object> metadata) {
         string name=MeetingFiles.Text(metadata,"output_basename","");
-        if(!Regex.IsMatch(name,@"\Averbit[0-9]{12}(?:-[0-9]{2,})?\z"))throw new IOException("会议文件名无效，未修改文件");
+        string prefix=MeetingFiles.Text(metadata,"output_layout","")=="verbit-v1"?"verbit":"Verlog";
+        if(!Regex.IsMatch(name,@"\A"+prefix+@"[0-9]{12}(?:-[0-9]{2,})?\z"))throw new IOException("会议文件名无效，未修改文件");
         return name;
     }
     internal static string AvailableName(Dictionary<string,object> config,DateTimeOffset started) {
         string root=Path.Combine(MeetingFiles.VaultRoot(config),MeetingFiles.Text(config,"meeting_folder","会议记录"));
         MeetingConfig.CheckOrdinaryPath(root);
-        string stem="verbit"+started.ToString("yyyyMMddHHmm",CultureInfo.InvariantCulture);
+        string stem="Verlog"+started.ToString("yyyyMMddHHmm",CultureInfo.InvariantCulture);
         var reserved=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string work=Path.Combine(MeetingFiles.Home,"work");MeetingConfig.CheckOrdinaryPath(work);
         if(Directory.Exists(work))foreach(string folder in Directory.GetDirectories(work)) {
@@ -436,7 +440,7 @@ internal static class NativeApiTranscription {
     internal static Dictionary<string,object> Request(string audio,Dictionary<string,object> config) {
         string key=MeetingConfig.ApiKeyValue((string)config["api_key_env"]);
         if(string.IsNullOrEmpty(key)||Regex.IsMatch(key,@"[^\x21-\x7e]"))throw new IOException("API 密钥缺失或格式无效，请检查所配置的环境变量");
-        string boundary="verbit"+Guid.NewGuid().ToString("N");
+        string boundary="Verlog"+Guid.NewGuid().ToString("N");
         var request=(HttpWebRequest)WebRequest.Create(((string)config["api_base_url"]).TrimEnd('/')+"/audio/transcriptions");
         request.Method="POST";request.AllowAutoRedirect=false;request.KeepAlive=false;
         request.Timeout=request.ReadWriteTimeout=Convert.ToInt32(config["api_timeout_seconds"])*1000;

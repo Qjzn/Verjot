@@ -4,10 +4,10 @@ beta.38 发布回归将编辑器拆成 `--core-only` 与 `--attachments-only`，
 
 当前候选补充：TestQuickNoteEditor.CheckEmptyNoteReopen 先复现再验证未落盘便签重开与真实外部删除保护，已纳入默认编辑回归。最终检查的失败、通过和跳过分别记录在[开源检查](open-source-readiness.md#beta36-最终检查候选)；首次输入性能超标不因定向复验通过而抹去。干净 Windows 按维护者要求跳过，旧表中的已准备入口不代表本轮实测。
 
-> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `Verlog年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 
 
-2026-10-29 最近便签局部绘制：`TestVerbitMenus` 在 100%/125%/150%/200%/250%/300% 六档合成坐标中逐行重绘高亮，逐像素检查其他行不变。实际可用的 96/144 DPI 显示器上，直接复制原生列表当前像素（不触发 PrintWindow 整页重绘），检查逐行悬停、键盘选择、行滚动、滚轮、细滚动条拖动、搜索清空、关闭重开和销毁后重新创建。测试只使用合成文件名，不打开用户笔记或调用剪贴板。结果与局限见[便签绘制验收](ui-design.md#最近便签局部绘制验收)。
+2026-10-29 最近便签局部绘制：`TestVerlogMenus` 在 100%/125%/150%/200%/250%/300% 六档合成坐标中逐行重绘高亮，逐像素检查其他行不变。实际可用的 96/144 DPI 显示器上，直接复制原生列表当前像素（不触发 PrintWindow 整页重绘），检查逐行悬停、键盘选择、行滚动、滚轮、细滚动条拖动、搜索清空、关闭重开和销毁后重新创建。测试只使用合成文件名，不打开用户笔记或调用剪贴板。结果与局限见[便签绘制验收](ui-design.md#最近便签局部绘制验收)。
 
 缩放与工作区：`TestRecorderPanel` 在实际可用显示器逐状态检查，同时用生产布局入口测试 96/120/144/168/192/240 DPI 的录音、待机、告警、转写、结果状态，检查边界、单行高度和重叠。模拟字体/坐标不等于相应物理显示器的 WM_DPICHANGED 实测。`TestMeetingSettings` 检查实际工作区、800×540 模拟短工作区中的滚动页、标签及保存/取消；`TestDesktopServices` 检查小屏、负坐标工作区的定位与幂等约束。`TestQuickNoteEditor --geometry-only` 补查速记最小尺寸不超过短工作区，正常工作区仍保留原逻辑尺寸。测试不修改系统显示设置。
 
@@ -43,9 +43,9 @@ beta.38 发布回归将编辑器拆成 `--core-only` 与 `--attachments-only`，
 | 新电脑缺 VC++ → 模型下载前停止、明确官方修复入口、不写配置 | `Test-InstallPrerequisites.ps1`，调用真实 `Install.ps1` 和隔离假解释器 | 本机故障注入通过；由 `src/Test.ps1` 执行，不代表干净 OS 已测。 |
 | 无 Python/模型/开发工具 → 实际 EXE 首次设置、速记、全新本地引擎与模型下载 | `Prepare-CleanWindows.ps1`、`Test-CleanWindowsGuest.ps1`、`PrepareOfflineInstall.py`、`VerifyOfflineInstall.py`；[干净 Windows](clean-windows-validation.md) | 验证包已准备；客体实测待执行。 |
 
-源码测试统一放在 `tests/`，由 `src/Test.ps1` 执行；源码运行代码与依赖位于 `src/`。安装包不包含测试或 CI 文件。CI 定义见 [workflow](https://github.com/Qjzn/verbit/blob/main/.github/workflows/ci.yml)，实际通过以对应提交的 Actions 结果为准；尚未启用 required checks，不把“配置了 CI”写成合并门禁。
+源码测试统一放在 `tests/`，由 `src/Test.ps1` 执行；源码运行代码与依赖位于 `src/`。安装包不包含测试或 CI 文件。CI 定义见 [workflow](https://github.com/Qjzn/Verlog/blob/main/.github/workflows/ci.yml)，实际通过以对应提交的 Actions 结果为准；尚未启用 required checks，不把“配置了 CI”写成合并门禁。
 
-本轮新用户的实际安装、空环境依赖与真实模型处理结果见 [新用户验证](new-user-validation.md)。实际 EXE 首次启动回归为 `packaging/Test-NewUser.ps1`，要求当前会话正常退出 verbit 且没有其他安装登记；`-InstallOnly` 不等于首次设置和速记已经验证。
+本轮新用户的实际安装、空环境依赖与真实模型处理结果见 [新用户验证](new-user-validation.md)。实际 EXE 首次启动回归为 `packaging/Test-NewUser.ps1`，要求当前会话正常退出 Verlog 且没有其他安装登记；`-InstallOnly` 不等于首次设置和速记已经验证。
 
 ## 建议新增的验证
 
@@ -61,7 +61,7 @@ beta.38 发布回归将编辑器拆成 `--core-only` 与 `--attachments-only`，
 
 同日 CI 在 96 DPI 下揭示图片交互断言写死了 144 DPI 的逻辑宽度。独立进程的 `--interaction-only --dpi96` 原断言复现失败，按实际 DPI/缩放因子换算物理拖动距离后，96 DPI 严格得到 `220×80`，144 DPI 得到 `200×80`，两组交互均通过；没有降低尺寸检查或修改系统缩放。
 
-2026-10-22 速记交互复验：`TestQuickNoteStore`、`TestNativeNoteDocument`、`TestQuickNoteEditor`、`TestQuickNoteNewlines`、`TestQuickNoteInput` 和 `TestQuickNoteResponsiveness` 在独立桌面运行。覆盖左右/下屏边缘无正文遮挡、全宽窗口文件名入口、反复预览焦点与插入符恢复、角点等比及边缘自由缩放、撤销/重开、原图路径与缺图提示、格式列表、内存图片粘贴和慢存储下的输入/移动响应。删除用隔离回收替身检查保存、取消、外部修改、恢复草稿、失败和空便签；本机另以 `VERBIT_TEST_NATIVE_RECYCLE=1` 检查真实 Windows 回收路径，CI 默认跳过该系统操作。自动测试不使用真实剪贴板或全局输入注入；原生消息耗时不等于屏幕帧率，实际中文输入法、多显示器移动及系统图片查看器仍需人工使用验证。
+2026-10-22 速记交互复验：`TestQuickNoteStore`、`TestNativeNoteDocument`、`TestQuickNoteEditor`、`TestQuickNoteNewlines`、`TestQuickNoteInput` 和 `TestQuickNoteResponsiveness` 在独立桌面运行。覆盖左右/下屏边缘无正文遮挡、全宽窗口文件名入口、反复预览焦点与插入符恢复、角点等比及边缘自由缩放、撤销/重开、原图路径与缺图提示、格式列表、内存图片粘贴和慢存储下的输入/移动响应。删除用隔离回收替身检查保存、取消、外部修改、恢复草稿、失败和空便签；本机另以 `VERLOG_TEST_NATIVE_RECYCLE=1` 检查真实 Windows 回收路径，CI 默认跳过该系统操作。自动测试不使用真实剪贴板或全局输入注入；原生消息耗时不等于屏幕帧率，实际中文输入法、多显示器移动及系统图片查看器仍需人工使用验证。
 
 2026-10-17 自动保存测试等待修正：CI 曾在图片插入后读取到旧文件，原夹具只固定处理消息 800 毫秒，未等 500 毫秒防抖后的后台持久化完成。用 650 毫秒后台存储延迟复现同一断言失败，此时内存图片仍在、`dirty` 和 `workerBusy` 均为真。现在相关校验等待生产自动保存完成状态，沿用已有 5 秒后台等待上限，不主动调用保存绕过计时器；夹具保留该慢存储场景以及正文、图片像素、撤销重做、恢复与重开的精确断言。本机隔离重放 304 条断言通过。该复现说明固定等待存在竞态，不证明原 CI 只有这一种失败原因；它没有更改编辑器或宣称修复新的产品性能问题。
 

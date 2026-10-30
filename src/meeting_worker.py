@@ -140,15 +140,20 @@ def meeting_folder(config: dict):
     return folder
 
 
+def named_output_layout(metadata: dict):
+    return metadata.get("output_layout") in ("Verlog-v1", "verbit-v1")
+
+
 def audio_output_path(session: Path, vault: Path, metadata: dict, config=None):
     # Absence identifies pre-MP3 recordings; never migrate their finished audio.
     audio_format = metadata.get("audio_format", "wav")
     if audio_format not in ("wav", "mp3"):
         raise ValueError("会议录音格式必须为 wav 或 mp3")
-    basename = metadata.get("output_basename") if metadata.get("output_layout") == "verbit-v1" else None
-    if basename is not None and (not isinstance(basename, str) or not re.fullmatch(r"verbit[0-9]{12}(?:-[0-9]{2,})?", basename)):
+    basename = metadata.get("output_basename") if named_output_layout(metadata) else None
+    prefix = "verbit" if metadata.get("output_layout") == "verbit-v1" else "Verlog"
+    if basename is not None and (not isinstance(basename, str) or not re.fullmatch(prefix + r"[0-9]{12}(?:-[0-9]{2,})?", basename)):
         raise ValueError("新版会议文件名无效")
-    if metadata.get("output_layout") == "verbit-v1" and basename is None:
+    if named_output_layout(metadata) and basename is None:
         raise ValueError("缺少新版会议文件名")
     filename = (basename or "meeting") + "." + audio_format
     if metadata.get("storage_mode") != "minimal":
@@ -184,7 +189,7 @@ def note_location(session: Path, config: dict, metadata: dict):
                 or not name[:-3].strip() or name != name.strip()
                 or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)):
             raise ValueError("会议笔记文件名必须是有效的 Markdown 文件名，不能包含目录")
-    if metadata.get("output_layout") == "verbit-v1":
+    if named_output_layout(metadata):
         audio = audio_output_path(session, vault, metadata, config)
         return vault, safe_path(audio.parent / (metadata.get("note_filename") or metadata["output_basename"] + ".md"))
     return vault, safe_path(vault / folder / name)
@@ -196,7 +201,7 @@ def audio_link(audio: Path, vault: Path, metadata: dict):
     if metadata.get("note_link_style") != "markdown" or metadata.get("storage_mode") != "minimal":
         raise ValueError("未知会议录音链接格式")
     # Minimal-storage notes live two folders above the recording's own folder.
-    relative = audio.name if metadata.get("output_layout") == "verbit-v1" else os.path.relpath(audio, audio.parent.parent.parent).replace("\\", "/")
+    relative = audio.name if named_output_layout(metadata) else os.path.relpath(audio, audio.parent.parent.parent).replace("\\", "/")
     return f"[会议录音]({quote(relative, safe='/')})"
 
 

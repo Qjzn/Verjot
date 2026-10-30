@@ -14,7 +14,7 @@ $taskMissing = @($taskExpected.Keys | Where-Object {
     -not (Test-Path -LiteralPath $taskFile -PathType Leaf) -or (Get-FileHash -LiteralPath $taskFile -Algorithm SHA256).Hash -ne $taskExpected[$_]
 })
 if ($taskMissing.Count -eq 0 -and -not $IncludeSource) { return }
-$taskScratch = Join-Path ([IO.Path]::GetTempPath()) ('verbit-encoder-' + [guid]::NewGuid().ToString('N'))
+$taskScratch = Join-Path ([IO.Path]::GetTempPath()) ('Verlog-encoder-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($taskScratch) | Out-Null
 try {
     $taskZip = Join-Path $taskScratch 'package.zip'
