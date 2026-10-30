@@ -430,7 +430,7 @@ internal sealed class VerjotUpdateWindow : Form {
                 release = await Task.Run(delegate { return CheckRelease(DesktopServices.Version, useCli, cancel.Token); });
                 if (IsDisposed) return;
                 if (release == null) { status.Text = "当前没有可安装的新版本。"; details.Text = "已安装 " + DesktopServices.Version + "。只显示已发布、带 x64 安装包和 SHA256 摘要的新版本；代码提交不等于可安装发布。"; action.Text = "重新检查"; }
-                else { status.Text = "可更新至 " + release.Version; details.Text = "下载约 " + (release.Bytes / 1048576.0).ToString("F1") + " MB，校验后将在此窗口完成安装并重新打开 Verjot。\r\n\r\n" + release.Notes; action.Text = "下载并更新"; }
+                else { status.Text = "可更新至 " + release.Version; details.Text = "下载约 " + (release.Bytes / 1048576.0).ToString("F1") + " MB，校验后将在此窗口完成安装并重新打开 Verjot。\r\n\r\n" + (release.Notes ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\r\n"); action.Text = "下载并更新"; }
             } else {
                 if (downloaded == null) {
                     directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Verjot", "updates", "update-" + Guid.NewGuid().ToString("N"));

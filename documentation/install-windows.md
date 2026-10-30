@@ -1,22 +1,22 @@
 # 安装与使用 Verjot
 
-当前源码为 **Verjot 0.1.0-beta.41 更名候选**，尚未发布。以下下载仍为更名前已发布的 beta.38，其软件内名称为 verbit。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
+当前版本为 **Verjot 0.11**（安装包 `0.11.0`）。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
 
 ## 1. 下载与安装
 
 需要 Windows 10 1809+／Windows 11 x64、.NET Framework 4.8、可写保存目录和可用音频设备。安装包约 6 MB；基础包不含模型，录音临时文件另占磁盘空间。当前安装器未签名，企业策略可能阻止运行，请核对来源，不要关闭全局安全保护。
 
-从 [beta.38 版本页](https://github.com/Qjzn/Verjot/releases/tag/v0.1.0-beta.38) 下载安装包及 `SHA256SUMS.txt`。仓库私有时需登录有权限的 GitHub 账号。对下载文件运行：
+从 [0.11 版本页](https://github.com/Qjzn/Verjot/releases/tag/v0.11.0) 下载安装包及 `SHA256SUMS.txt`，公开版无需登录 GitHub。对下载文件运行：
 
 ```powershell
-Get-FileHash -LiteralPath .\verbit-0.1.0-beta.38-setup-x64.exe -Algorithm SHA256
+Get-FileHash -LiteralPath .\Verjot-0.11.0-setup-x64.exe -Algorithm SHA256
 ```
 
-输出应与同版本 `SHA256SUMS.txt` 完全一致。不一致不要安装，重新下载核对。运行安装器，选择可写程序目录。Verjot 更名候选安装后从开始菜单搜索 `Verjot`；旧 beta.38 的菜单仍叫 `verbit`。已有安装请更新到原目录，不能为了名称变化另建空目录而丢失原配置。
+输出应与同版本 `SHA256SUMS.txt` 完全一致。不一致不要安装，重新下载核对。运行安装器，选择可写程序目录。安装后从开始菜单搜索 `Verjot`；旧 beta.38 的菜单仍叫 `verbit`，升级会更新属于本程序的入口。已有安装请更新到原目录，不能为了名称变化另建空目录而丢失原配置。
 
 升级不会自动删除以前安装的模型和 `.venv`，所以旧用户程序目录仍可能占用数 GB；这不是基础安装包的体积。确认不再使用旧研究环境前不要自行清理，尤其不要把笔记、录音或 `work/` 当缓存删除。
 
-更名前的程序可能无法跟随 GitHub 仓库更名后的接口重定向。如果旧版检查更新失败，请从 `Qjzn/Verjot` 版本页手动下载并安装到原目录；不要通过改名安装目录或删除配置来修复。beta.41 更新器使用新仓库地址，并识别保留的三个旧名安装资产；只有高于当前版本且通过校验的资产才可安装。更名候选未发布时，检查不到它是正常结果。
+更名前的程序可能无法跟随 GitHub 仓库更名后的接口重定向。如果旧版检查更新失败，请从 `Qjzn/Verjot` 版本页手动下载并安装到原目录；不要通过改名安装目录或删除配置来修复。beta.41 更新器使用新仓库地址，并识别保留的三个旧名安装资产；只有高于当前版本且通过校验的资产才可安装。0.11 正式版可从 beta.41 升级；稳定版不会接收后续预发行版。
 
 ## 2. 首次设置
 

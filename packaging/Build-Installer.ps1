@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.41',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.11.0',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'

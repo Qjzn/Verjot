@@ -1,6 +1,6 @@
 # 首次使用检查
 
-面向当前 beta.38 的日常桌面入口。完整步骤和真实界面图见[安装与使用](install-windows.md)。不需要先安装模型或运行 Python doctor。
+面向 Verjot 0.11 的日常桌面入口。完整步骤和真实界面图见[安装与使用](install-windows.md)。不需要先安装模型或运行 Python doctor。
 
 | 步骤 | 操作 | 成功证据 |
 | --- | --- | --- |

@@ -6,9 +6,9 @@
 
 默认仅录音，笔记与音频保存在本机。无需 Python、模型、GPU 或 Obsidian；需要文字时，再连接你选择的音频转写 API。
 
-[下载安装包](https://github.com/Qjzn/Verjot/releases/tag/v0.1.0-beta.38) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
+[下载安装包](https://github.com/Qjzn/Verjot/releases/tag/v0.11.0) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
 
-项目已更名为 **Verjot（片言）**，Logo 保持不变。当前已发布版本仍为 **0.1.0-beta.38 · Windows x64 测试版**，其安装资产保留历史文件名 `verbit-0.1.0-beta.38-setup-x64.exe`；源码提供 beta.41 更名复审候选，未发布，区别见[更新记录](documentation/changelog.md)。仓库仍为私有，以上下载入口需要仓库访问权限。
+**Verjot 0.11 · Windows x64**（安装包版本 `0.11.0`）。中文「片言」，Logo 不变。默认仅录音，API 转写可选；公开下载无需 GitHub 登录。安装包及 SHA256 见[版本页](https://github.com/Qjzn/Verjot/releases/tag/v0.11.0)，使用边界见[发布验收](documentation/release-readiness.md)。
 
 ## 能做什么
 
@@ -53,7 +53,7 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 ## 开始使用
 
 1. 使用 Windows 10 1809+／Windows 11 x64，安装 .NET Framework 4.8（系统缺少时需先安装）。
-2. 从版本页下载已发布的 `verbit-0.1.0-beta.38-setup-x64.exe` 和 `SHA256SUMS.txt`，按[安装教程](documentation/install-windows.md)核对哈希后安装；它是更名前的已发布安装包，尚不显示新名称。
+2. 从版本页下载 `Verjot-0.11.0-setup-x64.exe` 和 `SHA256SUMS.txt`，按[安装教程](documentation/install-windows.md)核对哈希后安装。
 3. 首次启动选择保存目录；默认仅录音，无需下载模型。之后从托盘「设置」修改。
 4. 按 `Ctrl+Alt+J` 写便签；按 `Ctrl+Alt+L` 开始／结束会议录音。
 
@@ -95,7 +95,7 @@ Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总�
 
 ## 更新与已知边界
 
-设置中的「关于与更新」可检查并下载已发布安装包；下载、安装由你确认，后台只检查版本。私有仓库需有访问权限，不能保证匿名客户端能获取私有发行资产，手动下载安装包仍可升级。升级到原目录，保留配置、笔记、模型和录音；卸载也保留用户资料。
+设置中的「关于与更新」可检查并下载已发布安装包；下载、安装由你确认，后台只检查版本。公开版无需配置 GitHub 令牌或安装 CLI；网络受限时也可从版本页手动下载升级。升级到原目录，保留配置、笔记、模型和录音；卸载也保留用户资料。
 
 当前仅支持 Windows x64，尚无 macOS／Linux 安装版，安装包未签名。设备切换可能有初始化缺口；受保护或独占音频可能无法收录。干净 Windows 验证按维护者要求跳过，真实长会议、全部设备组合和第三方服务质量仍有未测项。详见[发布验收](documentation/release-readiness.md)，不能将合成回归或截图当作真实音频质量背书。
 

@@ -26,7 +26,7 @@ internal static class TestVerjotUpdates {
     }
     static T Control<T>(Form form, string name) where T : System.Windows.Forms.Control { return (T)form.Controls.Find(name, true)[0]; }
     static void Ui(string folder) {
-        var next = new VerjotRelease { Version = "0.2.0", Bytes = 2048, Notes = "synthetic release notes" };
+        var next = new VerjotRelease { Version = "0.2.0", Bytes = 2048, Notes = "synthetic release notes\nsecond line\rthird line\r\nlast line" };
         int checks = 0, downloads = 0, installs = 0;
         using (var window = new VerjotUpdateWindow(delegate { installs++; return "synthetic busy recording; retry later"; })) {
             window.CheckRelease = delegate { checks++; return next; };
@@ -34,6 +34,7 @@ internal static class TestVerjotUpdates {
             window.Show(); PumpUntil(delegate { return Control<Button>(window, "update_action").Enabled; });
             Check(checks == 1 && downloads == 0 && installs == 0, "Opening checks only; downloading requires the update action");
             Check(Control<Button>(window, "update_action").Text == "下载并更新", "Installable release has a direct in-window action");
+            Check(Control<TextBox>(window, "update_details").Text.Contains("synthetic release notes\r\nsecond line\r\nthird line\r\nlast line"), "GitHub LF and mixed newlines remain readable in the native update window");
             Control<Button>(window, "update_action").PerformClick(); PumpUntil(delegate { return installs == 1 && Control<Button>(window, "update_action").Enabled; });
             Check(downloads == 1 && Control<Button>(window, "update_action").Text == "安装并重启", "Busy controller preserves the validated download for retry");
             Control<Button>(window, "update_action").PerformClick(); PumpUntil(delegate { return installs == 2; });
@@ -73,6 +74,9 @@ internal static class TestVerjotUpdates {
             Check(VerjotUpdateClient.Parse(Metadata("0.2.0-beta.1", false, true), "0.1.0") == null, "Stable channel excludes prereleases");
             Check(VerjotUpdateClient.Parse(Metadata("0.1.0-beta.18", false, true), "0.1.0-beta.17") != null, "Beta channel compares numeric prereleases");
             Check(VerjotUpdateClient.Parse(Metadata("0.1.0-beta.2", false, true), "0.1.0-beta.17") == null, "Existing older public artifacts cannot downgrade the app");
+            Check(VerjotUpdateClient.Parse(Metadata("0.11.0", false, false), "0.1.0-beta.41") != null, "Beta clients can upgrade to the first stable release");
+            Check(VerjotUpdateClient.Parse(Metadata("0.1.0-beta.41", false, true), "0.11.0") == null, "Stable release never downgrades to a historical beta");
+            Check(VerjotUpdateClient.Parse(Metadata("0.12.0-beta.1", false, true), "0.11.0") == null, "Stable release does not enter a future beta channel");
             foreach (string name in new[] { "../../evil.exe", "Verjot.zip", "Verjot-0.2.0-setup-x86.exe", "Verjot-9.0.0-setup-x64.exe" })
                 Check(VerjotUpdateClient.Parse(Metadata("0.2.0", false, false, name), "0.1.0") == null, "Only the expected installer is eligible: " + name);
             foreach (string hash in new[] { "", "sha1:" + new string('a', 40), "sha256:short" }) Check(VerjotUpdateClient.Parse(Metadata("0.2.0", false, false, null, hash), "0.1.0") == null, "Missing/bad SHA256 prevents update");
