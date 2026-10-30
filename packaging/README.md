@@ -6,7 +6,7 @@ The per-user default is `%LOCALAPPDATA%\Programs\verbit`. First launch opens set
 
 Build from a reviewed checkout using Windows PowerShell 5.1 or newer:
 
-Source/runtime inputs live in `src/`, tests in `tests/`. Restore the reviewed NAudio DLL to `src/lib/NAudio.dll` using `src/Install.ps1` before packaging. Package paths remain flat for existing installations; the builder never falls back to ignored legacy copies at the repository root.
+Source/runtime inputs live in `src/`, tests in `tests/`. Restore the reviewed NAudio DLL to `src/lib/NAudio.dll` using the pinned NuGet download and SHA256 check in [CONTRIBUTING.md](../CONTRIBUTING.md) / the CI restore step. Do not run the legacy `src/Install.ps1` merely to obtain NAudio: it prepares Python dependencies and speaker models for the historical workflow. Desktop packaging needs neither. Package paths remain flat for existing installations; the builder never falls back to ignored legacy copies at the repository root.
 
 ```powershell
 # Optional, explicit download of the pinned official compiler. Downloads only

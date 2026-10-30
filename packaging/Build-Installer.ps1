@@ -14,7 +14,7 @@ if (-not $CompilerPath) {
 }
 if (-not $CompilerPath -or -not (Test-Path -LiteralPath $CompilerPath -PathType Leaf)) { throw 'Inno Setup 6 ISCC.exe is required. Supply -CompilerPath, or explicitly run packaging\Get-InnoCompiler.ps1 to download the pinned signed portable compiler.' }
 $taskLibrary = Join-Path $taskRoot 'src\lib\NAudio.dll'
-if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf) -or (Get-FileHash -LiteralPath $taskLibrary -Algorithm SHA256).Hash -ne 'BC4BACC3B8B28D898F1671B79F216CCA439F95EB60CD32D3E3ECAFBECAC42780') { throw 'The reviewed NAudio 1.10.0 DLL is missing or has a different SHA256; restore it using Install.ps1.' }
+if (-not (Test-Path -LiteralPath $taskLibrary -PathType Leaf) -or (Get-FileHash -LiteralPath $taskLibrary -Algorithm SHA256).Hash -ne 'BC4BACC3B8B28D898F1671B79F216CCA439F95EB60CD32D3E3ECAFBECAC42780') { throw 'The reviewed NAudio 1.10.0 DLL is missing or has a different SHA256; follow the pinned NuGet restore in CONTRIBUTING.md / CI. Do not run legacy Install.ps1 just to restore this DLL.' }
 
 # Explicit reviewed allowlist. No checkout wildcard, personal config, models,
 # Python virtual environment, recording, notes, logs, or test fixture is packed.
@@ -65,8 +65,8 @@ foreach ($taskRelative in $taskFiles) {
 $taskReadme = Join-Path $taskPayload 'README.md'
 $taskReadmeText = [IO.File]::ReadAllText($taskReadme).Replace('](src/', '](')
 [IO.File]::WriteAllText($taskReadme, $taskReadmeText, (New-Object Text.UTF8Encoding($false)))
-# Install.ps1 restores lib/NAudio.dll only if needed; retaining the reviewed
-# copy also lets a user rebuild the controller without an additional download.
+# Retaining the reviewed lib copy lets a user rebuild the controller without
+# downloading the DLL or invoking the legacy Python installation flow.
 [IO.Directory]::CreateDirectory((Join-Path $taskPayload 'lib')) | Out-Null
 Copy-Item -LiteralPath $taskLibrary -Destination (Join-Path $taskPayload 'lib\NAudio.dll')
 & (Join-Path $taskPayload 'Build.ps1') -OutputPath (Join-Path $taskPayload 'ObsidianMeeting.exe') -Version $Version
