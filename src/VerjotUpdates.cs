@@ -42,14 +42,19 @@ internal static class VerjotUpdateClient {
             object raw; var assets = value.TryGetValue("assets", out raw) ? raw as object[] : null;
             if (assets == null) continue;
             string expected = "Verjot-" + version + "-setup-x64.exe";
+            // These three retained releases predate the rename. Keep their
+            // actual filenames; never accept a legacy alias for a new release.
+            bool historical = version == "0.1.0-beta.2" || version == "0.1.0-beta.17" || version == "0.1.0-beta.38";
             foreach (object asset in assets) {
                 var file = asset as Dictionary<string, object>;
-                if (file == null || MeetingFiles.Text(file, "name", "") != expected || MeetingFiles.Text(file, "state", "") != "uploaded") continue;
+                if (file == null) continue;
+                string name = MeetingFiles.Text(file, "name", "");
+                if ((name != expected && (!historical || name != "verbit-" + version + "-setup-x64.exe")) || MeetingFiles.Text(file, "state", "") != "uploaded") continue;
                 long id, size;
                 if (!long.TryParse(MeetingFiles.Text(file, "id", ""), out id) || id <= 0 || !long.TryParse(MeetingFiles.Text(file, "size", ""), out size) || size < 1024 || size > MaximumInstallerBytes) continue;
                 string digest = MeetingFiles.Text(file, "digest", "");
                 if (!Regex.IsMatch(digest, "^sha256:[0-9a-fA-F]{64}$")) continue;
-                best = new VerjotRelease { Version = version, Name = expected, AssetId = id, Bytes = size, Sha256 = digest.Substring(7).ToLowerInvariant(), Notes = MeetingFiles.Text(value, "body", "") };
+                best = new VerjotRelease { Version = version, Name = name, AssetId = id, Bytes = size, Sha256 = digest.Substring(7).ToLowerInvariant(), Notes = MeetingFiles.Text(value, "body", "") };
                 break;
             }
         }

@@ -8,7 +8,7 @@
 
 [下载安装包](https://github.com/Qjzn/Verjot/releases/tag/v0.1.0-beta.38) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
 
-项目已更名为 **Verjot（片言）**，Logo 保持不变。当前已发布版本仍为 **0.1.0-beta.38 · Windows x64 测试版**，其安装资产保留历史文件名 `verbit-0.1.0-beta.38-setup-x64.exe`；源码提供 beta.40 更名候选，未发布，区别见[更新记录](documentation/changelog.md)。仓库仍为私有，以上下载入口需要仓库访问权限。
+项目已更名为 **Verjot（片言）**，Logo 保持不变。当前已发布版本仍为 **0.1.0-beta.38 · Windows x64 测试版**，其安装资产保留历史文件名 `verbit-0.1.0-beta.38-setup-x64.exe`；源码提供 beta.41 更名复审候选，未发布，区别见[更新记录](documentation/changelog.md)。仓库仍为私有，以上下载入口需要仓库访问权限。
 
 ## 能做什么
 

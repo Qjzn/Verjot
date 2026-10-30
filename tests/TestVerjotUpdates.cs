@@ -77,6 +77,15 @@ internal static class TestVerjotUpdates {
                 Check(VerjotUpdateClient.Parse(Metadata("0.2.0", false, false, name), "0.1.0") == null, "Only the expected installer is eligible: " + name);
             foreach (string hash in new[] { "", "sha1:" + new string('a', 40), "sha256:short" }) Check(VerjotUpdateClient.Parse(Metadata("0.2.0", false, false, null, hash), "0.1.0") == null, "Missing/bad SHA256 prevents update");
             Check(VerjotUpdateClient.Parse("[]", "0.1.0") == null, "Empty releases never imply a new build is published");
+            foreach (string version in new[] { "0.1.0-beta.2", "0.1.0-beta.17", "0.1.0-beta.38" }) {
+                string oldName = "verbit-" + version + "-setup-x64.exe";
+                var historic = VerjotUpdateClient.Parse(Metadata(version, false, true, oldName), "0.1.0-beta.1");
+                Check(historic != null && historic.Name == oldName, "Retained historical release keeps its actual asset name: " + version);
+                Check(VerjotUpdateClient.Parse(Metadata(version, false, true, oldName), "0.1.0-beta.40") == null, "Historical names never permit a downgrade: " + version);
+            }
+            foreach (string version in new[] { "0.1.0-beta.39", "0.2.0" })
+                Check(VerjotUpdateClient.Parse(Metadata(version, false, version.Contains("-"), "verbit-" + version + "-setup-x64.exe"), "0.1.0-beta.1") == null, "Unreviewed legacy asset name rejected: " + version);
+            Check(VerjotUpdateClient.Parse(Metadata("0.1.0-beta.38", false, true, "Verlog-0.1.0-beta.38-setup-x64.exe"), "0.1.0-beta.1") == null, "Unpublished interim brand asset rejected");
             Reject(delegate { VerjotUpdateClient.Parse("{}", "0.1.0"); }, "Bad metadata rejected");
             foreach (string uri in new[] { "http://release-assets.githubusercontent.com/file", "https://github.com.evil.invalid/file", "https://api.github.com/anything", "https://objects.githubusercontent.com:444/file", "https://user@objects.githubusercontent.com/file" })
                 Check(!VerjotUpdateClient.AllowedRedirect(new Uri(uri)), "Untrusted or credential-bearing redirect rejected");

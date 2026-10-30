@@ -16,9 +16,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Get-InnoCompiler
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-Installer.ps1
 ```
 
-Alternatively supply `-CompilerPath 'C:\...\ISCC.exe'`. The build stages a new allowlisted directory, builds from that staged source, writes a SHA256 file manifest, and produces `validation\release\Verjot-0.1.0-beta.40-setup-x64.exe` plus `SHA256SUMS.txt`. It does not replace a running local controller. Builds are repeatable through the script; byte-for-byte determinism is not claimed. These beta artifacts have no Authenticode signing certificate.
+Alternatively supply `-CompilerPath 'C:\...\ISCC.exe'`. The build stages a new allowlisted directory, builds from that staged source, writes a SHA256 file manifest, and produces `validation\release\Verjot-0.1.0-beta.41-setup-x64.exe` plus `SHA256SUMS.txt`. It does not replace a running local controller. Builds are repeatable through the script; byte-for-byte determinism is not claimed. These beta artifacts have no Authenticode signing certificate.
 
-The current source builds beta.40 as an unpublished review candidate. The latest published download remains beta.38; rebuilding does not replace a Release asset or update a running installation.
+The current source builds beta.41 as an unpublished review candidate. The latest published download remains beta.38; rebuilding does not replace a Release asset or update a running installation.
 
 The pinned compiler is [Inno Setup 6.7.3 from its official release](https://github.com/jrsoftware/issrc/releases/tag/is-6_7_3), distributed by Pyrsys B.V.; [official verification and portable-mode documentation](https://jrsoftware.org/isdl-verify.php), [portable mode](https://jrsoftware.org/ishelp/topic_technotes.htm). Inno Setup's own license and applicable commercial-use terms remain in effect for the build tool. The compiler is not included in the product payload.
 
@@ -26,7 +26,7 @@ Run the installer smoke test only in a Windows user profile without an existing 
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Test-Installer.ps1 `
-  -InstallerPath .\validation\release\Verjot-0.1.0-beta.40-setup-x64.exe
+  -InstallerPath .\validation\release\Verjot-0.1.0-beta.41-setup-x64.exe
 ```
 
 This test uses a unique `validation\installer-smoke-*\app` directory, disables application launch and shortcut tasks, and checks clean install, cross-directory installation rejection, old-uninstaller ownership rejection, occupied EXE and worker-byte-lock protection, active/unknown session rejection, upgrade preservation, native configuration validation, and uninstall preservation using synthetic fixtures. It writes an actual temporary HKCU uninstall entry and removes it on successful uninstall; it never replaces an existing registered install. It does not access the clipboard, record/play audio, or download models. A failed run leaves its evidence and isolated install for inspection.
@@ -38,7 +38,7 @@ Silent operations for automation:
 ```powershell
 # /TASKS="" disables optional desktop and startup shortcuts. /NOICONS also
 # skips the Start menu entries. Normal interactive installation creates them.
-.\Verjot-0.1.0-beta.40-setup-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TASKS="" /DIR="C:\Users\NAME\AppData\Local\Programs\Verjot"
+.\Verjot-0.1.0-beta.41-setup-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TASKS="" /DIR="C:\Users\NAME\AppData\Local\Programs\Verjot"
 & 'C:\Users\NAME\AppData\Local\Programs\Verjot\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
