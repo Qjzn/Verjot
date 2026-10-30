@@ -1,6 +1,6 @@
 # Third-party components
 
-Verlog (formerly 片言 and 听记/Tingji) uses the components below. This project's own source is MIT. Each dependency keeps its own license; MIT does not relicense those components. Runtime packages and weights are not committed to this repository.
+Verjot (formerly 片言 and 听记/Tingji) uses the components below. This project's own source is MIT. Each dependency keeps its own license; MIT does not relicense those components. Runtime packages and weights are not committed to this repository.
 
 ## Current desktop installer
 
@@ -28,8 +28,8 @@ The Windows setup program is built with [Inno Setup](https://jrsoftware.org/isin
 
 ## Artwork and synthetic test material
 
-The user-approved logo is the text-free folded-paper and waveform symbol in `assets/Verlog-logo.png`, generated for this project with the built-in image tool using a user-supplied visual reference; its exact model version was not exposed. The reference image itself is not distributed in this repository. The project name `Verlog` is rendered separately from the symbol. `assets/Create-Icons.ps1` packages the PNG into the current ICO resources and adds the recording-state indicator. The blue/red waveform SVG files are legacy artwork, not the source of the current icons. See [brand and asset notes](documentation/brand.md) for the approved design and small-size rules.
+The user-approved logo is the text-free folded-paper and waveform symbol in `assets/Verjot-logo.png`, generated for this project with the built-in image tool using a user-supplied visual reference; its exact model version was not exposed. The reference image itself is not distributed in this repository. The project name `Verjot` is rendered separately from the symbol. `assets/Create-Icons.ps1` packages the PNG into the current ICO resources and adds the recording-state indicator. The blue/red waveform SVG files are legacy artwork, not the source of the current icons. See [brand and asset notes](documentation/brand.md) for the approved design and small-size rules.
 
 The GitHub mark in assets/github-mark.png is GitHub's official mark, obtained from https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png and used only to identify the project link. GitHub marks remain GitHub trademarks and are not relicensed under this project's MIT license. See https://github.com/logos for the applicable brand guidance.
 
-`assets/engine-check.wav` is synthetic Mandarin generated for this project's offline smoke test with Windows System.Speech / Microsoft Huihui Desktop; see `assets/engine-check-source.md` for the exact generic text and format. It contains no user recording. The voice engine and voice model are not distributed with Verlog. This sample checks that inference runs and is not a meeting-quality benchmark.
+`assets/engine-check.wav` is synthetic Mandarin generated for this project's offline smoke test with Windows System.Speech / Microsoft Huihui Desktop; see `assets/engine-check-source.md` for the exact generic text and format. It contains no user recording. The voice engine and voice model are not distributed with Verjot. This sample checks that inference runs and is not a meeting-quality benchmark.

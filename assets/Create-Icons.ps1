@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$taskApprovedLogo = Join-Path $PSScriptRoot 'Verlog-logo.png'
+$taskApprovedLogo = Join-Path $PSScriptRoot 'Verjot-logo.png'
 if (-not [IO.File]::Exists($taskApprovedLogo)) {
-    throw "Approved Verlog logo is missing: $taskApprovedLogo. Restore assets/Verlog-logo.png before generating icons; no icons were written."
+    throw "Approved Verjot logo is missing: $taskApprovedLogo. Restore assets/Verjot-logo.png before generating icons; no icons were written."
 }
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
 using System;
@@ -61,8 +61,8 @@ public static class TingjiArtwork {
         }
     }
     public static void Save(string directory, string name, Color color) {
-        string source = Path.Combine(directory, "Verlog-logo.png");
-        if (!File.Exists(source)) throw new FileNotFoundException("Approved Verlog logo is missing; no substitute icon will be generated.", source);
+        string source = Path.Combine(directory, "Verjot-logo.png");
+        if (!File.Exists(source)) throw new FileNotFoundException("Approved Verjot logo is missing; no substitute icon will be generated.", source);
         logoPath = source;
         int[] sizes = {16, 20, 24, 32, 48, 64, 128, 256};
         var frames = new List<byte[]>();
@@ -89,4 +89,4 @@ public static class TingjiArtwork {
 '@
 [TingjiArtwork]::Save($PSScriptRoot, 'tingji', [Drawing.Color]::FromArgb(40,104,168))
 [TingjiArtwork]::Save($PSScriptRoot, 'tingji-recording', [Drawing.Color]::FromArgb(216,57,69))
-Write-Output 'Generated Verlog icons (16 through 256 pixels); resource filenames retained for compatibility.'
+Write-Output 'Generated Verjot icons (16 through 256 pixels); resource filenames retained for compatibility.'

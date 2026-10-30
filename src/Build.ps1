@@ -16,7 +16,7 @@ $taskActions = Join-Path $taskRoot 'MeetingActions.cs'
 $taskExport = Join-Path $taskRoot 'NativeAudioExport.cs'
 $taskSettings = Join-Path $taskRoot 'MeetingSettings.cs'
 $taskDesktopServices = Join-Path $taskRoot 'DesktopServices.cs'
-$taskUpdates = Join-Path $taskRoot 'VerlogUpdates.cs'
+$taskUpdates = Join-Path $taskRoot 'VerjotUpdates.cs'
 $taskNoteStore = Join-Path $taskRoot 'QuickNoteStore.cs'
 $taskNoteWindow = Join-Path $taskRoot 'QuickNoteWindow.cs'
 $taskNoteDocument = Join-Path $taskRoot 'NativeNoteDocument.cs'
@@ -50,10 +50,10 @@ $taskArguments = @(
     "/win32manifest:$taskManifest",
     "/resource:$taskIdleIcon,Tingji.Idle.ico",
     "/resource:$taskRecordingIcon,Tingji.Recording.ico",
-    ('/resource:' + (Join-Path $taskAssets 'github-mark.png') + ',Verlog.GitHub.png'),
+    ('/resource:' + (Join-Path $taskAssets 'github-mark.png') + ',Verjot.GitHub.png'),
     $taskSource, $taskCatalog, $taskActions, $taskExport, $taskSettings, $taskDesktopServices, $taskUpdates, $taskNoteStore, $taskNoteWindow, $taskNoteDocument
 )
-$taskVersionSource = Join-Path ([IO.Path]::GetTempPath()) ('Verlog-version-' + [Guid]::NewGuid().ToString('N') + '.cs')
+$taskVersionSource = Join-Path ([IO.Path]::GetTempPath()) ('Verjot-version-' + [Guid]::NewGuid().ToString('N') + '.cs')
 try {
     [IO.File]::WriteAllText($taskVersionSource, ('[assembly: System.Reflection.AssemblyInformationalVersion("' + $Version + '")]'), (New-Object Text.UTF8Encoding($false)))
     & $taskCompiler @taskArguments $taskVersionSource
@@ -77,7 +77,7 @@ if ($taskCheckout -and $taskOutputFolder -ieq $taskRoot) {
         Copy-Item -LiteralPath (Join-Path $taskRepo $taskPolicy) -Destination $taskRoot -Force
     }
     [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'assets')) | Out-Null
-    foreach ($taskName in @('Verlog-logo.png', 'tingji.ico', 'tingji-recording.ico', 'github-mark.png', 'engine-check.wav', 'engine-check-source.md')) {
+    foreach ($taskName in @('Verjot-logo.png', 'tingji.ico', 'tingji-recording.ico', 'github-mark.png', 'engine-check.wav', 'engine-check-source.md')) {
         Copy-Item -LiteralPath (Join-Path $taskAssets $taskName) -Destination (Join-Path $taskRoot 'assets') -Force
     }
     [IO.Directory]::CreateDirectory((Join-Path $taskRoot 'packaging')) | Out-Null

@@ -12,25 +12,25 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-internal sealed class VerlogRelease {
+internal sealed class VerjotRelease {
     public string Version, Name, Sha256, Notes;
     public long AssetId, Bytes;
 }
 
 // Only this repository's published installer assets are eligible. No generic
 // command, mirror, download URL or credentials can come from release metadata.
-internal static class VerlogUpdateClient {
-    const string Api = "https://api.github.com/repos/Qjzn/Verlog/releases";
+internal static class VerjotUpdateClient {
+    const string Api = "https://api.github.com/repos/Qjzn/Verjot/releases";
     internal const long MaximumInstallerBytes = 128L * 1024 * 1024;
     internal static string Hash(string path) {
         using (var input = File.OpenRead(path)) using (var sha = SHA256.Create())
             return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
     }
-    internal static VerlogRelease Parse(string json, string current) {
+    internal static VerjotRelease Parse(string json, string current) {
         if (json.Length > 1048576) throw new InvalidDataException("更新响应过大。");
         var releases = MeetingFiles.Json.DeserializeObject(json) as object[];
         if (releases == null) throw new InvalidDataException("更新响应格式无效。");
-        VerlogRelease best = null;
+        VerjotRelease best = null;
         foreach (object item in releases) {
             var value = item as Dictionary<string, object>;
             if (value == null || !value.ContainsKey("draft") || !(value["draft"] is bool)) continue;
@@ -41,7 +41,7 @@ internal static class VerlogUpdateClient {
             if (!DesktopServices.Newer(version, current) || (best != null && !DesktopServices.Newer(version, best.Version))) continue;
             object raw; var assets = value.TryGetValue("assets", out raw) ? raw as object[] : null;
             if (assets == null) continue;
-            string expected = "Verlog-" + version + "-setup-x64.exe";
+            string expected = "Verjot-" + version + "-setup-x64.exe";
             foreach (object asset in assets) {
                 var file = asset as Dictionary<string, object>;
                 if (file == null || MeetingFiles.Text(file, "name", "") != expected || MeetingFiles.Text(file, "state", "") != "uploaded") continue;
@@ -49,15 +49,15 @@ internal static class VerlogUpdateClient {
                 if (!long.TryParse(MeetingFiles.Text(file, "id", ""), out id) || id <= 0 || !long.TryParse(MeetingFiles.Text(file, "size", ""), out size) || size < 1024 || size > MaximumInstallerBytes) continue;
                 string digest = MeetingFiles.Text(file, "digest", "");
                 if (!Regex.IsMatch(digest, "^sha256:[0-9a-fA-F]{64}$")) continue;
-                best = new VerlogRelease { Version = version, Name = expected, AssetId = id, Bytes = size, Sha256 = digest.Substring(7).ToLowerInvariant(), Notes = MeetingFiles.Text(value, "body", "") };
+                best = new VerjotRelease { Version = version, Name = expected, AssetId = id, Bytes = size, Sha256 = digest.Substring(7).ToLowerInvariant(), Notes = MeetingFiles.Text(value, "body", "") };
                 break;
             }
         }
         return best;
     }
-    internal static VerlogRelease Check(string current, bool githubCli, CancellationToken cancel) {
+    internal static VerjotRelease Check(string current, bool githubCli, CancellationToken cancel) {
         using (var output = new MemoryStream()) {
-            if (githubCli) Cli("repos/Qjzn/Verlog/releases?per_page=20", false, output, 1048576, cancel, null);
+            if (githubCli) Cli("repos/Qjzn/Verjot/releases?per_page=20", false, output, 1048576, cancel, null);
             else Http(new Uri(Api + "?per_page=20"), false, output, 1048576, cancel, null);
             return Parse(new UTF8Encoding(false, true).GetString(output.ToArray()), current);
         }
@@ -80,16 +80,17 @@ internal static class VerlogUpdateClient {
         for (int redirects = 0; redirects < 5; redirects++) {
             cancel.ThrowIfCancellationRequested();
             var request = (HttpWebRequest)WebRequest.Create(uri);
-            request.UserAgent = "Verlog-updater"; request.Accept = binary ? "application/octet-stream" : "application/vnd.github+json";
+            request.UserAgent = "Verjot-updater"; request.Accept = binary ? "application/octet-stream" : "application/vnd.github+json";
             request.Timeout = request.ReadWriteTimeout = 30000; request.AllowAutoRedirect = false;
             // Tokens are opt-in through the named local environment variable,
             // and never follow a redirect to the asset storage host.
             if (uri.Host == "api.github.com") {
-                string token = MeetingConfig.ApiKeyValue("VERLOG_GITHUB_TOKEN");
+                string token = MeetingConfig.ApiKeyValue("VERJOT_GITHUB_TOKEN");
+                if (string.IsNullOrWhiteSpace(token)) token = MeetingConfig.ApiKeyValue("VERLOG_GITHUB_TOKEN");
                 if (string.IsNullOrWhiteSpace(token)) token = MeetingConfig.ApiKeyValue("VERBIT_GITHUB_TOKEN"); // Existing private installations keep working.
                 if (!string.IsNullOrWhiteSpace(token)) {
                     token = token.Trim();
-                    if (!Regex.IsMatch(token, @"\A[A-Za-z0-9_.-]{20,512}\z")) throw new IOException("VERLOG_GITHUB_TOKEN 格式无效，请检查本机环境变量；不会显示或记录令牌。");
+                    if (!Regex.IsMatch(token, @"\A[A-Za-z0-9_.-]{20,512}\z")) throw new IOException("VERJOT_GITHUB_TOKEN 格式无效，请检查本机环境变量；不会显示或记录令牌。");
                     request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
                 }
                 request.Headers["X-GitHub-Api-Version"] = "2022-11-28";
@@ -109,7 +110,7 @@ internal static class VerlogUpdateClient {
             } catch (WebException failure) {
                 if (failure.Response != null) failure.Response.Dispose();
                 cancel.ThrowIfCancellationRequested();
-                throw new IOException("无法读取 GitHub 更新。私有测试版可勾选使用已登录的 GitHub CLI，或设置 VERLOG_GITHUB_TOKEN；也请检查网络。不会读取浏览器登录信息。");
+                throw new IOException("无法读取 GitHub 更新。私有测试版可勾选使用已登录的 GitHub CLI，或设置 VERJOT_GITHUB_TOKEN；也请检查网络。不会读取浏览器登录信息。");
             }
         }
         throw new IOException("更新下载跳转次数过多。");
@@ -120,7 +121,7 @@ internal static class VerlogUpdateClient {
         foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)) {
             try { path = Path.Combine(folder.Trim('"'), "gh.exe"); if (Path.IsPathRooted(path) && File.Exists(path)) return path; } catch (ArgumentException) { }
         }
-        throw new IOException("未找到可选的 GitHub CLI。公开仓库无需它；私有测试请安装 gh 并完成 gh auth login，或设置 VERLOG_GITHUB_TOKEN。");
+        throw new IOException("未找到可选的 GitHub CLI。公开仓库无需它；私有测试请安装 gh 并完成 gh auth login，或设置 VERJOT_GITHUB_TOKEN。");
     }
     static void Cli(string endpoint, bool binary, Stream output, long limit, CancellationToken cancel, Action<long> progress) {
         var start = new ProcessStartInfo(CliPath(), "api --hostname github.com " + endpoint + (binary ? " --header Accept:application/octet-stream" : " --header Accept:application/vnd.github+json")) {
@@ -140,20 +141,20 @@ internal static class VerlogUpdateClient {
             }
         }
     }
-    internal static string Download(VerlogRelease release, string directory, bool githubCli, Action<long> progress, CancellationToken cancel) {
+    internal static string Download(VerjotRelease release, string directory, bool githubCli, Action<long> progress, CancellationToken cancel) {
         Directory.CreateDirectory(directory); MeetingConfig.CheckOrdinaryPath(directory);
-        if (!Regex.IsMatch(release.Name ?? "", @"^Verlog-\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?-setup-x64\.exe$")) throw new InvalidDataException("安装包名称无效。");
+        if (!Regex.IsMatch(release.Name ?? "", @"^Verjot-\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?-setup-x64\.exe$")) throw new InvalidDataException("安装包名称无效。");
         string destination = Path.Combine(directory, release.Name), partial = destination + ".part";
         try {
             using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-                if (githubCli) Cli("repos/Qjzn/Verlog/releases/assets/" + release.AssetId, true, output, release.Bytes, cancel, progress);
+                if (githubCli) Cli("repos/Qjzn/Verjot/releases/assets/" + release.AssetId, true, output, release.Bytes, cancel, progress);
                 else Http(new Uri(Api + "/assets/" + release.AssetId), true, output, release.Bytes, cancel, progress);
             }
             Verify(partial, release); cancel.ThrowIfCancellationRequested();
             File.Move(partial, destination); return destination;
         } catch { if (File.Exists(partial)) File.Delete(partial); throw; }
     }
-    internal static void Verify(string path, VerlogRelease release) {
+    internal static void Verify(string path, VerjotRelease release) {
         MeetingConfig.CheckOrdinaryPath(path);
         if (new FileInfo(path).Length != release.Bytes || !string.Equals(Hash(path), release.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("安装包 SHA256 或大小不一致，已拒绝更新。原版本不变。");
         using (var input = File.OpenRead(path)) if (input.ReadByte() != 'M' || input.ReadByte() != 'Z') throw new InvalidDataException("下载的文件不是 Windows 安装程序。");
@@ -164,7 +165,7 @@ internal static class VerlogUpdateClient {
     }
 }
 
-internal static class VerlogUpdateInstaller {
+internal static class VerjotUpdateInstaller {
     internal const string Registration = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{DE124FA5-8E3D-4B80-A62E-AF8FA54B1E43}_is1";
     internal static string ProgramPath(string root, string relative) {
         if (string.IsNullOrEmpty(relative) || Path.IsPathRooted(relative) || relative.Contains(":")) throw new IOException("更新清单路径无效。");
@@ -193,10 +194,10 @@ internal static class VerlogUpdateInstaller {
         foreach (string name in names) {
             string from = ProgramPath(root, name), to = ProgramPath(backup, name);
             if (result.ContainsKey(name)) continue;
-            result[name] = File.Exists(from) ? VerlogUpdateClient.Hash(from) : null;
+            result[name] = File.Exists(from) ? VerjotUpdateClient.Hash(from) : null;
             if (result[name] == null) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(to)); File.Copy(from, to, false);
-            if (VerlogUpdateClient.Hash(to) != result[name]) throw new IOException("更新备份校验失败，未开始安装。");
+            if (VerjotUpdateClient.Hash(to) != result[name]) throw new IOException("更新备份校验失败，未开始安装。");
         }
         return result;
     }
@@ -210,15 +211,15 @@ internal static class VerlogUpdateInstaller {
         foreach (var item in files) {
             ProgramPath(root, item.Key);
             string from = ProgramPath(backup, item.Key);
-            if (item.Value != null && (!File.Exists(from) || VerlogUpdateClient.Hash(from) != item.Value))
+            if (item.Value != null && (!File.Exists(from) || VerjotUpdateClient.Hash(from) != item.Value))
                 throw new IOException("回滚备份校验失败，请保留更新资料。");
         }
         foreach (var item in files) {
             string to = ProgramPath(root, item.Key), from = ProgramPath(backup, item.Key);
             if (item.Value == null) { if (File.Exists(to)) File.Delete(to); continue; }
-            if (!File.Exists(from) || VerlogUpdateClient.Hash(from) != item.Value) throw new IOException("回滚备份校验失败，请保留更新资料。");
+            if (!File.Exists(from) || VerjotUpdateClient.Hash(from) != item.Value) throw new IOException("回滚备份校验失败，请保留更新资料。");
             Directory.CreateDirectory(Path.GetDirectoryName(to)); File.Copy(from, to, true);
-            if (VerlogUpdateClient.Hash(to) != item.Value) throw new IOException("程序回滚校验失败，请保留更新资料。");
+            if (VerjotUpdateClient.Hash(to) != item.Value) throw new IOException("程序回滚校验失败，请保留更新资料。");
         }
     }
     internal static string CleanupSuccessful(string installer, string backupRoot, Dictionary<string, string> backup) {
@@ -239,7 +240,7 @@ internal static class VerlogUpdateInstaller {
         var manifest = MeetingFiles.ReadJson(ProgramPath(root, "update-manifest.json"));
         foreach (var item in (System.Collections.IList)manifest["files"]) {
             var file = (Dictionary<string, object>)item; string path = ProgramPath(root, MeetingFiles.Text(file, "path", ""));
-            if (!File.Exists(path) || VerlogUpdateClient.Hash(path) != MeetingFiles.Text(file, "sha256", "")) throw new IOException("安装后程序文件不完整，准备恢复旧版本。");
+            if (!File.Exists(path) || VerjotUpdateClient.Hash(path) != MeetingFiles.Text(file, "sha256", "")) throw new IOException("安装后程序文件不完整，准备恢复旧版本。");
         }
     }
     internal static ProcessStartInfo SetupStart(string installer, string target, string log) {
@@ -254,11 +255,11 @@ internal static class VerlogUpdateInstaller {
                 throw new IOException("当前目录不是本机登记的安装目录。源码/便携目录请使用安装包安装后再使用窗口更新。");
         }
     }
-    internal static string Prepare(VerlogRelease release, string installer, string directory) {
+    internal static string Prepare(VerjotRelease release, string installer, string directory) {
         string target = Path.GetDirectoryName(DesktopServices.Executable);
-        CheckRegistered(target); VerlogUpdateClient.Verify(installer, release);
+        CheckRegistered(target); VerjotUpdateClient.Verify(installer, release);
         Directory.CreateDirectory(directory); MeetingConfig.CheckOrdinaryPath(directory);
-        string helper = Path.Combine(directory, "Verlog-update-helper.exe");
+        string helper = Path.Combine(directory, "Verjot-update-helper.exe");
         MeetingConfig.CheckOrdinaryPath(helper); File.Copy(DesktopServices.Executable, helper, true);
         foreach (string name in new[] { "NAudio.dll", "update-manifest.json" }) {
             string destination = Path.Combine(directory, name); MeetingConfig.CheckOrdinaryPath(destination); File.Copy(Path.Combine(target, name), destination, true);
@@ -272,7 +273,7 @@ internal static class VerlogUpdateInstaller {
         }
     }
     internal static void Launch(string plan) {
-        var start = new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(plan), "Verlog-update-helper.exe"), "--apply-update \"" + plan + "\"") { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(plan) };
+        var start = new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(plan), "Verjot-update-helper.exe"), "--apply-update \"" + plan + "\"") { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(plan) };
         using (var process = Process.Start(start)) {
             if (!process.WaitForInputIdle(10000) || process.HasExited) throw new IOException("无法打开更新安装窗口，当前程序继续运行。");
         }
@@ -283,11 +284,11 @@ internal static class VerlogUpdateInstaller {
         var plan = MeetingFiles.ReadJson(planPath);
         string target = Path.GetFullPath(MeetingFiles.Text(plan, "target", "")), executable = ProgramPath(target, "ObsidianMeeting.exe");
         CheckRegistered(target);
-        var release = new VerlogRelease { Version = MeetingFiles.Text(plan, "version", ""), Bytes = Convert.ToInt64(plan["bytes"]), Sha256 = MeetingFiles.Text(plan, "sha256", "") };
+        var release = new VerjotRelease { Version = MeetingFiles.Text(plan, "version", ""), Bytes = Convert.ToInt64(plan["bytes"]), Sha256 = MeetingFiles.Text(plan, "sha256", "") };
         string previousVersion = MeetingFiles.Text(plan, "from_version", ""), installer = Path.GetFullPath(MeetingFiles.Text(plan, "installer", ""));
         if (!DesktopServices.Newer(release.Version, previousVersion) || !installer.StartsWith(directory + "\\", StringComparison.OrdinalIgnoreCase)) throw new IOException("更新版本或安装包位置无效。");
-        VerlogUpdateClient.Verify(installer, release);
-        progress("正在等待 Verlog 保存并退出…");
+        VerjotUpdateClient.Verify(installer, release);
+        progress("正在等待 Verjot 保存并退出…");
         try {
             using (var parent = Process.GetProcessById(Convert.ToInt32(plan["parent"]))) {
                 if (parent.StartTime.ToUniversalTime().Ticks != Convert.ToInt64(plan["parent_started"]) || !string.Equals(parent.MainModule.FileName, executable, StringComparison.OrdinalIgnoreCase)) throw new IOException("原程序身份不匹配，未开始安装。");
@@ -297,13 +298,13 @@ internal static class VerlogUpdateInstaller {
         using (var gate = new Mutex(false, "Local\\ObsidianMeetingHotkey")) {
             bool acquired;
             try { acquired = gate.WaitOne(0); } catch (AbandonedMutexException) { acquired = true; }
-            if (!acquired) throw new IOException("Verlog 已被重新打开，更新已停止，未替换程序。");
+            if (!acquired) throw new IOException("Verjot 已被重新打开，更新已停止，未替换程序。");
             bool startedInstaller = false; Dictionary<string, string> backup = null;
             // Never reuse an earlier attempt's snapshot after a failure.
             string backupRoot = null, log = Path.Combine(directory, "install.log");
             try {
                 if (FileVersionInfo.GetVersionInfo(executable).ProductVersion != previousVersion) throw new IOException("原程序版本已变化，请重新检查更新。");
-                VerlogUpdateClient.Verify(installer, release);
+                VerjotUpdateClient.Verify(installer, release);
                 progress("正在校验并备份程序文件…");
                 backup = BackupAttempt(target, directory, directory, out backupRoot);
                 MeetingFiles.WriteJson(Path.Combine(directory, "rollback-files.json"), backup);
@@ -340,7 +341,7 @@ internal static class VerlogUpdateInstaller {
     }
 }
 
-internal sealed class VerlogUpdateWindow : Form {
+internal sealed class VerjotUpdateWindow : Form {
     readonly Label status = new Label { AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(0, 8, 0, 8) };
     readonly ProgressBar progress = new ProgressBar { Dock = DockStyle.Top, Height = 8, Style = ProgressBarStyle.Marquee };
     readonly TextBox details = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None };
@@ -348,34 +349,34 @@ internal sealed class VerlogUpdateWindow : Form {
     readonly Button action = new Button { Text = "检查更新", AutoSize = true, MinimumSize = new Size(100, 30) };
     readonly Button close = new Button { Text = "关闭", AutoSize = true, MinimumSize = new Size(80, 30) };
     readonly CancellationTokenSource cancel = new CancellationTokenSource();
-    readonly Func<VerlogRelease, string, string, string> install;
-    internal Func<string, bool, CancellationToken, VerlogRelease> CheckRelease = VerlogUpdateClient.Check;
-    internal Func<VerlogRelease, string, bool, Action<long>, CancellationToken, string> DownloadRelease = VerlogUpdateClient.Download;
+    readonly Func<VerjotRelease, string, string, string> install;
+    internal Func<string, bool, CancellationToken, VerjotRelease> CheckRelease = VerjotUpdateClient.Check;
+    internal Func<VerjotRelease, string, bool, Action<long>, CancellationToken, string> DownloadRelease = VerjotUpdateClient.Download;
     readonly string plan;
-    VerlogRelease release;
+    VerjotRelease release;
     string downloaded, directory;
     Font displayFont;
     bool working, installing, handedOff;
-    internal VerlogUpdateWindow(Func<VerlogRelease, string, string, string> install, string plan = null) {
+    internal VerjotUpdateWindow(Func<VerjotRelease, string, string, string> install, string plan = null) {
         this.install = install; this.plan = plan;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         displayFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); Font = displayFont;
-        Text = "Verlog · 更新"; Icon = MeetingBrand.IdleIcon; ClientSize = new Size(460, 300); Padding = new Padding(16);
+        Text = "Verjot · 更新"; Icon = MeetingBrand.IdleIcon; ClientSize = new Size(460, 300); Padding = new Padding(16);
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterParent; BackColor = details.BackColor = VerlogMenuRenderer.Surface; ForeColor = details.ForeColor = VerlogMenuRenderer.Ink;
+        StartPosition = FormStartPosition.CenterParent; BackColor = details.BackColor = VerjotMenuRenderer.Surface; ForeColor = details.ForeColor = VerjotMenuRenderer.Ink;
         status.Text = "当前版本 " + DesktopServices.Version;
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         buttons.Controls.Add(action); buttons.Controls.Add(close);
-        VerlogUi.StyleButton(action, true); VerlogUi.StyleButton(close, false);
+        VerjotUi.StyleButton(action, true); VerjotUi.StyleButton(close, false);
         Controls.Add(details); Controls.Add(cli); Controls.Add(progress); Controls.Add(status); Controls.Add(buttons);
-        VerlogMenu.AttachTextMenu(details); CancelButton = close;
+        VerjotMenu.AttachTextMenu(details); CancelButton = close;
         action.Name = "update_action"; close.Name = "update_close"; cli.Name = "update_github_cli"; status.Name = "update_status"; details.Name = "update_details";
         action.Click += async delegate {
             if (working) return;
             if (plan != null) {
                 try {
-                    string target = MeetingFiles.Text(MeetingFiles.ReadJson(plan), "target", ""); VerlogUpdateInstaller.CheckRegistered(target);
-                    Process.Start(new ProcessStartInfo(VerlogUpdateInstaller.ProgramPath(target, "ObsidianMeeting.exe"), "--show") { UseShellExecute = false, WorkingDirectory = target }); Close();
+                    string target = MeetingFiles.Text(MeetingFiles.ReadJson(plan), "target", ""); VerjotUpdateInstaller.CheckRegistered(target);
+                    Process.Start(new ProcessStartInfo(VerjotUpdateInstaller.ProgramPath(target, "ObsidianMeeting.exe"), "--show") { UseShellExecute = false, WorkingDirectory = target }); Close();
                 } catch (Exception error) { details.Text = error.Message; }
             } else await Run();
         };
@@ -406,12 +407,12 @@ internal sealed class VerlogUpdateWindow : Form {
             installing = true; cli.Visible = action.Visible = false; Busy(true);
             details.Text = "更新仅替换程序文件，个人配置、模型、笔记及录音保留。安装期间请不要关闭电脑。";
             try {
-                await Task.Run(delegate { VerlogUpdateInstaller.Apply(plan, Report); });
-                status.Text = "更新完成，Verlog 已重新打开。";
+                await Task.Run(delegate { VerjotUpdateInstaller.Apply(plan, Report); });
+                status.Text = "更新完成，Verjot 已重新打开。";
                 details.Text = MeetingFiles.Text(MeetingFiles.ReadJson(Path.Combine(Path.GetDirectoryName(plan), "result.json")), "cleanup_warning", "配置和个人资料已保留。");
             } catch (Exception error) {
                 status.Text = "更新未完成"; details.Text = error.Message;
-                action.Text = "打开 Verlog"; action.Visible = true;
+                action.Text = "打开 Verjot"; action.Visible = true;
                 // The original program may already have exited. The retained
                 // log/rollback paths are shown rather than silently retrying.
             } finally { installing = false; Busy(false); }
@@ -424,10 +425,10 @@ internal sealed class VerlogUpdateWindow : Form {
                 release = await Task.Run(delegate { return CheckRelease(DesktopServices.Version, useCli, cancel.Token); });
                 if (IsDisposed) return;
                 if (release == null) { status.Text = "当前没有可安装的新版本。"; details.Text = "已安装 " + DesktopServices.Version + "。只显示已发布、带 x64 安装包和 SHA256 摘要的新版本；代码提交不等于可安装发布。"; action.Text = "重新检查"; }
-                else { status.Text = "可更新至 " + release.Version; details.Text = "下载约 " + (release.Bytes / 1048576.0).ToString("F1") + " MB，校验后将在此窗口完成安装并重新打开 Verlog。\r\n\r\n" + release.Notes; action.Text = "下载并更新"; }
+                else { status.Text = "可更新至 " + release.Version; details.Text = "下载约 " + (release.Bytes / 1048576.0).ToString("F1") + " MB，校验后将在此窗口完成安装并重新打开 Verjot。\r\n\r\n" + release.Notes; action.Text = "下载并更新"; }
             } else {
                 if (downloaded == null) {
-                    directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Verlog", "updates", "update-" + Guid.NewGuid().ToString("N"));
+                    directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Verjot", "updates", "update-" + Guid.NewGuid().ToString("N"));
                     status.Text = "正在下载 " + release.Version + "…";
                     long last = 0;
                     downloaded = await Task.Run(delegate {
@@ -455,7 +456,7 @@ internal sealed class VerlogUpdateWindow : Form {
     }
     internal static int ApplyMode(string plan) {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-        using (var window = new VerlogUpdateWindow(null, plan)) Application.Run(window);
+        using (var window = new VerjotUpdateWindow(null, plan)) Application.Run(window);
         return 0;
     }
     protected override void Dispose(bool disposing) {

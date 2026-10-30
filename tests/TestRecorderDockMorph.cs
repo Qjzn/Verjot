@@ -80,7 +80,7 @@ internal static class TestRecorderDockMorph {
         Pump(50); // Capture a presented native tree, not just a stopped timer.
         int dpi=panel.DeviceDpi;
         Console.WriteLine("External capture begin: mode="+RecorderMotionPreferences.Mode+"; bounds="+panel.Bounds);
-        string readyName="Local\\Verlog-capture-"+Guid.NewGuid().ToString("N");
+        string readyName="Local\\Verjot-capture-"+Guid.NewGuid().ToString("N");
         using(var ready=new EventWaitHandle(false,EventResetMode.ManualReset,readyName)) {
         var start=new ProcessStartInfo(Application.ExecutablePath,"--capture-window "+panel.Handle.ToInt64()+" "+panel.Width+" "+panel.Height+" "+readyName) {UseShellExecute=false,CreateNoWindow=true};
         using(var child=Process.Start(start)) {
@@ -115,7 +115,7 @@ internal static class TestRecorderDockMorph {
     }
     static void LogoAnchorChecks(string output) {
         foreach (Screen screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
-            panel.EnableSharedDock(); panel.ShowStatus("Verlog", "ready"); panel.Show(); Pump(60);
+            panel.EnableSharedDock(); panel.ShowStatus("Verjot", "ready"); panel.Show(); Pump(60);
             panel.Location = new Point(screen.WorkingArea.Left + 300, screen.WorkingArea.Top + 200); Pump(60);
             var timer = (System.Windows.Forms.Timer)Field(panel,"dockAnimation");
             PointF origin = WorldLogo(panel); IntPtr handle = panel.Handle;
@@ -204,7 +204,7 @@ internal static class TestRecorderDockMorph {
     }
     static void NativeChecks(string output) {
         foreach (Screen screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
-            panel.EnableSharedDock(); panel.ShowStatus("Verlog", "ready"); panel.Show(); Pump(60);
+            panel.EnableSharedDock(); panel.ShowStatus("Verjot", "ready"); panel.Show(); Pump(60);
             int unit = (int)Math.Round(40 * panel.DeviceDpi / 96.0);
             panel.Location = new Point(screen.WorkingArea.Left + 120, screen.WorkingArea.Top + 120); Pump(60);
             unit = (int)Math.Round(40 * panel.DeviceDpi / 96.0);
@@ -237,7 +237,7 @@ internal static class TestRecorderDockMorph {
             panel.SetDockExpanded(false); Pump(48); double before = ((RecorderDockSpring)Field(panel, "dockWidth")).Value;
             panel.SetDockExpanded(true); double after = ((RecorderDockSpring)Field(panel, "dockWidth")).Value;
             Check(before == after && timer.Enabled, "Rapid reentry retargets the current shape without restarting at the logo"); WaitForRest(panel);
-            panel.ShowStatus("Verlog", "ready"); panel.SetDockExpanded(true); WaitForRest(panel);
+            panel.ShowStatus("Verjot", "ready"); panel.SetDockExpanded(true); WaitForRest(panel);
             Check(panel.Width == (int)Math.Round(186*panel.DeviceDpi/96.0) && panel.Height == (int)Math.Round(68*panel.DeviceDpi/96.0), "Idle and attention share one header-and-actions layout");
             panel.SetDockExpanded(false); WaitForRest(panel);
             Check(panel.Width == unit && !timer.Enabled, "Collapse is shorter than expansion and leaves no running frame timer");
@@ -271,7 +271,7 @@ internal static class TestRecorderDockMorph {
     }
     static void ReviewChecks(string output) {
         foreach (Screen screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
-            panel.EnableSharedDock(); panel.ShowStatus("Verlog", "ready"); panel.Show(); Pump(70);
+            panel.EnableSharedDock(); panel.ShowStatus("Verjot", "ready"); panel.Show(); Pump(70);
             Point point = new Point(screen.WorkingArea.Left + 140, screen.WorkingArea.Top + 140);
             if (new Rectangle(point, new Size(500, 220)).Contains(Cursor.Position)) point.Y = screen.WorkingArea.Bottom - 260;
             panel.Location = point; Pump(60); IntPtr handle = panel.Handle;
@@ -382,7 +382,7 @@ internal static class TestRecorderDockMorph {
     }
     static void CheckSharedLayout(RecorderPanel panel) {
         Control[] controls={panel.BrandMark,panel.BrandTitle,panel.Time,panel.AudioLevel,panel.Heading,panel.Detail,panel.AudioFile,panel.TranscriptFile,panel.MicrophoneButton,panel.StopButton,panel.QuickNoteButton,panel.StartButton,panel.SettingsButton};
-        Check(panel.BrandTitle.Visible && panel.BrandTitle.Text=="Verlog" && !panel.Heading.Visible && !panel.Detail.Visible,"All shared states retain the brand header without persistent small status text");
+        Check(panel.BrandTitle.Visible && panel.BrandTitle.Text=="Verjot" && !panel.Heading.Visible && !panel.Detail.Visible,"All shared states retain the brand header without persistent small status text");
         Check(typeof(RecorderPanel).GetField("CollapseButton")==null,"There is no extra close or collapse icon");
         for(int i=0;i<controls.Length;i++) if(controls[i].Visible) {
             Check(panel.ClientRectangle.Contains(controls[i].Bounds),"Visible control fits the compact panel: "+controls[i].GetType().Name);

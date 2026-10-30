@@ -72,6 +72,6 @@ try {
     exit 0
 } catch {
     # Do not include captured content, meeting titles, credentials or config.
-    Write-Output 'Cannot safely upgrade or uninstall. Close Verlog, wait for workers, and check session states and file permissions. No process or data was changed.'
+    Write-Output 'Cannot safely upgrade or uninstall. Close Verjot, wait for workers, and check session states and file permissions. No process or data was changed.'
     exit 1
 }

@@ -141,7 +141,7 @@ def meeting_folder(config: dict):
 
 
 def named_output_layout(metadata: dict):
-    return metadata.get("output_layout") in ("Verlog-v1", "verbit-v1")
+    return metadata.get("output_layout") in ("Verjot-v1", "verbit-v1", "Verlog-v1")
 
 
 def audio_output_path(session: Path, vault: Path, metadata: dict, config=None):
@@ -150,7 +150,7 @@ def audio_output_path(session: Path, vault: Path, metadata: dict, config=None):
     if audio_format not in ("wav", "mp3"):
         raise ValueError("会议录音格式必须为 wav 或 mp3")
     basename = metadata.get("output_basename") if named_output_layout(metadata) else None
-    prefix = "verbit" if metadata.get("output_layout") == "verbit-v1" else "Verlog"
+    prefix = {"verbit-v1": "verbit", "Verlog-v1": "Verlog"}.get(metadata.get("output_layout"), "Verjot")
     if basename is not None and (not isinstance(basename, str) or not re.fullmatch(prefix + r"[0-9]{12}(?:-[0-9]{2,})?", basename)):
         raise ValueError("新版会议文件名无效")
     if named_output_layout(metadata) and basename is None:

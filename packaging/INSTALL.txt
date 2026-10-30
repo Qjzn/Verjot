@@ -1,4 +1,4 @@
-Verlog · Windows x64
+Verjot · Windows x64
 
 需要 Windows 10 1809+ / Windows 11 x64 和 .NET Framework 4.8。
 速记、录音和新 API 转写无需 Python、模型或开发环境。
@@ -6,7 +6,7 @@ Verlog · Windows x64
 
 首次设置选择保存目录和快捷键，默认仅录音：
 Ctrl+Alt+J 速记；Ctrl+Alt+L 开始/结束；Alt+Space 只暂停麦克风。
-新会议：保存目录/Verlog/Verlog年月日时分/，MP3 和转写 Markdown 同名。
+新会议：保存目录/Verjot/Verjot年月日时分/，MP3 和转写 Markdown 同名。
 同分钟重录自动加序号，不覆盖旧文件。自定义会议子目录保留。
 
 需要转写时在设置中选配第三方 /audio/transcriptions 地址、模型 ID

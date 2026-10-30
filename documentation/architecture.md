@@ -1,9 +1,9 @@
 # 架构与边界
 
-> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `Verlog年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `Verjot年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 
 
-Verlog 是当前 Windows 用户的桌面工具：.NET Framework 4.8 / WinForms / RichEdit 处理托盘、快捷键、速记和 WASAPI 采集；原生后台进程负责 MP3 导出、可选 API 转写及成品发布，不依赖 Python。Python worker 仅保留历史会议和研究流程兼容；桌面入口不再自动连接本地模型。没有远端账户、数据库或服务端授权系统。
+Verjot 是当前 Windows 用户的桌面工具：.NET Framework 4.8 / WinForms / RichEdit 处理托盘、快捷键、速记和 WASAPI 采集；原生后台进程负责 MP3 导出、可选 API 转写及成品发布，不依赖 Python。Python worker 仅保留历史会议和研究流程兼容；桌面入口不再自动连接本地模型。没有远端账户、数据库或服务端授权系统。
 
 以下桌面、转写与配置文件在源码仓库的 `src/`，测试在 `tests/`。源码版进入 `src/` 安装和运行；EXE 安装版保留平铺的程序目录，安装步骤不追加 `src`。仓库根目录只展示产品说明与政策文件。
 

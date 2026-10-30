@@ -1,6 +1,6 @@
 # 配置与密钥
 
-> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `Verlog年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `Verjot年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 
 
 完整字段、默认值和约束以 [配置说明](configuration.md)、`config.schema.json` 为准。安装包只有配置模板，没有开发者的 `config.json` 或服务密钥。
@@ -15,6 +15,6 @@
 | `api_base_url`、`api_model` | 配置；`NativeAudioExport.cs`，历史兼容 `api_asr.py` | 决定音频提交目的地，远端应使用 HTTPS；普通聊天接口不能替代语音接口。 |
 | `api_key_env` / `TINGJI_API_KEY` | 配置只存变量名，原生流程每次转写时读取 Windows 用户环境变量，兼容进程环境 | 更换/撤销在服务商完成，再更新环境变量；原生 API 无需重启，历史 Python 流程需重启。不把值写入配置、截图、Issue 或日志。 |
 | `TINGJI_FFMPEG_EXE` | 用户环境；本地编码 | 显式指定可执行文件来源，只使用可信 FFmpeg。 |
-| `VERLOG_GITHUB_TOKEN` | 可选的 Windows 用户环境变量；私有仓库更新 | 仅发往 GitHub API 的本仓库发布请求，不写配置/日志，不转发到资产存储跳转。公开仓库无需该变量；可在更新窗口主动选择本机已登录 `gh` 代替。 |
+| `VERJOT_GITHUB_TOKEN` | 可选的 Windows 用户环境变量；私有仓库更新 | 仅发往 GitHub API 的本仓库发布请求，不写配置/日志，不转发到资产存储跳转。公开仓库无需该变量；可在更新窗口主动选择本机已登录 `gh` 代替。 |
 
 发布前检查：模板没有密钥；包内没有个人配置；报告/截图没有私人路径；API 目的地由使用者确认。配置文件和环境变量不构成加密保险箱。

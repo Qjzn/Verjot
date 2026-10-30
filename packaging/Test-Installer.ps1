@@ -13,10 +13,10 @@ $taskValidationRoot = [IO.Path]::GetFullPath((Join-Path $taskRoot 'validation'))
 if (-not $taskTestRoot.StartsWith($taskValidationRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Test root must stay under this repository validation folder.' }
 $taskApp = Join-Path $taskTestRoot 'app'
 $taskNotes = Join-Path $taskTestRoot 'notes'
-$taskGroup = 'Verlog validation ' + [Guid]::NewGuid().ToString('N')
-$taskMenu = Join-Path ([Environment]::GetFolderPath('Programs')) ($taskGroup + '\Verlog.lnk')
-if (Test-Path -LiteralPath (Split-Path -Parent $taskMenu)) { throw 'Existing Verlog Start Menu group found. Run in a disposable profile; existing entries will not be overwritten by a test.' }
-$taskStartup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Verlog installed.lnk'
+$taskGroup = 'Verjot validation ' + [Guid]::NewGuid().ToString('N')
+$taskMenu = Join-Path ([Environment]::GetFolderPath('Programs')) ($taskGroup + '\Verjot.lnk')
+if (Test-Path -LiteralPath (Split-Path -Parent $taskMenu)) { throw 'Existing Verjot Start Menu group found. Run in a disposable profile; existing entries will not be overwritten by a test.' }
+$taskStartup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Verjot installed.lnk'
 $taskStartupHash = if (Test-Path -LiteralPath $taskStartup) { (Get-FileHash -LiteralPath $taskStartup).Hash } else { '' }
 $taskUtf8 = New-Object Text.UTF8Encoding($false)
 $taskAssertions = 0
@@ -42,11 +42,11 @@ function Read-Registration {
 function Get-ExistingEntriesSnapshot {
     $taskItems = @()
     foreach ($taskFolder in @([Environment]::GetFolderPath('Startup'), [Environment]::GetFolderPath('Programs'))) {
-        $taskPath = Join-Path $taskFolder 'Verlog.lnk'
+        $taskPath = Join-Path $taskFolder 'Verjot.lnk'
         $taskItems += [ordered]@{ path = $taskPath; hash = $(if (Test-Path -LiteralPath $taskPath -PathType Leaf) { (Get-FileHash -LiteralPath $taskPath).Hash } else { '' }) }
     }
-    foreach ($taskName in @('Verlog.lnk', '安装与使用说明.lnk')) {
-        $taskPath = Join-Path ([Environment]::GetFolderPath('Programs')) ('Verlog\' + $taskName)
+    foreach ($taskName in @('Verjot.lnk', '安装与使用说明.lnk')) {
+        $taskPath = Join-Path ([Environment]::GetFolderPath('Programs')) ('Verjot\' + $taskName)
         $taskItems += [ordered]@{ path = $taskPath; hash = $(if (Test-Path -LiteralPath $taskPath -PathType Leaf) { (Get-FileHash -LiteralPath $taskPath).Hash } else { '' }) }
     }
     $taskProtocolKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes\pianyan')
@@ -77,7 +77,7 @@ try {
         Assert-Installer (Test-Path -LiteralPath (Join-Path $taskApp $taskRequired) -PathType Leaf) "Required installed file missing: $taskRequired"
     }
     $taskRegistration = Read-Registration
-    Assert-Installer ($null -ne $taskRegistration -and $taskRegistration.name -eq 'Verlog' -and $taskRegistration.location.TrimEnd('\') -ieq $taskApp) 'Per-user uninstall registration does not identify this exact isolated app.'
+    Assert-Installer ($null -ne $taskRegistration -and $taskRegistration.name -eq 'Verjot' -and $taskRegistration.location.TrimEnd('\') -ieq $taskApp) 'Per-user uninstall registration does not identify this exact isolated app.'
     $taskOtherApp = Join-Path $taskTestRoot 'other-app'
     Assert-Installer ((Invoke-Installer $taskInstaller @(('/DIR="' + $taskOtherApp + '"'), '/NOICONS', '/TASKS=""') 'reject-directory-change') -ne 0) 'Same AppId was installed to a second directory.'
     Assert-Installer (-not (Test-Path -LiteralPath (Join-Path $taskOtherApp 'ObsidianMeeting.exe'))) 'Rejected directory change still installed files.'

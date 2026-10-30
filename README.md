@@ -1,14 +1,14 @@
-<p align="center"><img src="assets/Verlog-logo.png" width="80" alt="Verlog Logo"></p>
+<p align="center"><img src="assets/Verjot-logo.png" width="80" alt="Verjot Logo"></p>
 
-# Verlog
+# Verjot
 
 **随手记下想法，安心留下会议。** Windows 上的轻量速记与会议录音工具。
 
 默认仅录音，笔记与音频保存在本机。无需 Python、模型、GPU 或 Obsidian；需要文字时，再连接你选择的音频转写 API。
 
-[下载安装包](https://github.com/Qjzn/Verlog/releases/tag/v0.1.0-beta.38) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
+[下载安装包](https://github.com/Qjzn/Verjot/releases/tag/v0.1.0-beta.38) · [五分钟上手](documentation/install-windows.md) · [配置说明](documentation/configuration.md) · [更新记录](documentation/changelog.md)
 
-项目已更名为 **Verlog（片言）**，Logo 保持不变。当前已发布版本仍为 **0.1.0-beta.38 · Windows x64 测试版**，其安装资产保留历史文件名 `verbit-0.1.0-beta.38-setup-x64.exe`；源码提供 beta.40 更名候选，未发布，区别见[更新记录](documentation/changelog.md)。仓库仍为私有，以上下载入口需要仓库访问权限。
+项目已更名为 **Verjot（片言）**，Logo 保持不变。当前已发布版本仍为 **0.1.0-beta.38 · Windows x64 测试版**，其安装资产保留历史文件名 `verbit-0.1.0-beta.38-setup-x64.exe`；源码提供 beta.40 更名候选，未发布，区别见[更新记录](documentation/changelog.md)。仓库仍为私有，以上下载入口需要仓库访问权限。
 
 ## 能做什么
 
@@ -18,7 +18,7 @@
 - **恢复与重试**：处理失败保留恢复资料，不覆盖原笔记；可从最近会议检查具体原因。
 - **可选 API**：由你提供服务地址与模型，上传前确认。没有配置 API 也能正常速记和录音。
 
-## 为什么选择 Verlog
+## 为什么选择 Verjot
 
 适合想随手记事、保留会议原音，又不想先准备 AI 环境的 Windows 用户。
 
@@ -30,13 +30,13 @@
 | 文字和图片一起记 | 常用格式、圆点列表续写，粘贴截图、插入／拖入本地图片；图片可缩放并打开原图。 |
 | 阅读大小随手调 | 正文内按住 `Ctrl` 滚动鼠标滚轮，放大／缩小显示；不改写 Markdown 正文的字号。 |
 | 录音与 AI 分开 | 没有转写服务也可先留下 MP3；开关麦克风不打断电脑声，按需再配置音频转写 API。 |
-| 文件由自己掌握 | 速记用 Markdown 和本地图片，会议用 MP3；不绑定 Obsidian、专用云盘或 Verlog 账号。 |
+| 文件由自己掌握 | 速记用 Markdown 和本地图片，会议用 MP3；不绑定 Obsidian、专用云盘或 Verjot 账号。 |
 
-Verlog 的重点是便捷记录和可取走的文件。它没有内置会议总结模型，也不把未经人工核验的文字或说话人结果当作准确率优势。
+Verjot 的重点是便捷记录和可取走的文件。它没有内置会议总结模型，也不把未经人工核验的文字或说话人结果当作准确率优势。
 
 ## 界面预览
 
-以下是 Verlog beta.40 候选的原生窗口截图，使用演示文字和模拟输入电平，不包含真实会议或个人笔记；隔离桌面的系统标题栏可能与日常 Windows 主题不同。
+以下是 Verjot beta.40 候选的原生窗口截图，使用演示文字和模拟输入电平，不包含真实会议或个人笔记；隔离桌面的系统标题栏可能与日常 Windows 主题不同。
 
 <img src="assets/screenshots/recording.png" width="279" alt="录音浮窗：计时、输入电平、麦克风开关和结束">
 
@@ -77,10 +77,10 @@ Verlog 的重点是便捷记录和可取走的文件。它没有内置会议总�
 ├─ 速记/
 │  ├─ 2026-10-30.md
 │  └─ 图片/                 # 粘贴图片使用的附件，不是录音分轨
-└─ Verlog/
-   └─ Verlog202610301430/
-      ├─ Verlog202610301430.mp3
-      └─ Verlog202610301430.md # 转写成功才生成
+└─ Verjot/
+   └─ Verjot202610301430/
+      ├─ Verjot202610301430.mp3
+      └─ Verjot202610301430.md # 转写成功才生成
 ```
 
 会议按开始时间命名，同一分钟自动加序号，避免覆盖。已有用户的目录配置保留。默认 MP3 192 kbps，约 86 MB／小时；录制时无损分段占用额外临时空间，校验成功后自动清理。失败保留 `work/` 恢复资料，不要把它当成品目录，也不要在任务运行中手动删除。
@@ -91,7 +91,7 @@ Verlog 的重点是便捷记录和可取走的文件。它没有内置会议总�
 
 「设置 → 转写 → 录音＋转写」填写服务前缀、模型 ID 和密钥环境变量名。只兼容接受 MP3 的 multipart `POST /audio/transcriptions`；普通聊天或 Omni 模型不能仅靠填写模型名替代。具体步骤见[API 配置](documentation/install-windows.md#可选配置-api-转写)。
 
-默认不上传音频。主动转写时先确认去向；选择第三方服务就会把本场完整 MP3 发往该服务，本机 API 则由你部署和管理。服务的费用、文件上限、文字与说话人能力由供应方决定，Verlog 不自动识别人名、不保证中文或身份准确率。失败不自动循环上传，重试前先核对是否已计费。
+默认不上传音频。主动转写时先确认去向；选择第三方服务就会把本场完整 MP3 发往该服务，本机 API 则由你部署和管理。服务的费用、文件上限、文字与说话人能力由供应方决定，Verjot 不自动识别人名、不保证中文或身份准确率。失败不自动循环上传，重试前先核对是否已计费。
 
 ## 更新与已知边界
 
@@ -101,8 +101,8 @@ Verlog 的重点是便捷记录和可取走的文件。它没有内置会议总�
 
 ## 开发与参与
 
-源码集中在 `src/`，主页只保留产品入口；测试在 `tests/`，说明在 `documentation/`，安装器在 `packaging/`。构建依赖、校验过的 NAudio 获取方式与原生回归命令见[贡献指南](CONTRIBUTING.md)和[CI](https://github.com/Qjzn/Verlog/blob/main/.github/workflows/ci.yml)。旧 Python／本地模型脚本仅用于兼容研究，不属于新用户安装步骤，不自动连接或下载模型。
+源码集中在 `src/`，主页只保留产品入口；测试在 `tests/`，说明在 `documentation/`，安装器在 `packaging/`。构建依赖、校验过的 NAudio 获取方式与原生回归命令见[贡献指南](CONTRIBUTING.md)和[CI](https://github.com/Qjzn/Verjot/blob/main/.github/workflows/ci.yml)。旧 Python／本地模型脚本仅用于兼容研究，不属于新用户安装步骤，不自动连接或下载模型。
 
 [架构](documentation/architecture.md) · [测试](documentation/tests.md) · [安全反馈](SECURITY.md) · [AI 安装说明](documentation/ai-install.md) · [开源检查](documentation/open-source-readiness.md)
 
-源码采用 [MIT](LICENSE)，随包依赖遵守各自许可，见[第三方说明](THIRD_PARTY_NOTICES.md)。项目已按维护者决定改名为 Verlog，中文片言和 Logo 不变；名称及图形的公开使用权仍须单独核验，源码许可不授予第三方商标权。公开仓库另行决定。
+源码采用 [MIT](LICENSE)，随包依赖遵守各自许可，见[第三方说明](THIRD_PARTY_NOTICES.md)。项目已按维护者决定改名为 Verjot，中文片言和 Logo 不变；名称及图形的公开使用权仍须单独核验，源码许可不授予第三方商标权。公开仓库另行决定。

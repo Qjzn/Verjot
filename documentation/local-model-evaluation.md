@@ -10,7 +10,7 @@
 | pyannote Community-1 | 完整分割、声纹、PLDA/VBx 聚类与说话时间线 | [官方权重与许可](https://huggingface.co/pyannote/speaker-diarization-community-1) | 独立环境依赖与导入通过；权重尚未下载、未运行模型。按用户安排先完成 FireRed 对照。 |
 | 3D-Speaker 默认完整流程 | FSMN VAD、CAM++ advanced 声纹、谱聚类与时间线 | [官方代码](https://github.com/modelscope/3D-Speaker) | 已完成整场独立对照；主要发言分组更集中，但短段缺标与麦克风身份问题未通过，未替换正式默认。 |
 
-Community-1 的权重使用 CC-BY-4.0，不能因为 Verlog 使用 MIT 就省略模型署名。其下载页面要求共享联系信息并接受相应条款；没有授权时停止该模型下载，不使用第三方镜像绕过。首次下载需要联网；完整下载后，推理只加载本地文件，不需要云端转写 Key。不要把账号密码、Hugging Face Token 放进应用配置或聊天。
+Community-1 的权重使用 CC-BY-4.0，不能因为 Verjot 使用 MIT 就省略模型署名。其下载页面要求共享联系信息并接受相应条款；没有授权时停止该模型下载，不使用第三方镜像绕过。首次下载需要联网；完整下载后，推理只加载本地文件，不需要云端转写 Key。不要把账号密码、Hugging Face Token 放进应用配置或聊天。
 
 ## 安装边界
 

@@ -1,6 +1,6 @@
 # LAME 3.100
 
-Verlog dynamically loads the unmodified `libmp3lame.32.dll` / `libmp3lame.64.dll`
+Verjot dynamically loads the unmodified `libmp3lame.32.dll` / `libmp3lame.64.dll`
 from NAudio.Lame 1.1.1's official NuGet package. The NAudio.Lame managed wrapper
 is not used or distributed. The encoder is LAME 3.100, copyright the LAME
 Project and contributors, under GNU Library General Public License version 2
@@ -17,13 +17,13 @@ and the source archive's COPYING, LICENSE and individual file notices.
 - Source archive SHA256: `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`
 
 The source contains Windows build projects in `vc_solution/`, as well as the
-upstream INSTALL instructions. Verlog does not modify the library. The pinned
+upstream INSTALL instructions. Verjot does not modify the library. The pinned
 build/download hashes verify the distributed files; compatible replacement
 libraries can be loaded at runtime by replacing the appropriate DLL while the
 application is closed. Debugging such modifications and reverse engineering
-for that purpose are permitted. Verlog's application source remains MIT.
+for that purpose are permitted. Verjot's application source remains MIT.
 
-Source builds of Verlog can restore the archive using
+Source builds of Verjot can restore the archive using
 `src/Restore-Encoder.ps1 -IncludeSource`. Preserve the archive and notices when
 redistributing the native DLLs. Do not silently package only a binary download
 URL in place of the accompanying source.

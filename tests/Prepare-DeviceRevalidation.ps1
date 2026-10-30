@@ -52,8 +52,8 @@ $taskArguments = @('/nologo', '/target:winexe', '/main:DeviceRevalidation', ('/o
     ('/win32manifest:' + (Join-Path $taskRoot 'src\app.manifest')),
     ('/resource:' + (Join-Path $taskRoot 'assets\tingji.ico') + ',Tingji.Idle.ico'),
     ('/resource:' + (Join-Path $taskRoot 'assets\tingji-recording.ico') + ',Tingji.Recording.ico'),
-    ('/resource:' + (Join-Path $taskRoot 'assets\github-mark.png') + ',Verlog.GitHub.png'),
-    ('/resource:' + (Join-Path $taskRoot 'assets\Verlog-logo.png') + ',Verlog.Logo.png'),
+    ('/resource:' + (Join-Path $taskRoot 'assets\github-mark.png') + ',Verjot.GitHub.png'),
+    ('/resource:' + (Join-Path $taskRoot 'assets\Verjot-logo.png') + ',Verjot.Logo.png'),
     $taskInstrumented, (Join-Path $taskRoot 'tests\DeviceRevalidation.cs')) + $taskSources
 & $taskCompiler @taskArguments
 if ($LASTEXITCODE -ne 0) { throw 'Isolated probe compilation failed.' }

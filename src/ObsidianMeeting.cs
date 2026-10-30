@@ -13,13 +13,13 @@ using System.Windows.Forms;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
-[assembly: System.Reflection.AssemblyTitle("Verlog")]
-[assembly: System.Reflection.AssemblyProduct("Verlog")]
+[assembly: System.Reflection.AssemblyTitle("Verjot")]
+[assembly: System.Reflection.AssemblyProduct("Verjot")]
 [assembly: System.Reflection.AssemblyDescription("轻量中文会议录音与转写")]
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
 
 internal static class MeetingBrand {
-    public const string Name = "Verlog";
+    public const string Name = "Verjot";
     public static readonly Icon IdleIcon = LoadIcon("Tingji.Idle.ico", SystemInformation.SmallIconSize.Width);
     public static readonly Icon RecordingIcon = LoadIcon("Tingji.Recording.ico", SystemInformation.SmallIconSize.Width);
     public static Bitmap LogoBitmap(int pixels) {
@@ -33,7 +33,7 @@ internal static class MeetingBrand {
     }
     static Icon LoadIcon(string resource, int pixels) {
         using (var stream = typeof(MeetingBrand).Assembly.GetManifestResourceStream(resource)) {
-            if (stream == null) throw new IOException("Verlog图标资源缺失，请运行 Build.ps1 重新构建。");
+            if (stream == null) throw new IOException("Verjot图标资源缺失，请运行 Build.ps1 重新构建。");
             using (var icon = new Icon(stream, new Size(pixels, pixels))) return (Icon)icon.Clone();
         }
     }
@@ -114,7 +114,7 @@ internal static class MeetingConfig {
     }
     public static Dictionary<string, object> Validate(Dictionary<string, object> config, bool requireApiKey = true) {
         var schema = MeetingFiles.ReadJson(Path.Combine(MeetingFiles.Home, "config.schema.json"));
-        if (!schema.ContainsKey("properties")) throw new IOException("缺少 config.schema.json，请保留完整Verlog源码目录。");
+        if (!schema.ContainsKey("properties")) throw new IOException("缺少 config.schema.json，请保留完整Verjot源码目录。");
         var properties = (Dictionary<string, object>)schema["properties"];
         if (config == null) throw new InvalidOperationException("config.json 顶层必须是对象。");
         foreach (string key in config.Keys) if (!properties.ContainsKey(key)) throw new InvalidOperationException("未知配置字段：" + key);
@@ -1030,7 +1030,7 @@ internal sealed class RecordingSession : IDisposable {
         Directory.CreateDirectory(DirectoryPath); MeetingConfig.CheckOrdinaryPath(DirectoryPath);
         string outputName = MeetingArtifacts.AvailableName(config, started);
         metadata = new Dictionary<string, object> {
-            { "output_basename", outputName }, { "output_layout", "Verlog-v1" },
+            { "output_basename", outputName }, { "output_layout", "Verjot-v1" },
             { "schema_version", 2 }, { "start_time", started.ToString("o") }, { "state", "recording" },
             { "storage_mode", "minimal" }, { "audio_output_dir", Path.GetFullPath(Path.Combine(MeetingFiles.VaultRoot(config), MeetingFiles.Text(config, "meeting_folder", "会议记录"), outputName)) },
             { "note_link_style", (bool)config["open_in_obsidian"] ? "wiki" : "markdown" },
@@ -1432,9 +1432,9 @@ internal sealed class RecorderActionButton : Button {
             ? (pressed ? Color.FromArgb(171, 34, 45) : hovering ? Color.FromArgb(191, 42, 54) : Color.FromArgb(216, 57, 69))
             : MicrophoneDisabled ? (pressed ? Color.FromArgb(240, 224, 200) : hovering ? Color.FromArgb(247, 235, 215) : Color.FromArgb(250, 243, 232))
             : pressed ? Color.FromArgb(205, 226, 253) : (hovering || InputActive ? Color.FromArgb(221, 236, 254) : Color.FromArgb(237, 245, 255));
-        if (QuickAction != null) fill = unavailable ? BackColor : pressed ? Color.FromArgb(205, 226, 253) : hovering ? VerlogUi.Hover : BackColor;
+        if (QuickAction != null) fill = unavailable ? BackColor : pressed ? Color.FromArgb(205, 226, 253) : hovering ? VerjotUi.Hover : BackColor;
         Color ink = unavailable ? Color.FromArgb(158, 165, 177) : EndsRecording ? Color.FromArgb(132, 25, 34) : MicrophoneDisabled ? Color.FromArgb(139, 90, 31) : InputActive ? Color.FromArgb(31, 126, 220) : Color.FromArgb(40, 104, 168);
-        if (QuickAction != null) ink = !Enabled ? SystemColors.GrayText : pressed || hovering ? VerlogUi.Accent : VerlogUi.Muted;
+        if (QuickAction != null) ink = !Enabled ? SystemColors.GrayText : pressed || hovering ? VerjotUi.Accent : VerjotUi.Muted;
         Color border = unavailable ? Color.FromArgb(225, 230, 237) : MicrophoneDisabled ? Color.FromArgb(233, 210, 175) : InputActive ? Color.FromArgb(78, 159, 235) : Color.FromArgb(188, 215, 243);
         float nextInput = InputActive && !unavailable && !MicrophoneDisabled ? (float)Math.Max(0, Math.Min(1, (Math.Log10(inputLevel) + 2.7) / 2.2)) : 0;
         float nextScale = pressed && Enabled ? .95f : 1;
@@ -1480,7 +1480,7 @@ internal sealed class RecorderActionButton : Button {
             float quickUnit = Math.Min(Width, Height) / 32f;
             g.TranslateTransform((Width - 32 * quickUnit) / 2, (Height - 32 * quickUnit) / 2);
             g.ScaleTransform(quickUnit, quickUnit);
-            VerlogUi.ToolBackground(g, new Rectangle(0, 0, 32, 32), BackColor, visualFill, 1, 96);
+            VerjotUi.ToolBackground(g, new Rectangle(0, 0, 32, 32), BackColor, visualFill, 1, 96);
             using (var pen = new Pen(visualInk, 1.65f)) {
                 pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
                 pen.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
@@ -1675,15 +1675,15 @@ internal sealed class RecorderNotice : Form {
     protected override CreateParams CreateParams { get { var p = base.CreateParams; p.ExStyle |= 0x08000080; return p; } }
     internal RecorderNotice() {
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; AutoScaleMode = AutoScaleMode.None;
-        StartPosition = FormStartPosition.Manual; BackColor = VerlogUi.Surface; DoubleBuffered = true;
+        StartPosition = FormStartPosition.Manual; BackColor = VerjotUi.Surface; DoubleBuffered = true;
         Controls.AddRange(new Control[] { Caption, LocationText });
         foreach (Control surface in new Control[] { this, Caption, LocationText }) surface.Click += delegate { ActivateNotice(); };
         dismiss.Tick += delegate { Hide(); };
     }
     internal void Present(string caption, string location, Action action, Rectangle anchor, int dpi) {
         dismiss.Stop(); clicked = action;
-        Caption.Text = caption; Caption.ForeColor = VerlogUi.Ink;
-        LocationText.Text = location; LocationText.ForeColor = VerlogUi.Muted;
+        Caption.Text = caption; Caption.ForeColor = VerjotUi.Ink;
+        LocationText.Text = location; LocationText.ForeColor = VerjotUi.Muted;
         AccessibleName = caption; AccessibleDescription = location;
         Cursor = action == null ? Cursors.Default : Cursors.Hand;
         tip.SetToolTip(LocationText, location);
@@ -1725,7 +1725,7 @@ internal sealed class RecorderNotice : Form {
         base.OnPaint(e);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         int d = (int)Math.Round(20 * noticeDpi / 96.0);
-        using (var path = new System.Drawing.Drawing2D.GraphicsPath()) using (var pen = new Pen(VerlogUi.Border)) {
+        using (var path = new System.Drawing.Drawing2D.GraphicsPath()) using (var pen = new Pen(VerjotUi.Border)) {
             path.AddArc(.5f, .5f, d, d, 180, 90); path.AddArc(Width - d - 1.5f, .5f, d, d, 270, 90);
             path.AddArc(Width - d - 1.5f, Height - d - 1.5f, d, d, 0, 90); path.AddArc(.5f, Height - d - 1.5f, d, d, 90, 90); path.CloseFigure();
             e.Graphics.DrawPath(pen, path);
@@ -1750,7 +1750,7 @@ internal sealed class RecorderPanel : Form {
     public readonly RecorderActionButton QuickNoteButton = new RecorderActionButton { QuickAction = "note", Visible = false };
     public readonly RecorderActionButton StartButton = new RecorderActionButton { QuickAction = "record", Visible = false };
     public readonly RecorderActionButton SettingsButton = new RecorderActionButton { QuickAction = "settings", Visible = false };
-    public readonly QuickNoteHeaderButton CloseButton = new QuickNoteHeaderButton { ActionIcon = "close", Cursor = Cursors.Hand, ForeColor = VerlogUi.Muted };
+    public readonly QuickNoteHeaderButton CloseButton = new QuickNoteHeaderButton { ActionIcon = "close", Cursor = Cursors.Hand, ForeColor = VerjotUi.Muted };
     public readonly PictureBox BrandMark = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom };
     public readonly Label BrandTitle = new RecorderBrandLabel();
     public readonly RecordingLevelIndicator AudioLevel = new RecordingLevelIndicator();
@@ -1855,7 +1855,7 @@ internal sealed class RecorderPanel : Form {
             link.LinkBehavior = LinkBehavior.HoverUnderline;
             link.LinkColor = Color.FromArgb(42, 94, 150);
             link.ActiveLinkColor = Color.FromArgb(25, 63, 110);
-            var copyMenu = new VerlogMenu();
+            var copyMenu = new VerjotMenu();
             LinkLabel captured = link;
             copyMenu.Items.Add("复制完整路径", null, delegate {
                 string path = captured.Tag as string;
@@ -2521,7 +2521,7 @@ internal sealed class RecorderPanel : Form {
             }
         }
         using (var path = Rounded(new RectangleF(.5f, .5f, ClientSize.Width - 1, ClientSize.Height - 1), Math.Max(1, PanelRadius - .5f)))
-        using (var pen = new Pen(VerlogUi.Border, 1)) g.DrawPath(pen, path);
+        using (var pen = new Pen(VerjotUi.Border, 1)) g.DrawPath(pen, path);
         if (processingBusy && (!sharedDock || dockExpanded && !dockAnimation.Enabled)) {
             float scaleX = ClientSize.Width / 186f, scaleY = ClientSize.Height / 68f;
             // Detail occupies logical rows 45..63. Keep the activity strip
@@ -2874,7 +2874,7 @@ internal sealed class MeetingContext : ApplicationContext {
     readonly List<TranscriptionJob> jobs = new List<TranscriptionJob>();
     readonly ToolStripMenuItem toggle = new ToolStripMenuItem("开始录音");
     readonly ToolStripMenuItem pauseMicrophone = new ToolStripMenuItem("暂停麦克风");
-    readonly ToolStripMenuItem summary = new ToolStripMenuItem("Verlog已就绪") { Enabled = false };
+    readonly ToolStripMenuItem summary = new ToolStripMenuItem("Verjot已就绪") { Enabled = false };
     readonly ToolStripMenuItem recent = new ToolStripMenuItem("最近会议");
     readonly ToolStripMenuItem bookmark = new ToolStripMenuItem("标记重点") { Name = "bookmark", Enabled = false };
     readonly ToolStripMenuItem rename = new ToolStripMenuItem("命名这场会议…") { Name = "rename", Enabled = false };
@@ -2918,7 +2918,7 @@ internal sealed class MeetingContext : ApplicationContext {
         hotkey.QuickNotePressed += ToggleQuickNote;
         hotkey.ExitRequested += RequestExit;
         hotkey.ShowRequested += ShowPanel;
-        var menu = new VerlogMenu();
+        var menu = new VerjotMenu();
         panel.ContextMenuStrip = menu;
         var quickNoteItem = new ToolStripMenuItem("速记便签 · " + QuickNoteHotkey) { Name = "quickNote" };
         quickNoteItem.Click += delegate { ToggleQuickNote(); };
@@ -2963,7 +2963,7 @@ internal sealed class MeetingContext : ApplicationContext {
         menu.Items.Add("设置…", null, delegate { OpenSettings(); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, delegate { RequestExit(); });
-        tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "Verlog · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
+        tray = new NotifyIcon { Icon = MeetingBrand.IdleIcon, Text = "Verjot · " + StartHotkey, ContextMenuStrip = menu, Visible = true };
         tray.DoubleClick += delegate { ShowPanel(); };
         panel.StopButton.Click += delegate { Stop(); };
         panel.MicrophoneButton.Click += delegate { ToggleMicrophone(); };
@@ -2976,7 +2976,7 @@ internal sealed class MeetingContext : ApplicationContext {
         panel.SetQuickActionHotkeys(QuickNoteHotkey, StartHotkey);
         panel.Time.Text = "00:00";
         panel.DevicesTip.SetToolTip(panel.StopButton, "结束录音 · " + StartHotkey);
-        panel.ShowStatus("Verlog已就绪", StartHotkey + " 开始录制");
+        panel.ShowStatus("Verjot已就绪", StartHotkey + " 开始录制");
         timer = new System.Windows.Forms.Timer { Interval = 500 };
         timer.Tick += delegate { Tick(); MaybeCheckUpdates(); };
         RestoreSessions();
@@ -2990,7 +2990,7 @@ internal sealed class MeetingContext : ApplicationContext {
         lastUpdateCheck = DateTime.UtcNow; checkingUpdate = true;
         try {
             string message = await System.Threading.Tasks.Task.Run(delegate { return DesktopServices.CheckUpdates(); });
-            if (!exiting && message.StartsWith("发现新版本", StringComparison.Ordinal)) Notice("Verlog 有更新", message, ToolTipIcon.Info);
+            if (!exiting && message.StartsWith("发现新版本", StringComparison.Ordinal)) Notice("Verjot 有更新", message, ToolTipIcon.Info);
         } catch { /* Optional background checks never interrupt a meeting. Manual checks show errors. */ }
         finally { checkingUpdate = false; }
     }
@@ -3062,14 +3062,14 @@ internal sealed class MeetingContext : ApplicationContext {
         return null;
     }
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    string BeginUpdate(VerlogRelease release, string installer, string directory) {
+    string BeginUpdate(VerjotRelease release, string installer, string directory) {
         if (recording != null || jobs.Count > 0 || exiting || updating) return "请结束录音并等待转写完成后，再点击安装更新。已下载的安装包会保留。";
         if (settingsDialog != null && settingsDialog.HasPendingChanges) return "设置有未保存的修改，请先保存设置，再进行更新。";
         if (quickNote != null && !quickNote.IsDisposed && !quickNote.FlushAndClose()) return "速记正在保存或输入法尚未确认，请完成后再点击安装更新。";
         try {
             updating = true;
-            string plan = VerlogUpdateInstaller.Prepare(release, installer, directory);
-            VerlogUpdateInstaller.Launch(plan);
+            string plan = VerjotUpdateInstaller.Prepare(release, installer, directory);
+            VerjotUpdateInstaller.Launch(plan);
             RequestExit(); return null;
         } catch (Exception failure) { updating = false; return failure.Message; }
     }
@@ -3085,7 +3085,7 @@ internal sealed class MeetingContext : ApplicationContext {
             quickNote.Toggle();
         } catch (Exception error) { MeetingFiles.Log(error); Notice("无法打开速记便签", error.Message, ToolTipIcon.Warning); }
     }
-    void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "Verlog · " + title, message, icon); }
+    void Notice(string title, string message, ToolTipIcon icon) { tray.ShowBalloonTip(5000, "Verjot · " + title, message, icon); }
     void ShowReceipt(string title, string detail, Action action) {
         if (exiting || updating) return;
         if (receipt == null || receipt.IsDisposed) receipt = new RecorderNotice();
@@ -3436,7 +3436,7 @@ internal sealed class MeetingContext : ApplicationContext {
                         launch_time_utc = attemptStarted.ToString("o"), previous_status_write_time_utc = previousStatus.ToString("o")
                     });
                 } catch (Exception fallbackError) { MeetingFiles.Log(fallbackError); }
-                Notice("进度信息保存异常", "转写仍在进行，请等待这场完成后退出Verlog；原始资料已保留。", ToolTipIcon.Warning);
+                Notice("进度信息保存异常", "转写仍在进行，请等待这场完成后退出Verjot；原始资料已保留。", ToolTipIcon.Warning);
             }
             SaveLastSessionWithAttempt(session, process, attemptStarted, previousStatus);
             if (recording == null) { focusedSession = session; focusedRecord = catalog.Get(session); }
@@ -3542,7 +3542,7 @@ internal sealed class MeetingContext : ApplicationContext {
         rename.Enabled = recording == null && focusedRecord != null && focusedRecord.State == "completed" && !focusedRecord.WorkerAlive;
         if (recording != null) {
             string state = recording.Stopping ? "正在保存录音" : recording.RecordingPaused ? "整场已暂停" : recording.MicrophonePaused ? "麦克风已关闭 · 电脑声录制中" : "录音中";
-            string text = "Verlog · " + state + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
+            string text = "Verjot · " + state + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
             summary.Text = text; SetTrayText(text);
             return;
         }
@@ -3553,7 +3553,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     string label = focusedRecord == null ? Path.GetFileName(focusedSession) : focusedRecord.Label;
                     panel.ShowWorking(title, label);
                     summary.Text = label + " · " + title + (jobs.Count > 1 ? " · 后台 " + jobs.Count + " 场" : "");
-                    SetTrayText("Verlog · " + summary.Text); return;
+                    SetTrayText("Verjot · " + summary.Text); return;
                 }
             }
             {
@@ -3562,7 +3562,7 @@ internal sealed class MeetingContext : ApplicationContext {
                     MeetingFiles.Log(error);
                     panel.ShowAttention("会议资料需要检查", "资料未修改，请检查 work 中对应场次");
                     summary.Text = "会议资料需要检查" + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
-                    SetTrayText("Verlog · " + summary.Text); return;
+                    SetTrayText("Verjot · " + summary.Text); return;
                 }
             }
             if (focusedRecord != null && focusedRecord.State == "removed") {
@@ -3580,11 +3580,11 @@ internal sealed class MeetingContext : ApplicationContext {
                     panel.ShowAttention(title, focusedRecord.Label + " · " + focusedRecord.Message);
                 }
                 summary.Text = focusedRecord.Label + " · " + title + (jobs.Count > 0 ? " · 后台 " + jobs.Count + " 场" : "");
-                SetTrayText("Verlog · " + summary.Text); return;
+                SetTrayText("Verjot · " + summary.Text); return;
             }
         }
-        panel.ShowStatus(jobs.Count > 0 ? "后台转写中" : "Verlog已就绪", jobs.Count > 0 ? jobs.Count + " 场 · 可开始新会议" : StartHotkey + " 开始录制");
-        summary.Text = "Verlog已就绪"; SetTrayText("Verlog · " + StartHotkey);
+        panel.ShowStatus(jobs.Count > 0 ? "后台转写中" : "Verjot已就绪", jobs.Count > 0 ? jobs.Count + " 场 · 可开始新会议" : StartHotkey + " 开始录制");
+        summary.Text = "Verjot已就绪"; SetTrayText("Verjot · " + StartHotkey);
     }
     static string StateLabel(string state) {
         switch (state) {
@@ -3934,7 +3934,7 @@ internal static class Program {
     [STAThread]
     static int Main(string[] args) {
         try {
-            if (args.Length == 2 && args[0] == "--apply-update") return VerlogUpdateWindow.ApplyMode(Path.GetFullPath(args[1]));
+            if (args.Length == 2 && args[0] == "--apply-update") return VerjotUpdateWindow.ApplyMode(Path.GetFullPath(args[1]));
             if (args.Length == 2 && args[0] == "--export-audio") return NativeAudioExport.Run(args[1]);
             if (args.Length == 2 && args[0] == "--transcribe-api") return NativeApiTranscription.Run(args[1]);
             if (args.Length == 2 && args[0] == "--play-uri") {
@@ -3969,7 +3969,7 @@ internal static class Program {
                 MeetingFiles.WriteJson(Path.Combine(MeetingFiles.Home, "timeline-self-test.json"), new { passed = false, error = error.Message });
                 return 1;
             }
-            MessageBox.Show(error.Message, "Verlog", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(error.Message, "Verjot", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }

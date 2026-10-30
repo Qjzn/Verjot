@@ -40,7 +40,7 @@ internal static class TestRecorderPanel {
                         Color c=bitmap.GetPixel(x,y); if(c.R<120 && c.G<150 && c.B<180) ink++;
                     }
                 Console.WriteLine("Header ink="+ink+" text="+panel.BrandTitle.Text+" bounds="+panel.BrandTitle.Bounds+" font="+panel.BrandTitle.Font+" color="+panel.BrandTitle.ForeColor);
-                Check(ink>10,"Native header must visibly paint Verlog in every state: "+Path.GetFileName(filename));
+                Check(ink>10,"Native header must visibly paint Verjot in every state: "+Path.GetFileName(filename));
             }
             bitmap.Save(filename, System.Drawing.Imaging.ImageFormat.Png);
         }
@@ -75,7 +75,7 @@ internal static class TestRecorderPanel {
                 else if (state == "recording") panel.ShowRecording("Synthetic microphone", "Synthetic system audio");
                 else if (state == "processing") panel.ShowWorking("正在转写", "中文识别 · 23 / 80 段");
                 else if (state == "result") panel.ShowResult("synthetic", "C:\\Demo\\meeting.mp3", "C:\\Demo\\meeting.md", "C:\\Demo");
-                else panel.ShowStatus("Verlog 已就绪", "");
+                else panel.ShowStatus("Verjot 已就绪", "");
                 foreach (Screen screen in Screen.AllScreens) {
                     panel.Location = new Point(screen.WorkingArea.Left + 80, screen.WorkingArea.Top + 80);
                     for (int tick = 0; tick < 12; tick++) { Application.DoEvents(); System.Threading.Thread.Sleep(15); }
@@ -111,7 +111,7 @@ internal static class TestRecorderPanel {
         try {
             foreach (var screen in Screen.AllScreens) using (var panel = new RecorderPanel()) {
                 Console.WriteLine("SHARED enable " + screen.DeviceName);
-                panel.EnableSharedDock(); panel.ShowStatus("Verlog已就绪", "ready"); panel.Show(); Pump(80);
+                panel.EnableSharedDock(); panel.ShowStatus("Verjot已就绪", "ready"); panel.Show(); Pump(80);
                 Console.WriteLine("SHARED shown " + panel.Bounds);
                 panel.Location = new Point(screen.WorkingArea.Left + 80, screen.WorkingArea.Top + 80);
                 Console.WriteLine("SHARED move=" + panel.Location + "; anchor=" + typeof(RecorderPanel).GetField("dockAnchor", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel));
@@ -139,7 +139,7 @@ internal static class TestRecorderPanel {
                 int logoResizes = 0, actionMoves = 0;
                 panel.BrandMark.SizeChanged += delegate { logoResizes++; };
                 panel.QuickNoteButton.LocationChanged += delegate { actionMoves++; };
-                for (int i = 0; i < 5; i++) panel.ShowStatus("Verlog已就绪", "ready");
+                for (int i = 0; i < 5; i++) panel.ShowStatus("Verjot已就绪", "ready");
                 Check(logoResizes == 0 && actionMoves == 0, "Repeated idle polling must not resize the logo or move hovered actions");
                 Check(panel.Handle == handle && typeof(RecorderPanel).Assembly.GetType("QuickNoteCompact") == null, "No independent minimized-note form remains in the application");
                 panel.ShowRecording("Synthetic microphone", "Synthetic system"); SettleDock(panel);
@@ -166,7 +166,7 @@ internal static class TestRecorderPanel {
                 panel.ShowAttention("转写失败 · 可重试", "原录音和恢复资料保留"); panel.SetDockExpanded(true); SettleDock(panel);
                 Check(panel.Handle == handle && panel.Heading.Text.Contains("失败") && panel.QuickNoteButton.Visible, "Failure feedback and actions reuse the same shared window");
                 Snapshot(panel, Path.Combine(output, "shared-attention-" + panel.DeviceDpi + ".png"), true);
-                panel.ShowResult("synthetic", "C:\\Demo\\Verlog.mp3", "C:\\Demo\\Verlog.md", "C:\\Demo"); panel.SetDockExpanded(true); SettleDock(panel);
+                panel.ShowResult("synthetic", "C:\\Demo\\Verjot.mp3", "C:\\Demo\\Verjot.md", "C:\\Demo"); panel.SetDockExpanded(true); SettleDock(panel);
                 Check(!panel.AudioFile.Visible && !panel.TranscriptFile.Visible && panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible && panel.Handle == handle,
                     "Completed shared panel retains common actions without permanent path labels");
                 Check(panel.QuickNoteButton.Bottom <= panel.QuickNoteButton.Parent.Height - (int)Math.Round(8 * panel.DeviceDpi / 96.0), "Shared actions have an eight-logical-pixel bottom breathing space");
@@ -201,9 +201,9 @@ internal static class TestRecorderPanel {
                 Application.DoEvents();
                 Check(panel.ClientSize == new Size((int)Math.Round(186 * panel.DeviceDpi / 96.0), (int)Math.Round(68 * panel.DeviceDpi / 96.0)), "Panel must remain 186 x 68");
                 Check(panel.TopMost && !panel.ShowInTaskbar, "Panel must be topmost without a taskbar window");
-                Check(panel.BrandTitle.Text == "Verlog" && panel.BrandMark.Image != null, "The header must show the product logo and new name");
+                Check(panel.BrandTitle.Text == "Verjot" && panel.BrandMark.Image != null, "The header must show the product logo and new name");
                 Size nameSize = TextRenderer.MeasureText(panel.BrandTitle.Text, panel.BrandTitle.Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
-                Check(nameSize.Width <= panel.BrandTitle.ClientSize.Width && nameSize.Height <= panel.BrandTitle.ClientSize.Height, "The separate Verlog name must be fully readable without clipping");
+                Check(nameSize.Width <= panel.BrandTitle.ClientSize.Width && nameSize.Height <= panel.BrandTitle.ClientSize.Height, "The separate Verjot name must be fully readable without clipping");
                 Check(panel.BrandMark.Right < panel.BrandTitle.Left, "The logo and name must remain independent, non-overlapping elements");
                 Check(Math.Abs((panel.BrandMark.Left + panel.BrandTitle.Right) - panel.ClientSize.Width) <= 2, "The logo and name group must remain centered");
                 Check(panel.BrandMark.Image.Width >= panel.BrandMark.Width - 1 && panel.BrandMark.Image.Height >= panel.BrandMark.Height - 1, "The header must not upscale a smaller icon frame");
@@ -262,7 +262,7 @@ internal static class TestRecorderPanel {
                 Check(panel.ClientRectangle.Contains(panel.Heading.Bounds) && panel.ClientRectangle.Contains(panel.Detail.Bounds), "Processing labels must fit the compact panel");
                 Snapshot(panel, Path.Combine(output, "panel-processing.png"));
                 panel.SetQuickActionHotkeys("Ctrl+Shift+J", "Ctrl+Shift+L");
-                panel.ShowStatus("Verlog已就绪", "ready");
+                panel.ShowStatus("Verjot已就绪", "ready");
                 Check(panel.QuickNoteButton.Visible && panel.StartButton.Visible && panel.SettingsButton.Visible, "Idle must expose the three requested actions");
                 Check(!panel.Heading.Visible && !panel.Detail.Visible && !panel.StopButton.Visible, "Idle must show icons without redundant ready text");
                 Check(panel.DevicesTip.GetToolTip(panel.QuickNoteButton).Contains("Ctrl+Shift+J") && panel.DevicesTip.GetToolTip(panel.StartButton).Contains("Ctrl+Shift+L"), "Tooltips must follow configured hotkeys");
@@ -281,7 +281,7 @@ internal static class TestRecorderPanel {
                 int homeVisibilityChanges = 0;
                 panel.QuickNoteButton.VisibleChanged += delegate { homeVisibilityChanges++; };
                 panel.SettingsButton.VisibleChanged += delegate { homeVisibilityChanges++; };
-                for (int i = 0; i < 4; i++) panel.ShowStatus("Verlog已就绪", "ready");
+                for (int i = 0; i < 4; i++) panel.ShowStatus("Verjot已就绪", "ready");
                 Check(homeVisibilityChanges == 0, "Repeated idle polling must preserve native hover tracking without hiding icons");
                 panel.ShowAttention("录音已保存 · 待配置转写", "请在设置中配置本地模型；原始录音已保留");
                 Check(panel.SettingsButton.Visible && panel.StartButton.Visible && panel.QuickNoteButton.Visible && panel.Heading.Visible && !panel.Detail.Visible, "Untranscribed results must retain the quick actions and an explicit status");
@@ -325,7 +325,7 @@ internal static class TestRecorderPanel {
                 }
                 Rectangle anchor = new Rectangle(screen.WorkingArea.Right - 190, screen.WorkingArea.Top + 4, 186, 68);
                 IntPtr focused = GetForegroundWindow();
-                notice.Present("录音已保存，点击查看", "C:\\会议记录\\Verlog202610291235.mp3", delegate { clicks++; }, anchor, dpi); Pump(50);
+                notice.Present("录音已保存，点击查看", "C:\\会议记录\\Verjot202610291235.mp3", delegate { clicks++; }, anchor, dpi); Pump(50);
                 Check(GetForegroundWindow() == focused, "Showing a receipt never changes native foreground focus");
                 Check(notice.ClientSize == new Size((int)Math.Round(320 * notice.DeviceDpi / 96.0), (int)Math.Round(64 * notice.DeviceDpi / 96.0))
                     && notice.Caption.Font.Unit == GraphicsUnit.Pixel && Math.Abs(notice.Caption.Font.Size - 12f * notice.DeviceDpi / 96f) < .01,
@@ -343,7 +343,7 @@ internal static class TestRecorderPanel {
             IntPtr handle = notice.Handle;
             notice.Present("转写失败，点击重试", "接口超时，录音已保留", delegate { clicks++; }, editor.Bounds, editor.DeviceDpi);
             Pump(1600);
-            notice.Present("录音已保存，点击查看", "D:\\新会议\\Verlog.mp3", delegate { clicks += 10; }, editor.Bounds, editor.DeviceDpi);
+            notice.Present("录音已保存，点击查看", "D:\\新会议\\Verjot.mp3", delegate { clicks += 10; }, editor.Bounds, editor.DeviceDpi);
             Pump(1600); Check(notice.Visible && notice.Handle == handle, "A new receipt restarts the three-second lifetime on the same window");
             int before = clicks; Pump(1550);
             Check(!notice.Visible && !notice.PendingDismiss && clicks == before, "Three-second dismissal performs no file, retry or focus action and stops its timer");

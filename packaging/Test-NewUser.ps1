@@ -6,11 +6,11 @@ $taskRoot = Split-Path $PSScriptRoot -Parent
 $taskRegistration = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{DE124FA5-8E3D-4B80-A62E-AF8FA54B1E43}_is1'
 $taskExisting = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($taskRegistration)
 if ($taskExisting) { $taskExisting.Dispose(); throw 'An installer is already registered. Use a disposable profile; existing installations are never replaced.' }
-if (-not $InstallOnly -and (Get-Process -Name ObsidianMeeting -ErrorAction SilentlyContinue)) { throw 'Verlog is running. Finish meetings and exit normally before this isolated actual-EXE test.' }
+if (-not $InstallOnly -and (Get-Process -Name ObsidianMeeting -ErrorAction SilentlyContinue)) { throw 'Verjot is running. Finish meetings and exit normally before this isolated actual-EXE test.' }
 $taskFolder = Join-Path $taskRoot ('validation\new-user-' + [guid]::NewGuid().ToString('N'))
 $taskApp = Join-Path $taskFolder 'app'
 $taskNotes = Join-Path $taskFolder 'notes'
-$taskMenuGroup = 'Verlog new user ' + [guid]::NewGuid().ToString('N')
+$taskMenuGroup = 'Verjot new user ' + [guid]::NewGuid().ToString('N')
 [IO.Directory]::CreateDirectory($taskFolder) | Out-Null
 $taskProcess = Start-Process -FilePath ([IO.Path]::GetFullPath($InstallerPath)) -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/TASKS=""',('/GROUP="' + $taskMenuGroup + '"'),('/DIR="' + $taskApp + '"'),('/LOG="' + (Join-Path $taskFolder 'install.log') + '"')) -WindowStyle Hidden -Wait -PassThru
 if ($taskProcess.ExitCode -ne 0) { throw "Clean installation failed: $($taskProcess.ExitCode)" }

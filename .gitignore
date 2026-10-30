@@ -18,7 +18,7 @@
 !/assets/tingji.png
 !/assets/tingji-recording.png
 !/assets/Create-Icons.ps1
-!/assets/Verlog-logo.png
+!/assets/Verjot-logo.png
 !/assets/github-mark.png
 
 # Reviewed installation and configuration documentation.
@@ -56,7 +56,7 @@
 !/.github/workflows/ci.yml
 !/packaging/
 /packaging/*
-!/packaging/Verlog.iss
+!/packaging/Verjot.iss
 !/packaging/INSTALL.txt
 !/packaging/Get-InnoCompiler.ps1
 !/packaging/Build-Installer.ps1
@@ -200,9 +200,9 @@
 !/documentation/new-user-validation.md
 !/documentation/clean-windows-validation.md
 !/src/DesktopServices.cs
-!/src/VerlogUpdates.cs
+!/src/VerjotUpdates.cs
 !/tests/TestDesktopServices.cs
 !/tests/TestNativeApiTranscription.cs
-!/tests/TestVerlogMenus.cs
-!/tests/TestVerlogUpdates.cs
+!/tests/TestVerjotMenus.cs
+!/tests/TestVerjotUpdates.cs
 !/documentation/changelog.md

@@ -44,13 +44,13 @@ $taskConfiguration = @"
   <ClipboardRedirection>Disable</ClipboardRedirection><AudioInput>Disable</AudioInput>
   <VideoInput>Disable</VideoInput><PrinterRedirection>Disable</PrinterRedirection>
   <MappedFolders>
-    <MappedFolder><HostFolder>$taskInputXml</HostFolder><SandboxFolder>C:\Verlog-input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
-    <MappedFolder><HostFolder>$taskReportsXml</HostFolder><SandboxFolder>C:\Verlog-reports</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>$taskInputXml</HostFolder><SandboxFolder>C:\Verjot-input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>$taskReportsXml</HostFolder><SandboxFolder>C:\Verjot-reports</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
   </MappedFolders>
-  <LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Verlog-input\Test-CleanWindowsGuest.ps1$taskGuestOption</Command></LogonCommand>
+  <LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Verjot-input\Test-CleanWindowsGuest.ps1$taskGuestOption</Command></LogonCommand>
 </Configuration>
 "@
-[IO.File]::WriteAllText((Join-Path $taskBundle 'Verlog-clean.wsb'), $taskConfiguration, $taskUtf8)
+[IO.File]::WriteAllText((Join-Path $taskBundle 'Verjot-clean.wsb'), $taskConfiguration, $taskUtf8)
 Write-Output "Prepared only; no Sandbox launched and no system features changed: $taskBundle"
 Write-Output 'Default: enabled Windows Sandbox, 4 GiB guest memory, networking disabled; EXE/first-settings/notes only, no Python/model download. Recording/API are separate verification items.'
 if ($LegacyLocalTranscription) { Write-Output 'Explicit legacy research mode: 16 GiB and network; guest downloads Python/VC++/models without host caches.' }

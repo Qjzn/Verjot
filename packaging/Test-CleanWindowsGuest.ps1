@@ -3,7 +3,7 @@
 param([ValidateSet('Sandbox','VM')][string]$Environment = 'Sandbox', [switch]$LegacyLocalTranscription)
 $ErrorActionPreference = 'Stop'
 function Assert-DisposableGuest([string]$Kind,[string]$UserName,[string]$Model,[bool]$HasManifest) {
-    if (-not $HasManifest) { throw 'Missing C:\Verlog-input\SHA256.json; prepare explicit validation inputs first.' }
+    if (-not $HasManifest) { throw 'Missing C:\Verjot-input\SHA256.json; prepare explicit validation inputs first.' }
     if ($Kind -eq 'Sandbox') {
         if ($UserName -ne 'WDAGUtilityAccount') { throw 'Run in Windows Sandbox, or explicitly select -Environment VM in a disposable virtual machine.' }
     } elseif ($Model -notmatch '^(Virtual Machine|VMware Virtual Platform|VirtualBox|KVM|HVM domU|QEMU.*|Parallels.*)$') {
@@ -13,10 +13,10 @@ function Assert-DisposableGuest([string]$Kind,[string]$UserName,[string]$Model,[
 # VM fallback is explicit and checks the machine model, never merely whether
 # Hyper-V is enabled (a physical host can also have a hypervisor).
 $taskGuestModel = if ($Environment -eq 'VM') { [string](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).Model } else { '' }
-Assert-DisposableGuest $Environment $env:USERNAME $taskGuestModel (Test-Path -LiteralPath 'C:\Verlog-input\SHA256.json')
-$taskInput = 'C:\Verlog-input'
-$taskReports = 'C:\Verlog-reports'
-$taskHome = 'C:\Verlog-validation'
+Assert-DisposableGuest $Environment $env:USERNAME $taskGuestModel (Test-Path -LiteralPath 'C:\Verjot-input\SHA256.json')
+$taskInput = 'C:\Verjot-input'
+$taskReports = 'C:\Verjot-reports'
+$taskHome = 'C:\Verjot-validation'
 if (Test-Path -LiteralPath $taskHome) { throw 'Guest directory already exists; start a new Sandbox for a clean baseline.' }
 [IO.Directory]::CreateDirectory($taskHome) | Out-Null
 $taskResult = [ordered]@{ passed=$false; stage='baseline'; environment=$Environment; machine_model=$taskGuestModel; clean_windows_guest=$true; clean_baseline_verified=$false; audio_recorded=$false; cloud_api_called=$false; clipboard_access=$false }
@@ -110,6 +110,6 @@ try {
     $taskResult | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $taskReports 'result.json') -Encoding UTF8
     Stop-Transcript | Out-Null
 }
-Write-Host 'Reports are saved to C:\Verlog-reports. Do not close Sandbox until the report has been inspected.'
+Write-Host 'Reports are saved to C:\Verjot-reports. Do not close Sandbox until the report has been inspected.'
 if (-not $taskResult.passed) { exit 2 }
 exit 0

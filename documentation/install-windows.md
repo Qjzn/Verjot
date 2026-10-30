@@ -1,18 +1,18 @@
-# 安装与使用 Verlog
+# 安装与使用 Verjot
 
-当前源码为 **Verlog 0.1.0-beta.40 更名候选**，尚未发布。以下下载仍为更名前已发布的 beta.38，其软件内名称为 verbit。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
+当前源码为 **Verjot 0.1.0-beta.40 更名候选**，尚未发布。以下下载仍为更名前已发布的 beta.38，其软件内名称为 verbit。新用户只安装 EXE，不需要 Python、模型、FFmpeg、CUDA 或 Obsidian。
 
 ## 1. 下载与安装
 
 需要 Windows 10 1809+／Windows 11 x64、.NET Framework 4.8、可写保存目录和可用音频设备。安装包约 6 MB；基础包不含模型，录音临时文件另占磁盘空间。当前安装器未签名，企业策略可能阻止运行，请核对来源，不要关闭全局安全保护。
 
-从 [beta.38 版本页](https://github.com/Qjzn/Verlog/releases/tag/v0.1.0-beta.38) 下载安装包及 `SHA256SUMS.txt`。仓库私有时需登录有权限的 GitHub 账号。对下载文件运行：
+从 [beta.38 版本页](https://github.com/Qjzn/Verjot/releases/tag/v0.1.0-beta.38) 下载安装包及 `SHA256SUMS.txt`。仓库私有时需登录有权限的 GitHub 账号。对下载文件运行：
 
 ```powershell
 Get-FileHash -LiteralPath .\verbit-0.1.0-beta.38-setup-x64.exe -Algorithm SHA256
 ```
 
-输出应与同版本 `SHA256SUMS.txt` 完全一致。不一致不要安装，重新下载核对。运行安装器，选择可写程序目录。Verlog 更名候选安装后从开始菜单搜索 `Verlog`；旧 beta.38 的菜单仍叫 `verbit`。已有安装请更新到原目录，不能为了名称变化另建空目录而丢失原配置。
+输出应与同版本 `SHA256SUMS.txt` 完全一致。不一致不要安装，重新下载核对。运行安装器，选择可写程序目录。Verjot 更名候选安装后从开始菜单搜索 `Verjot`；旧 beta.38 的菜单仍叫 `verbit`。已有安装请更新到原目录，不能为了名称变化另建空目录而丢失原配置。
 
 升级不会自动删除以前安装的模型和 `.venv`，所以旧用户程序目录仍可能占用数 GB；这不是基础安装包的体积。确认不再使用旧研究环境前不要自行清理，尤其不要把笔记、录音或 `work/` 当缓存删除。
 
@@ -22,7 +22,7 @@ Get-FileHash -LiteralPath .\verbit-0.1.0-beta.38-setup-x64.exe -Algorithm SHA256
 
 ![当前常规设置](../assets/screenshots/settings.png)
 
-本图为演示设置，`C:\Verlog-notes` 只是示例，请选择自己的文件夹。修改保存位置只影响后续新内容，不自动移动旧文件。
+本图为演示设置，`C:\Verjot-notes` 只是示例，请选择自己的文件夹。修改保存位置只影响后续新内容，不自动移动旧文件。
 
 ## 3. 写第一张便签
 
@@ -53,7 +53,7 @@ Get-FileHash -LiteralPath .\verbit-0.1.0-beta.38-setup-x64.exe -Algorithm SHA256
 
 再次按 `Ctrl+Alt+L` 或点结束按钮。等待导出与校验完成，从通知或托盘「最近会议」定位 MP3。默认不足 5 秒的误触录音不保留，可在设置修改。
 
-默认文件为 `<保存目录>/Verlog/Verlog年月日时分/同名.mp3`，同分钟加序号。默认 192 kbps，约 86 MB／小时；分段临时轨需要额外空间。校验完成才清理本场临时音轨，异常时保留恢复资料。`work/` 不是日常成品目录，不要在录制或处理期间手动删除。
+默认文件为 `<保存目录>/Verjot/Verjot年月日时分/同名.mp3`，同分钟加序号。默认 192 kbps，约 86 MB／小时；分段临时轨需要额外空间。校验完成才清理本场临时音轨，异常时保留恢复资料。`work/` 不是日常成品目录，不要在录制或处理期间手动删除。
 
 ## 可选配置 API 转写
 
@@ -75,7 +75,7 @@ Get-FileHash -LiteralPath .\verbit-0.1.0-beta.38-setup-x64.exe -Algorithm SHA256
 
 ## 更新、卸载与故障
 
-- **更新**：设置 → 关于与更新 → 检查并更新。后台检查不等于自动下载安装。私有测试可在更新窗口勾选「使用已登录的 GitHub CLI」（先在本机安装 gh 并登录），或按[配置说明](configuration.md#窗口内更新)设置 `VERLOG_GITHUB_TOKEN`；不要把令牌发到聊天或配置文件。也可登录 GitHub 手动下载。升级前保存便签、结束录音和转写，使用程序正常退出，再安装到原目录。不要强杀或删除锁文件绕过检查。
+- **更新**：设置 → 关于与更新 → 检查并更新。后台检查不等于自动下载安装。私有测试可在更新窗口勾选「使用已登录的 GitHub CLI」（先在本机安装 gh 并登录），或按[配置说明](configuration.md#窗口内更新)设置 `VERJOT_GITHUB_TOKEN`；不要把令牌发到聊天或配置文件。也可登录 GitHub 手动下载。升级前保存便签、结束录音和转写，使用程序正常退出，再安装到原目录。不要强杀或删除锁文件绕过检查。
 - **卸载**：卸载器删除程序与快捷方式，保留配置、笔记、录音和恢复资料。残留用户文件不是卸载失败。
 - **快捷键无反应**：从托盘打开，检查是否与其他程序冲突，再在设置中录入新组合。
 - **录音没有声音**：确认实际有声音播放、Windows 默认麦克风正确，检查系统权限与设备；波形或可解码不能证明全部声音收齐，先做短录音回听。

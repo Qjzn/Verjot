@@ -360,20 +360,20 @@ class NoteTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 worker.note_location(vault.parent / "outside", config, metadata)
 
-    def test_Verlog_layout_preserves_legacy_but_places_new_audio_and_note_together(self):
+    def test_Verjot_layout_preserves_legacy_but_places_new_audio_and_note_together(self):
         with tempfile.TemporaryDirectory() as folder:
             vault = Path(folder).resolve()
             session = vault / "old-test-session"
             metadata = {"start_time": "2026-10-27T14:30:00+08:00", "storage_mode": "minimal",
-                        "audio_format": "mp3", "output_layout": "Verlog-v1",
-                        "output_basename": "Verlog202610271430-02", "note_link_style": "markdown"}
-            target = vault / "Verlog" / metadata["output_basename"]
+                        "audio_format": "mp3", "output_layout": "Verjot-v1",
+                        "output_basename": "Verjot202610271430-02", "note_link_style": "markdown"}
+            target = vault / "Verjot" / metadata["output_basename"]
             metadata["audio_output_dir"] = str(target)
-            config = {"vault_root": str(vault), "meeting_folder": "Verlog"}
+            config = {"vault_root": str(vault), "meeting_folder": "Verjot"}
             audio = worker.audio_output_path(session, vault, metadata, config)
-            self.assertEqual(audio, target / "Verlog202610271430-02.mp3")
-            self.assertEqual(worker.note_location(session, config, metadata)[1], target / "Verlog202610271430-02.md")
-            self.assertEqual(worker.audio_link(audio, vault, metadata), "[会议录音](Verlog202610271430-02.mp3)")
+            self.assertEqual(audio, target / "Verjot202610271430-02.mp3")
+            self.assertEqual(worker.note_location(session, config, metadata)[1], target / "Verjot202610271430-02.md")
+            self.assertEqual(worker.audio_link(audio, vault, metadata), "[会议录音](Verjot202610271430-02.mp3)")
             metadata["note_filename"] = "会后命名.md"
             self.assertEqual(worker.note_location(session, config, metadata)[1], target / "会后命名.md")
             metadata["output_basename"] = "../unsafe"
@@ -394,9 +394,23 @@ class NoteTests(unittest.TestCase):
             self.assertEqual(audio, target / (name + ".mp3"))
             self.assertEqual(worker.note_location(session, config, metadata)[1], target / (name + ".md"))
             self.assertEqual(worker.audio_link(audio, vault, metadata), "[会议录音](" + name + ".mp3)")
-            metadata["output_basename"] = "Verlog202610271430-02"
+            metadata["output_basename"] = "Verjot202610271430-02"
             with self.assertRaises(ValueError):
                 worker.audio_output_path(session, vault, metadata, config)
+
+    def test_interim_brand_layout_preserves_its_existing_audio_and_note_names(self):
+        with tempfile.TemporaryDirectory() as folder:
+            vault = Path(folder).resolve()
+            name = "Verlog202610301430"
+            target = vault / "Verlog" / name
+            metadata = {"start_time": "2026-10-30T14:30:00+08:00", "storage_mode": "minimal",
+                        "audio_format": "mp3", "output_layout": "Verlog-v1", "output_basename": name,
+                        "note_link_style": "markdown", "audio_output_dir": str(target)}
+            config = {"vault_root": str(vault), "meeting_folder": "Verlog"}
+            audio = worker.audio_output_path(vault / "interim", vault, metadata, config)
+            self.assertEqual(audio, target / (name + ".mp3"))
+            self.assertEqual(worker.note_location(vault / "interim", config, metadata)[1], target / (name + ".md"))
+            self.assertEqual(worker.audio_link(audio, vault, metadata), "[会议录音](" + name + ".mp3)")
 
     def test_named_note_path_is_local_and_completed_retry_uses_it(self):
         with tempfile.TemporaryDirectory() as folder:

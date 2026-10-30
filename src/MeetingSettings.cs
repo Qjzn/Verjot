@@ -29,7 +29,7 @@ internal sealed class MeetingSettingsSnapshot {
         path = Path.GetFullPath(path);
         MeetingConfig.CheckOrdinaryPath(path);
         if (File.Exists(path) || Directory.Exists(path)) throw new IOException("配置已经存在，请重新启动以加载；本次未覆盖配置。");
-        var defaults = MeetingConfig.Validate(new Dictionary<string, object> { { "vault_root", MeetingFiles.Home }, { "open_in_obsidian", false }, { "transcription_mode", "api" }, { "meeting_folder", "Verlog" } }, false);
+        var defaults = MeetingConfig.Validate(new Dictionary<string, object> { { "vault_root", MeetingFiles.Home }, { "open_in_obsidian", false }, { "transcription_mode", "api" }, { "meeting_folder", "Verjot" } }, false);
         // An unavailable/redirected Documents folder must still let the user
         // choose a valid destination. Validate the selection only when saved.
         defaults["vault_root"] = suggestedRoot ?? "";
@@ -156,9 +156,9 @@ internal static class MeetingFirstRunSetup {
 internal sealed class ApiConfigurationPrompt : Form {
     public bool PreparationAccepted { get; private set; }
     public ApiConfigurationPrompt(Func<bool> prepare) {
-        Text = "Verlog · 录音已保存"; Icon = MeetingBrand.IdleIcon;
+        Text = "Verjot · 录音已保存"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
-        Font = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); BackColor = VerlogUi.Surface;
+        Font = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); BackColor = VerjotUi.Surface;
         ClientSize = new Size(410, 210); Padding = new Padding(22);
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false;
@@ -166,7 +166,7 @@ internal sealed class ApiConfigurationPrompt : Form {
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         var later = new Button { Text = "仅保留录音", AutoSize = true, Height = 32, DialogResult = DialogResult.Cancel };
         var start = new Button { Text = "打开转写设置", AutoSize = true, Height = 32, BackColor = Color.FromArgb(40, 104, 168), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-        VerlogUi.StyleButton(start, true); VerlogUi.StyleButton(later, false);
+        VerjotUi.StyleButton(start, true); VerjotUi.StyleButton(later, false);
         start.Click += delegate { if (prepare()) { PreparationAccepted = true; Close(); } }; later.Click += delegate { Close(); };
         actions.Controls.Add(later); actions.Controls.Add(start); Controls.Add(text); Controls.Add(actions); CancelButton = later;
         DesktopServices.KeepWindowOnScreen(this);
@@ -202,7 +202,7 @@ internal sealed class HotkeyInput : TextBox {
     internal void FinishCapture(bool accept) {
         if (!Capturing) return;
         Text = accept && candidate != null ? candidate : previous;
-        Capturing = false; candidate = null; BackColor = VerlogUi.Surface; SelectionLength = 0;
+        Capturing = false; candidate = null; BackColor = VerjotUi.Surface; SelectionLength = 0;
         try { if (CaptureChanged != null) CaptureChanged(false); }
         catch (Exception failure) { if (CaptureError != null) CaptureError(failure.Message); }
         finally { if (Recorded != null) Recorded(); }
@@ -250,8 +250,8 @@ internal sealed class MeetingSettingsDialog : Form {
     Image githubImage;
     Label shortcutHint;
     public event Action<bool> HotkeyCaptureChanged;
-    public Func<VerlogRelease, string, string, string> InstallUpdate;
-    VerlogUpdateWindow updateWindow;
+    public Func<VerjotRelease, string, string, string> InstallUpdate;
+    VerjotUpdateWindow updateWindow;
     internal bool HasPendingChanges {
         get {
             foreach (var pair in inputs) if (pair.Value.Text != Convert.ToString(snapshot.Values[pair.Key], System.Globalization.CultureInfo.InvariantCulture)) return true;
@@ -265,24 +265,24 @@ internal sealed class MeetingSettingsDialog : Form {
         if (snapshot == null || apply == null) throw new ArgumentNullException(snapshot == null ? "snapshot" : "apply");
         this.snapshot = snapshot; this.apply = apply;
         SuspendLayout();
-        Text = firstRun ? "Verlog · 首次设置" : "Verlog · 设置"; Icon = MeetingBrand.IdleIcon;
+        Text = firstRun ? "Verjot · 首次设置" : "Verjot · 设置"; Icon = MeetingBrand.IdleIcon;
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
         dpiFont = new Font("Microsoft YaHei UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); dpiFonts.Add(96, dpiFont); Font = dpiFont;
         ClientSize = new Size(500, 480); Padding = new Padding(8);
-        BackColor = VerlogUi.Surface; ForeColor = VerlogUi.Ink;
+        BackColor = VerjotUi.Surface; ForeColor = VerjotUi.Ink;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false; ShowInTaskbar = false; TopMost = true;
         StartPosition = FormStartPosition.CenterScreen;
         var tabs = new SettingsTabControl { Name = "settingsTabs", Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed, SizeMode = TabSizeMode.Fixed, ItemSize = new Size(156, 30) };
         tabs.DrawItem += delegate(object sender, DrawItemEventArgs e) {
             bool selected = e.Index == tabs.SelectedIndex;
-            using (var background = new SolidBrush(selected ? VerlogUi.Hover : VerlogUi.Surface)) e.Graphics.FillRectangle(background, e.Bounds);
-            TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, selected ? (SystemInformation.HighContrast ? SystemColors.HighlightText : VerlogUi.Accent) : VerlogUi.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            if (selected) using (var pen = new Pen(VerlogUi.Accent, Math.Max(2, DeviceDpi / 48f))) e.Graphics.DrawLine(pen, e.Bounds.Left + 18, e.Bounds.Bottom - 2, e.Bounds.Right - 18, e.Bounds.Bottom - 2);
+            using (var background = new SolidBrush(selected ? VerjotUi.Hover : VerjotUi.Surface)) e.Graphics.FillRectangle(background, e.Bounds);
+            TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, selected ? (SystemInformation.HighContrast ? SystemColors.HighlightText : VerjotUi.Accent) : VerjotUi.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (selected) using (var pen = new Pen(VerjotUi.Accent, Math.Max(2, DeviceDpi / 48f))) e.Graphics.DrawLine(pen, e.Bounds.Left + 18, e.Bounds.Bottom - 2, e.Bounds.Right - 18, e.Bounds.Bottom - 2);
         };
-        var general = new TabPage("常规") { Padding = new Padding(8), AutoScroll = true, BackColor = VerlogUi.Surface };
-        var models = new TabPage("转写") { Padding = new Padding(8), AutoScroll = true, BackColor = VerlogUi.Surface };
-        var about = new TabPage("关于与更新") { Padding = new Padding(8), AutoScroll = true, BackColor = VerlogUi.Surface };
+        var general = new TabPage("常规") { Padding = new Padding(8), AutoScroll = true, BackColor = VerjotUi.Surface };
+        var models = new TabPage("转写") { Padding = new Padding(8), AutoScroll = true, BackColor = VerjotUi.Surface };
+        var about = new TabPage("关于与更新") { Padding = new Padding(8), AutoScroll = true, BackColor = VerjotUi.Surface };
         tabs.TabPages.AddRange(new[] { general, models, about });
         var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 14 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
@@ -296,19 +296,19 @@ internal sealed class MeetingSettingsDialog : Form {
         browse.Click += delegate { Browse(); }; layout.Controls.Add(browse, 2, 0);
         AddField(layout, 1, "会议文件夹", "meeting_folder", current);
         AddField(layout, 2, "速记文件夹", "quick_note_folder", current);
-        var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = VerlogUi.Muted, Padding = new Padding(0, 2, 0, 4) };
+        var folders = new Label { Text = "子文件夹位于保存目录内。修改后用于新内容，已有文件保留在原处。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = VerjotUi.Muted, Padding = new Padding(0, 2, 0, 4) };
         layout.Controls.Add(folders, 0, 3); layout.SetColumnSpan(folders, 3);
         AddField(layout, 4, "开始 / 结束", "hotkey", current);
         AddField(layout, 5, "麦克风开关", "pause_hotkey", current);
         AddField(layout, 6, "标记重点", "bookmark_hotkey", current);
         AddField(layout, 7, "打开速记", "quick_note_hotkey", current);
-        shortcutHint = new Label { Text = "点击快捷键后按组合键，Esc 取消，保存后生效。\n麦克风暂停不影响电脑声音。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = VerlogUi.Muted, Padding = new Padding(0, 2, 0, 4) };
+        shortcutHint = new Label { Text = "点击快捷键后按组合键，Esc 取消，保存后生效。\n麦克风暂停不影响电脑声音。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = VerjotUi.Muted, Padding = new Padding(0, 2, 0, 4) };
         layout.Controls.Add(shortcutHint, 0, 8); layout.SetColumnSpan(shortcutHint, 3);
         AddField(layout, 9, "录音保护（秒）", "recording_protection_seconds", current);
-        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = VerlogUi.Muted, Padding = new Padding(0, 2, 0, 4) };
+        var protection = new Label { Text = "不足此时长的录音不保留、不转录；0 关闭。暂停麦克风仍计时。", AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty, ForeColor = VerjotUi.Muted, Padding = new Padding(0, 2, 0, 4) };
         layout.Controls.Add(protection, 0, 10); layout.SetColumnSpan(protection, 3);
         originalStartup = DesktopServices.StartsWithWindows;
-        startup = new CheckBox { Name = "start_with_windows", Text = "登录 Windows 后启动 Verlog", Checked = originalStartup, Dock = DockStyle.Fill, AccessibleName = "开机自启" };
+        startup = new CheckBox { Name = "start_with_windows", Text = "登录 Windows 后启动 Verjot", Checked = originalStartup, Dock = DockStyle.Fill, AccessibleName = "开机自启" };
         layout.Controls.Add(startup, 0, 11); layout.SetColumnSpan(startup, 3);
         automaticUpdates = new CheckBox { Name = "check_updates", Text = "自动检查更新（启动时及每 24 小时）", Checked = Convert.ToBoolean(current["check_updates"]), Dock = DockStyle.Fill, AccessibleName = "自动检查更新" };
         layout.Controls.Add(automaticUpdates, 0, 12); layout.SetColumnSpan(automaticUpdates, 3);
@@ -337,13 +337,13 @@ internal sealed class MeetingSettingsDialog : Form {
     void CancelKeyCapture() { foreach (var input in inputs.Values) { var recorder = input as HotkeyInput; if (recorder != null) recorder.FinishCapture(false); } }
     protected override void OnFormClosing(FormClosingEventArgs e) { CancelKeyCapture(); base.OnFormClosing(e); }
     static void StyleButton(Button button, bool primary) {
-        VerlogUi.StyleButton(button, primary);
+        VerjotUi.StyleButton(button, primary);
     }
     static void StyleControls(Control root) {
         foreach (Control control in root.Controls) {
             var button = control as Button; if (button != null) StyleButton(button, false);
-            var link = control as LinkLabel; if (link != null) link.LinkColor = VerlogUi.Accent;
-            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = VerlogUi.Surface; if (!(field is HotkeyInput)) VerlogMenu.AttachTextMenu(field); }
+            var link = control as LinkLabel; if (link != null) link.LinkColor = VerjotUi.Accent;
+            var field = control as TextBox; if (field != null) { field.BorderStyle = BorderStyle.FixedSingle; field.BackColor = VerjotUi.Surface; if (!(field is HotkeyInput)) VerjotMenu.AttachTextMenu(field); }
             StyleControls(control);
         }
     }
@@ -352,12 +352,12 @@ internal sealed class MeetingSettingsDialog : Form {
         container.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         var modes = new TableLayoutPanel { Dock = DockStyle.Top, Height = 34, ColumnCount = 2, Margin = new Padding(0, 0, 0, 8) };
         modes.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); modes.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        autoTranscribe = new VerlogModeButton { Name = "auto_transcribe", Text = "录音＋转写", AccessibleName = "结束录音后自动转写", Checked = (string)current["transcription_mode"] == "api" && Convert.ToBoolean(current["auto_transcribe"]) };
-        var recordOnly = new VerlogModeButton { Name = "record_only", Text = "仅录音", AccessibleName = "仅录音，不调用转写服务", Checked = !autoTranscribe.Checked };
+        autoTranscribe = new VerjotModeButton { Name = "auto_transcribe", Text = "录音＋转写", AccessibleName = "结束录音后自动转写", Checked = (string)current["transcription_mode"] == "api" && Convert.ToBoolean(current["auto_transcribe"]) };
+        var recordOnly = new VerjotModeButton { Name = "record_only", Text = "仅录音", AccessibleName = "仅录音，不调用转写服务", Checked = !autoTranscribe.Checked };
         recordOnly.Click += delegate { autoTranscribe.Checked = false; };
         autoTranscribe.Click += delegate { autoTranscribe.Checked = true; };
         modes.Controls.Add(recordOnly, 0, 0); modes.Controls.Add(autoTranscribe, 1, 0);
-        var modeHint = new Label { Name = "recording_mode_hint", Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 0, 0, 12), ForeColor = VerlogUi.Muted };
+        var modeHint = new Label { Name = "recording_mode_hint", Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 0, 0, 12), ForeColor = VerjotUi.Muted };
         container.Controls.Add(modes, 0, 0); container.Controls.Add(modeHint, 0, 1);
         var stack = new TableLayoutPanel { Name = "api_configuration", Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
         stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -366,11 +366,11 @@ internal sealed class MeetingSettingsDialog : Form {
         AddField(apiFields, 0, "API 地址", "api_base_url", current); AddField(apiFields, 1, "模型名称", "api_model", current);
         AddField(apiFields, 2, "密钥来源", "api_key_env", current);
         stack.Controls.Add(apiFields, 0, 0);
-        var secret = new Label { Text = "使用 Windows 用户变量；保存与检查均不发送音频。", Dock = DockStyle.Top, AutoSize = true, ForeColor = VerlogUi.Muted, Margin = new Padding(0, 6, 0, 4) };
+        var secret = new Label { Text = "使用 Windows 用户变量；保存与检查均不发送音频。", Dock = DockStyle.Top, AutoSize = true, ForeColor = VerjotUi.Muted, Margin = new Padding(0, 6, 0, 4) };
         stack.Controls.Add(secret, 0, 1);
         var checkRow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Margin = new Padding(0, 2, 0, 8) };
         var check = new Button { Name = "check_api_configuration", Text = "检查配置", AutoSize = true };
-        var status = new Label { Name = "api_configuration_status", Text = "尚未检查", AutoSize = true, MaximumSize = new Size(300, 0), Padding = new Padding(6, 7, 0, 0), ForeColor = VerlogUi.Muted };
+        var status = new Label { Name = "api_configuration_status", Text = "尚未检查", AutoSize = true, MaximumSize = new Size(300, 0), Padding = new Padding(6, 7, 0, 0), ForeColor = VerjotUi.Muted };
         check.Click += delegate { status.Text = CheckApiConfiguration(); };
         checkRow.Controls.Add(check); checkRow.Controls.Add(status); stack.Controls.Add(checkRow, 0, 2);
         var disclosure = new Button { Text = "高级选项", Name = "transcription_advanced", Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 4, 0, 6) };
@@ -381,7 +381,7 @@ internal sealed class MeetingSettingsDialog : Form {
         AddField(advanced, 1, "术语（可选）", "asr_terms", current); inputs["asr_terms"].MaxLength = 1000;
         AddField(advanced, 2, "转写上下文", "asr_context", current); inputs["asr_context"].MaxLength = 2000;
         stack.Controls.Add(advanced, 0, 4);
-        var guide = new LinkLabel { Text = "密钥与 API 配置方法", Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 4, 0, 0), LinkColor = VerlogUi.Accent };
+        var guide = new LinkLabel { Text = "密钥与 API 配置方法", Dock = DockStyle.Top, Height = 28, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 4, 0, 0), LinkColor = VerjotUi.Accent };
         guide.LinkClicked += delegate { OpenLink(Path.Combine(MeetingFiles.Home, "documentation", "install-windows.md")); };
         stack.Controls.Add(guide, 0, 5);
         disclosure.Click += delegate {
@@ -390,7 +390,7 @@ internal sealed class MeetingSettingsDialog : Form {
             finally { stack.ResumeLayout(true); }
         };
         container.Controls.Add(stack, 0, 2);
-        var recordingLocation = new LinkLabel { Name = "recording_location", Text = "打开录音保存位置", Dock = DockStyle.Top, Height = 30, LinkColor = VerlogUi.Accent };
+        var recordingLocation = new LinkLabel { Name = "recording_location", Text = "打开录音保存位置", Dock = DockStyle.Top, Height = 30, LinkColor = VerjotUi.Accent };
         recordingLocation.LinkClicked += delegate {
             try { DesktopServices.Open(Path.Combine(MeetingFiles.VaultRoot(snapshot.Values), (string)snapshot.Values["meeting_folder"])); }
             catch (Exception failure) { error.Text = "无法打开：" + failure.Message; }
@@ -429,8 +429,8 @@ internal sealed class MeetingSettingsDialog : Form {
         var stack = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
         stack.Controls.Add(new Label { Text = "版本 " + DesktopServices.Version, AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
         stack.Controls.Add(new Label { Text = "Windows 速记与会议录音\n许可：MIT · 默认仅录音，API 转写须明确确认", AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
-        var github = new LinkLabel { Text = "GitHub · Qjzn/Verlog", AutoSize = true, AccessibleName = "GitHub 项目地址" };
-        using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Verlog.GitHub.png"))
+        var github = new LinkLabel { Text = "GitHub · Qjzn/Verjot", AutoSize = true, AccessibleName = "GitHub 项目地址" };
+        using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Verjot.GitHub.png"))
             if (stream != null) using (var original = Image.FromStream(stream)) githubImage = new Bitmap(original, new Size(16, 16));
         github.Image = githubImage; github.ImageAlign = ContentAlignment.MiddleLeft; github.Padding = new Padding(22, 4, 4, 4);
         github.LinkClicked += delegate { OpenLink(DesktopServices.Repository); }; stack.Controls.Add(github);
@@ -438,11 +438,11 @@ internal sealed class MeetingSettingsDialog : Form {
         notes.LinkClicked += delegate { OpenLink(Path.Combine(MeetingFiles.Home, "documentation", "changelog.md")); }; stack.Controls.Add(notes);
         var releases = new LinkLabel { Text = "GitHub 发布与安装包", AutoSize = true, Padding = new Padding(0, 0, 0, 12) };
         releases.LinkClicked += delegate { OpenLink(DesktopServices.Repository + "/releases"); }; stack.Controls.Add(releases);
-        var status = new Label { Name = "update_status", Text = "在更新窗口内下载、校验并安装，完成后重新打开 Verlog。", AutoSize = true, MaximumSize = new Size(430, 0) };
+        var status = new Label { Name = "update_status", Text = "在更新窗口内下载、校验并安装，完成后重新打开 Verjot。", AutoSize = true, MaximumSize = new Size(430, 0) };
         var check = new Button { Text = "检查并更新…", AutoSize = true, Name = "check_update_now" };
         check.Click += delegate {
             if (updateWindow != null && !updateWindow.IsDisposed) { updateWindow.Activate(); return; }
-            updateWindow = new VerlogUpdateWindow(InstallUpdate);
+            updateWindow = new VerjotUpdateWindow(InstallUpdate);
             updateWindow.Show(this);
         };
         stack.Controls.Add(check); stack.Controls.Add(status);
@@ -479,7 +479,7 @@ internal sealed class MeetingSettingsDialog : Form {
             }
             used.Add(identity, key);
         }
-        shortcutHint.ForeColor = VerlogUi.Muted;
+        shortcutHint.ForeColor = VerjotUi.Muted;
     }
     void Browse() {
         using (var dialog = new FolderBrowserDialog { Description = MeetingBrand.Name + " · 选择会议与速记的保存目录", ShowNewFolderButton = true }) {

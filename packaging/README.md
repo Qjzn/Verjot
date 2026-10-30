@@ -2,7 +2,7 @@
 
 The installer contains the desktop controller, the reviewed NAudio 1.10.0 DLL with its Ms-PL license, configuration examples, runtime/bootstrap source, and user documentation. It never packages the developer's configuration, notes, recordings, logs, `work`, Python environment, models, or FFmpeg. New files require an explicit addition to `Build-Installer.ps1`.
 
-The per-user default is `%LOCALAPPDATA%\Programs\Verlog`. First launch opens settings without needing Python. Quick notes, native recording, MP3 export and optional API transcription need no Python or model. Recording-only is the default. There is no recommended-model download entry or installer task. Users may explicitly configure their own compatible audio API; existing models and configurations are retained. See [installation instructions](../documentation/install-windows.md). Setup checks .NET Framework 4.8 and requires Windows 10 1809 / Windows 11 x64.
+The per-user default is `%LOCALAPPDATA%\Programs\Verjot`. First launch opens settings without needing Python. Quick notes, native recording, MP3 export and optional API transcription need no Python or model. Recording-only is the default. There is no recommended-model download entry or installer task. Users may explicitly configure their own compatible audio API; existing models and configurations are retained. See [installation instructions](../documentation/install-windows.md). Setup checks .NET Framework 4.8 and requires Windows 10 1809 / Windows 11 x64.
 
 Build from a reviewed checkout using Windows PowerShell 5.1 or newer:
 
@@ -16,7 +16,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Get-InnoCompiler
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-Installer.ps1
 ```
 
-Alternatively supply `-CompilerPath 'C:\...\ISCC.exe'`. The build stages a new allowlisted directory, builds from that staged source, writes a SHA256 file manifest, and produces `validation\release\Verlog-0.1.0-beta.40-setup-x64.exe` plus `SHA256SUMS.txt`. It does not replace a running local controller. Builds are repeatable through the script; byte-for-byte determinism is not claimed. These beta artifacts have no Authenticode signing certificate.
+Alternatively supply `-CompilerPath 'C:\...\ISCC.exe'`. The build stages a new allowlisted directory, builds from that staged source, writes a SHA256 file manifest, and produces `validation\release\Verjot-0.1.0-beta.40-setup-x64.exe` plus `SHA256SUMS.txt`. It does not replace a running local controller. Builds are repeatable through the script; byte-for-byte determinism is not claimed. These beta artifacts have no Authenticode signing certificate.
 
 The current source builds beta.40 as an unpublished review candidate. The latest published download remains beta.38; rebuilding does not replace a Release asset or update a running installation.
 
@@ -26,7 +26,7 @@ Run the installer smoke test only in a Windows user profile without an existing 
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Test-Installer.ps1 `
-  -InstallerPath .\validation\release\Verlog-0.1.0-beta.40-setup-x64.exe
+  -InstallerPath .\validation\release\Verjot-0.1.0-beta.40-setup-x64.exe
 ```
 
 This test uses a unique `validation\installer-smoke-*\app` directory, disables application launch and shortcut tasks, and checks clean install, cross-directory installation rejection, old-uninstaller ownership rejection, occupied EXE and worker-byte-lock protection, active/unknown session rejection, upgrade preservation, native configuration validation, and uninstall preservation using synthetic fixtures. It writes an actual temporary HKCU uninstall entry and removes it on successful uninstall; it never replaces an existing registered install. It does not access the clipboard, record/play audio, or download models. A failed run leaves its evidence and isolated install for inspection.
@@ -38,8 +38,8 @@ Silent operations for automation:
 ```powershell
 # /TASKS="" disables optional desktop and startup shortcuts. /NOICONS also
 # skips the Start menu entries. Normal interactive installation creates them.
-.\Verlog-0.1.0-beta.40-setup-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TASKS="" /DIR="C:\Users\NAME\AppData\Local\Programs\Verlog"
-& 'C:\Users\NAME\AppData\Local\Programs\Verlog\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\Verjot-0.1.0-beta.40-setup-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TASKS="" /DIR="C:\Users\NAME\AppData\Local\Programs\Verjot"
+& 'C:\Users\NAME\AppData\Local\Programs\Verjot\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 An existing registered install can be upgraded only at its original directory; uninstall it normally before choosing another location. An old uninstaller cannot remove another directory's current registration. Upgrade/uninstall refuse to change an occupied or inaccessible controller or Python executable, a held `processing.lock` byte-zero lock, or active/unknown session states. Stale unheld lock files and completed/error states do not block updates. Resolve interrupted meetings through the existing installation's recovery flow before retrying; do not erase raw audio or rewrite states to bypass the check. No process is force-closed.

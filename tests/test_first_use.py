@@ -126,7 +126,7 @@ class FirstUseTests(unittest.TestCase):
         compiler = Path(tingji.os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
         if not compiler.is_file():
             self.skipTest("Windows Framework C# compiler is unavailable")
-        source, executable = self.home / "FirstUse.cs", self.home / "VerlogFirstUse.exe"
+        source, executable = self.home / "FirstUse.cs", self.home / "VerjotFirstUse.exe"
         source.write_text(tingji.VERIFY_BRIDGE, encoding="utf-8-sig")
         process = subprocess.run([str(compiler), "/nologo", "/target:exe", "/reference:System.Web.Extensions.dll",
                                   "/out:" + str(executable), str(source)], capture_output=True, timeout=30,
@@ -152,15 +152,15 @@ class FirstUseTests(unittest.TestCase):
                                           consent_playback=True), self.config)
 
     def test_api_upload_requires_its_own_consent(self):
-        config = {**self.config, "transcription_mode": "api", "api_key_env": "VERLOG_TEST_ONLY_KEY"}
-        with patch.dict(tingji.os.environ, {"VERLOG_TEST_ONLY_KEY": "test-value"}):
+        config = {**self.config, "transcription_mode": "api", "api_key_env": "VERJOT_TEST_ONLY_KEY"}
+        with patch.dict(tingji.os.environ, {"VERJOT_TEST_ONLY_KEY": "test-value"}):
             with self.assertRaisesRegex(ValueError, "consent-upload"):
                 tingji._verify_flags(self.args(transcribe=True), config)
             tingji._verify_flags(self.args(transcribe=True, consent_upload=True), config)
             tingji._verify_flags(self.args(), config)  # Record-only never needs an API key/upload.
 
     def test_missing_api_key_fails_before_recording(self):
-        config = {**self.config, "transcription_mode": "api", "api_key_env": "VERLOG_TEST_UNSET_KEY"}
+        config = {**self.config, "transcription_mode": "api", "api_key_env": "VERJOT_TEST_UNSET_KEY"}
         with patch.dict(tingji.os.environ, {}, clear=True), self.assertRaisesRegex(ValueError, "未设置"):
             tingji._verify_flags(self.args(transcribe=True, consent_upload=True), config)
 
@@ -262,14 +262,14 @@ class FirstUseTests(unittest.TestCase):
 
     def test_api_invocation_uses_environment_name_without_persisting_key(self):
         config = {**self.config, "transcription_mode": "api", "api_base_url": "https://example.invalid/v1",
-                  "api_model": "test-only-model", "api_key_env": "VERLOG_TEST_ONLY_KEY"}
+                  "api_model": "test-only-model", "api_key_env": "VERJOT_TEST_ONLY_KEY"}
         (self.home / "result.json").write_text('{"complete": true, "segments": []}')
         attempted = []
         with patch.object(tingji.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             tingji._verify_transcribe(self.home, config, self.args(), lambda: attempted.append(True))
         self.assertEqual(attempted, [True])
         command = run.call_args_list[-1].args[0]
-        self.assertIn("VERLOG_TEST_ONLY_KEY", command)
+        self.assertIn("VERJOT_TEST_ONLY_KEY", command)
         self.assertEqual(command[command.index("--api-model") + 1], "test-only-model")
         self.assertEqual(run.call_args.kwargs["stdout"], subprocess.DEVNULL)
 
