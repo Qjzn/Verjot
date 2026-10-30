@@ -35,8 +35,18 @@ foreach ($taskTest in @('TestVerbitMenus', 'TestVerbitUpdates', 'TestDesktopServ
     Copy-Item -LiteralPath (Join-Path $taskRoot 'ObsidianMeeting.exe.config') -Destination ($taskBinary + '.config')
     # Each fixture gets a separate desktop without switching the user's screen.
     # Native UI tests may activate their own windows, never the user's windows.
-    & $taskDesktopRunner $taskBinary $taskFolder
-    if ($LASTEXITCODE -ne 0) { throw "$taskTest failed: $LASTEXITCODE; fixture: $taskFolder" }
+    if ($taskTest -in @('TestQuickNoteEditor', 'TestRecorderDockMorph')) {
+        # Preserve every assertion, with a fresh isolated process per group;
+        # do not relax the desktop runner's deadline for the aggregate fixture.
+        $taskGroups = if ($taskTest -eq 'TestQuickNoteEditor') { @('--core-only', '--attachments-only') } else { @('--anchor-only', '--native-only', '--review-only', '--experience-only') }
+        foreach ($taskGroup in $taskGroups) {
+            & $taskDesktopRunner $taskBinary $taskFolder $taskGroup
+            if ($LASTEXITCODE -ne 0) { throw "$taskTest $taskGroup failed: $LASTEXITCODE; fixture: $taskFolder" }
+        }
+    } else {
+        & $taskDesktopRunner $taskBinary $taskFolder
+        if ($LASTEXITCODE -ne 0) { throw "$taskTest failed: $LASTEXITCODE; fixture: $taskFolder" }
+    }
 }
 & (Join-Path $taskTests 'Test-InstallPrerequisites.ps1') -SourceRoot $taskRoot -OutputRoot $taskOutput
 if ($LASTEXITCODE -ne 0) { throw "Install prerequisite regression failed: $LASTEXITCODE" }

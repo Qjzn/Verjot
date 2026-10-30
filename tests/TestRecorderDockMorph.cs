@@ -55,6 +55,10 @@ internal static class TestRecorderDockMorph {
         return image;
     }
     static int CaptureFromProcess(string[] args) {
+        // Do not send a synchronous WM_PRINT while the UI thread is still
+        // inside Process.Start. The child may otherwise re-enter that native
+        // startup path before the owner can pump its messages.
+        using(var ready=EventWaitHandle.OpenExisting(args[4])) if(!ready.WaitOne(5000)) return 4;
         IntPtr previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {
         using (var image=new Bitmap(int.Parse(args[2]),int.Parse(args[3]))) {
@@ -76,14 +80,18 @@ internal static class TestRecorderDockMorph {
         Pump(50); // Capture a presented native tree, not just a stopped timer.
         int dpi=panel.DeviceDpi;
         Console.WriteLine("External capture begin: mode="+RecorderMotionPreferences.Mode+"; bounds="+panel.Bounds);
-        var start=new ProcessStartInfo(Application.ExecutablePath,"--capture-window "+panel.Handle.ToInt64()+" "+panel.Width+" "+panel.Height) {UseShellExecute=false,CreateNoWindow=true};
+        string readyName="Local\\verbit-capture-"+Guid.NewGuid().ToString("N");
+        using(var ready=new EventWaitHandle(false,EventResetMode.ManualReset,readyName)) {
+        var start=new ProcessStartInfo(Application.ExecutablePath,"--capture-window "+panel.Handle.ToInt64()+" "+panel.Width+" "+panel.Height+" "+readyName) {UseShellExecute=false,CreateNoWindow=true};
         using(var child=Process.Start(start)) {
+            Console.WriteLine("External capture child started; waiting for the UI pump"); ready.Set();
             var clock=Stopwatch.StartNew();
             while(!child.HasExited && clock.ElapsedMilliseconds<5000) Pump(2);
             if(!child.HasExited) { child.Kill(); child.WaitForExit(); throw new InvalidOperationException("Owned capture fixture timed out"); }
             Check(child.ExitCode==0,"External-process PrintWindow retains visible Logo pixels rather than a blank white surface; code="+child.ExitCode);
             Check(panel.DeviceDpi==dpi,"External capture uses the same per-monitor awareness and never changes the target DPI");
             Console.WriteLine("External capture passed");
+        }
         }
     }
     static Point CapsuleAtLogo(RecorderPanel panel) {
@@ -492,7 +500,7 @@ internal static class TestRecorderDockMorph {
     [STAThread] static int Main(string[] args) {
         if(args.Length>0 && args[0]=="--capture-window") return CaptureFromProcess(args);
         string previous = RecorderMotionPreferences.Mode;
-        try { Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException); Application.EnableVisualStyles(); RecorderMotionPreferences.Mode = "on"; SpringChecks(); if (Array.IndexOf(args, "--anchor-only") >= 0) LogoAnchorChecks(AppDomain.CurrentDomain.BaseDirectory); else if (Array.IndexOf(args, "--review-only") >= 0) ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); else { StartupChecks(); LogoAnchorChecks(AppDomain.CurrentDomain.BaseDirectory); NativeChecks(AppDomain.CurrentDomain.BaseDirectory); ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); ExperienceChecks(AppDomain.CurrentDomain.BaseDirectory); } Console.WriteLine("PASS fluid morph assertions=" + assertions); return 0; }
+        try { Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException); Application.EnableVisualStyles(); RecorderMotionPreferences.Mode = "on"; SpringChecks(); if (Array.IndexOf(args, "--anchor-only") >= 0) LogoAnchorChecks(AppDomain.CurrentDomain.BaseDirectory); else if (Array.IndexOf(args, "--review-only") >= 0) ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); else if (Array.IndexOf(args, "--native-only") >= 0) { StartupChecks(); NativeChecks(AppDomain.CurrentDomain.BaseDirectory); } else if (Array.IndexOf(args, "--experience-only") >= 0) ExperienceChecks(AppDomain.CurrentDomain.BaseDirectory); else { StartupChecks(); LogoAnchorChecks(AppDomain.CurrentDomain.BaseDirectory); NativeChecks(AppDomain.CurrentDomain.BaseDirectory); ReviewChecks(AppDomain.CurrentDomain.BaseDirectory); ExperienceChecks(AppDomain.CurrentDomain.BaseDirectory); } Console.WriteLine("PASS fluid morph assertions=" + assertions); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { RecorderMotionPreferences.Mode = previous; }
     }

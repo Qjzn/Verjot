@@ -10,10 +10,10 @@
 | `vault_root`、两个子目录 | 首次设置/配置；桌面与 worker | 决定个人内容落点；更改只影响后续内容，不迁移旧文件。 |
 | 四组 `*_hotkey`/`hotkey` | 设置/配置；当前用户全局热键 | 不允许互相重复；已占用时提示，设置失败不覆盖旧值。 |
 | `recording_protection_seconds` | 设置/配置，默认 5 秒 | 有效录音不足阈值时不保存成品、不调用转写。 |
-| `transcription_mode`、模型目录 | 配置/本机下载；worker | `local`/`api` 决定处理边界；模型和运行环境单独安装。 |
+| `transcription_mode`、历史模型目录 | 设置/配置；原生 API 流程与历史 worker | 新用户使用 `api`，默认不开启转写；`local` 及目录仅保留旧配置，不自动下载或连接。自行部署模型使用兼容 API。 |
 | `auto_transcribe` | 设置/配置，默认 `false`；开始录音时固定本场选择 | 默认只导出 MP3；开启后结束时转写。手动转写不受此开关限制，已有模型配置保留。 |
-| `api_base_url`、`api_model` | 配置；`api_asr.py` | 决定音频提交目的地，远端应使用 HTTPS；普通聊天接口不能替代语音接口。 |
-| `api_key_env` / `TINGJI_API_KEY` | 配置只存变量名，密钥从进程环境读取 | 更换/撤销在服务商完成，再更新环境变量并重启；不把值写入配置、截图、Issue 或日志。 |
+| `api_base_url`、`api_model` | 配置；`NativeAudioExport.cs`，历史兼容 `api_asr.py` | 决定音频提交目的地，远端应使用 HTTPS；普通聊天接口不能替代语音接口。 |
+| `api_key_env` / `TINGJI_API_KEY` | 配置只存变量名，原生流程每次转写时读取 Windows 用户环境变量，兼容进程环境 | 更换/撤销在服务商完成，再更新环境变量；原生 API 无需重启，历史 Python 流程需重启。不把值写入配置、截图、Issue 或日志。 |
 | `TINGJI_FFMPEG_EXE` | 用户环境；本地编码 | 显式指定可执行文件来源，只使用可信 FFmpeg。 |
 | `VERBIT_GITHUB_TOKEN` | 可选的 Windows 用户环境变量；私有仓库更新 | 仅发往 GitHub API 的本仓库发布请求，不写配置/日志，不转发到资产存储跳转。公开仓库无需该变量；可在更新窗口主动选择本机已登录 `gh` 代替。 |
 

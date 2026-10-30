@@ -3,13 +3,26 @@
 > beta.11 默认验证包已改为无模型首期：`Prepare-CleanWindows.ps1 -InstallerPath <EXE>`，不需要样本 WAV，沙箱默认 4 GiB、关闭网络与剪贴板映射，仅验证安装、首次设置、速记；录音设备与真实 API 分开验收。下文下载 Python / 本地模型的流程仅供显式 `-LegacyLocalTranscription -SpeechA <WAV> -SpeechB <WAV>` 研究验证，不是首期用户步骤。准备包不代表沙箱已实际运行。
 
 
-目标是 Windows 10/11 x64、.NET Framework 4.8 的新系统：起初没有 Python、模型、Git、Node、Visual Studio 或 .NET SDK。系统自带的 .NET Framework 编译器不属于额外开发环境。速记应在装 Python 前即可使用；本地会议转写需要按说明安装 Python、VC++ 运行库、依赖和模型，不承诺几 MB 安装包独立完成转写。
+目标是 Windows 10/11 x64、.NET Framework 4.8 的新系统：起初没有 Python、模型、Git、Node、Visual Studio 或 .NET SDK。系统自带的 .NET Framework 编译器不属于额外开发环境。首期速记、录音、MP3 导出和选配 API 转写无需 Python 或模型；默认客体不安装这些依赖。
 
 ## 隔离环境与证据
 
 维护者可用已启用的 Windows Sandbox。准备脚本只生成验证包，不启动沙箱、不启用系统功能、不重启。沙箱功能启用可能需要管理员和重启，按 [Microsoft 官方指南](https://learn.microsoft.com/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-install) 由机器所有者安排；没有沙箱时用全新 Windows 虚拟机，不以同一电脑的新 venv 代替。
 
-准备两份**人工合成**的 16 kHz 单声道 PCM WAV，分别朗读以下固定句子；不要使用真实会议录音。生成语音不需要播放。
+首期默认验证命令如下，不需要音频样本，也不会下载依赖：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-CleanWindows.ps1 `
+  -InstallerPath 'C:\Validation\verbit-setup-x64.exe'
+```
+
+打开生成的 `verbit-clean.wsb`。输入目录只读，仅含安装器、哈希清单和测试辅助程序；专用输出目录只接收报告，不映射宿主源码、Python、模型、缓存或笔记。默认 4 GiB 内存、关闭网络与剪贴板/麦克风/摄像头重定向。
+
+客体检查没有现成 Python 和开发命令后，执行实际安装、首次设置和速记自动保存/重开。`reports/result.json` 必须同时具备 `passed: true`、`clean_baseline_verified: true`，且有 `new-user-journey.json` 和完整日志才算对应范围通过。默认流程不录音、不调用真实 API；不能据此宣布设备、API 或卸载已验证。
+
+## 历史本地模型研究验证（可选，不属于首期安装）
+
+仅选择研究流程时，准备两份**人工合成**的 16 kHz 单声道 PCM WAV，分别朗读以下固定句子；不要使用真实会议录音。生成语音不需要播放。
 
 - A：今天讨论产品发布。录音文件和会议转录保存在本地。请在周五下午三点前完成验证。
 - B：我来补充两点。首次打开请先选择保存目录，快捷键可以在设置中修改。
@@ -18,12 +31,13 @@
 # 在源码仓库根目录运行；替换为实际候选安装包和合成样本路径
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Prepare-CleanWindows.ps1 `
   -InstallerPath 'C:\Validation\verbit-setup-x64.exe' `
+  -LegacyLocalTranscription `
   -SpeechA 'C:\Validation\known-a.wav' -SpeechB 'C:\Validation\known-b.wav'
 ```
 
-打开输出目录的 `verbit-clean.wsb`。输入目录只读，仅含安装包、校验清单、合成样本与测试工具；另一个专用空目录接收报告。**不映射源码目录、个人笔记、宿主模型或缓存**，关闭剪贴板、麦克风、摄像头和打印机重定向。默认给沙箱 16 GiB 内存；宿主需有足够内存、磁盘和网络。禁止为了通过测试映射现有模型或借用宿主 Python。
+研究模式的 `verbit-clean.wsb` 输入目录只读，额外包含合成样本；给沙箱 16 GiB 内存并启用网络，以下载依赖与模型。**不映射源码目录、个人笔记、宿主模型或缓存**，关闭剪贴板、麦克风、摄像头和打印机重定向。禁止为了通过测试映射现有模型或借用宿主 Python。
 
-客体脚本依次执行：
+仅研究模式继续执行以下完整流程：
 
 1. 记录系统和 Python/开发命令基线；发现已有解释器或开发命令即停止。
 2. 安装真实 EXE，在没有 Python/模型时运行实际进程的首次设置、取消重开、目录错误修正、速记中文/英文自动保存与重启检查。测试窗口处于独立桌面，不读取系统剪贴板或注入全局按键。

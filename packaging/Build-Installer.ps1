@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$CompilerPath,
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.34',
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-beta.38',
     [string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
@@ -41,7 +41,7 @@ $taskFiles = @(
     'documentation\clean-windows-validation.md',
     'documentation\architecture.md', 'documentation\flows.md', 'documentation\permissions.md',
     'documentation\variables.md', 'documentation\tests.md', 'documentation\cron.md', 'documentation\automation.md',
-    'assets\screenshots\recording.png', 'assets\screenshots\quick-note.png', 'assets\screenshots\settings.png',
+    'assets\screenshots\recording.png', 'assets\screenshots\quick-note.png', 'assets\screenshots\settings.png', 'assets\screenshots\settings-api.png',
     'packaging\licenses\NAudio.txt', 'packaging\licenses\LAME.txt', 'packaging\licenses\LAME-SOURCE.md', 'packaging\quick-start.html', 'packaging\Check-InstallSafety.ps1'
 )
 function Get-PackageInput([string]$Relative) {

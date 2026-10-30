@@ -294,6 +294,61 @@ internal static class TestQuickNoteEditor {
             return true;
         }
     }
+    static void CheckTabAttachment(string vault, string root) {
+        var store = new QuickNoteStore(vault, "标签贴合", Path.Combine(root, "attachment-recovery"));
+        store.Save(store.Load(DateTime.Today), "标签贴合验证正文\n既有便签重开时仍应贴合边框");
+        for (int i = 0; i < 6; i++) { var note = store.LoadFile("贴合验证-" + i + ".md"); store.Save(note, "隔离验证正文\n不访问系统剪贴板"); }
+        foreach (var screen in Screen.AllScreens) {
+            string state = Path.Combine(root, "attachment-state-" + screen.DeviceName.Replace("\\", "").Replace(".", ""));
+            Directory.CreateDirectory(state);
+            File.WriteAllText(Path.Combine(state, "quick-note-window.txt"), (screen.WorkingArea.Left + 260) + "," + (screen.WorkingArea.Top + 80) + ",420,420,1");
+            using (var window = new QuickNoteWindow(store, state)) {
+                window.Toggle(); Settled(window);
+                var editor = (Control)Field(window, "editor");
+                for (int pass = 0; pass < (Screen.AllScreens.Length > 1 ? 4 : 3); pass++) {
+                    if (pass == 1) { window.Toggle(); Pump(200); window.Toggle(); Settled(window); }
+                    if (pass == 2) { window.Location = new Point(screen.WorkingArea.Left + 8, screen.WorkingArea.Top + 80); Pump(80); }
+                    if (pass == 3) foreach (var other in Screen.AllScreens) if (other.DeviceName != screen.DeviceName) {
+                        window.Location = new Point(other.WorkingArea.Left + 260, other.WorkingArea.Top + 80); Pump(100); break;
+                    }
+                    Rectangle editorBounds = editor.Bounds;
+                    // A first MouseEnter in the existing content reveals the
+                    // owned rail; never repair its geometry from the fixture.
+                    Call(editor, "OnMouseEnter", EventArgs.Empty);
+                    var rail = (QuickNoteTabs)Field(window, "tabs");
+                    Check(rail != null && rail.Visible, "Content hover reveals the rail on first open/reopen/edge");
+                    Pump(240);
+                    NativeRectangle native; Check(GetWindowRect(rail.Handle, out native), "Read actual rail window bounds");
+                    int gap = rail.OnRight ? native.Left - window.Right : window.Left - native.Right;
+                    Console.WriteLine("Rail attachment screen=" + screen.DeviceName + "; pass=" + pass + "; ownerDpi=" + window.DeviceDpi + "; railDpi=" + rail.DeviceDpi + "; note=" + window.Bounds + "; rail=" + rail.Bounds + "; physicalGap=" + gap);
+                    Check(gap == 0, "Actual tag edge touches the note border without a DPI gap: " + gap);
+                    Check(rail.DeviceDpi == window.DeviceDpi && rail.Width == 94 * window.DeviceDpi / 96, "First native rail size uses the destination monitor exactly once");
+                    Check(rail.Height == (((string[])Field(rail, "files")).Length + 1) * Math.Max(30, 36 * rail.DeviceDpi / 96), "Unchanged filenames still refresh rail row metrics after DPI changes");
+                    Check(rail.Top == window.PointToScreen(new Point(0, ((Control)Field(window, "top")).Bottom)).Y, "Rail aligns with the content below the header");
+                    Check(editor.Bounds == editorBounds, "Showing or repositioning the rail does not resize native text");
+                    Check(!(bool)Field(window, "statusError"), "Attachment scenario loads an existing note without a save/load error");
+                    using (var bitmap = new Bitmap(rail.Width, rail.Height)) {
+                        rail.DrawToBitmap(bitmap, rail.ClientRectangle);
+                        Check(bitmap.GetPixel(rail.OnRight ? 0 : rail.Width - 1, 12 * rail.DeviceDpi / 96).ToArgb() != rail.TransparencyKey.ToArgb(), "Painted tag reaches the attached physical edge");
+                        bitmap.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "attached-rail-" + window.DeviceDpi + "-" + pass + ".png"));
+                    }
+                    Rectangle combined = Rectangle.Union(window.Bounds, rail.Bounds);
+                    using (var bitmap = new Bitmap(combined.Width, combined.Height)) using (var graphics = Graphics.FromImage(bitmap)) {
+                        graphics.Clear(Color.FromArgb(245, 247, 250));
+                        foreach (var part in new Form[] { window, rail }) using (var frame = new Bitmap(part.Width, part.Height)) {
+                            var dcGraphics = Graphics.FromImage(frame); IntPtr dc = dcGraphics.GetHdc();
+                            try { Check(PrintWindow(part.Handle, dc, 0), "Capture actual note and rail windows"); }
+                            finally { dcGraphics.ReleaseHdc(dc); dcGraphics.Dispose(); }
+                            if (part == rail) frame.MakeTransparent(rail.TransparencyKey);
+                            graphics.DrawImageUnscaled(frame, part.Left - combined.Left, part.Top - combined.Top);
+                        }
+                        bitmap.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "attached-note-" + window.DeviceDpi + "-" + pass + ".png"));
+                    }
+                }
+                window.FlushAndClose(); Settled(window);
+            }
+        }
+    }
     static void CheckScreenChrome(string vault, string root) {
         var store = new QuickNoteStore(vault, "屏幕布局", Path.Combine(root, "screen-recovery"));
         foreach (var screen in Screen.AllScreens) {
@@ -340,7 +395,9 @@ internal static class TestQuickNoteEditor {
             var editor = (Control)Field(window, "editor"); Rectangle originalBounds = editor.Bounds;
             var bar = (Control)Field(window, "formatBar");
             var feedback = (QuickNoteHoverFeedback)Field(bar.Controls[0], "hover");
+            var hoverWatch = System.Diagnostics.Stopwatch.StartNew();
             feedback.Set(true); Pump(40); float partial = feedback.Value;
+            Console.WriteLine("Hover sample: value=" + partial + "; elapsed_ms=" + hoverWatch.Elapsed.TotalMilliseconds.ToString("F2") + "; enabled=" + bar.Enabled + "; visible=" + bar.Visible);
             Check(partial > 0 && partial < 1, "Hover feedback progresses without an abrupt full-color jump");
             feedback.Set(false);
             Check(feedback.Value == partial, "Leaving retargets from the current hover color without resetting");
@@ -525,6 +582,165 @@ internal static class TestQuickNoteEditor {
             window.ClientSize = new Size(360, 420); window.PerformLayout();
             using (var screenshot = new Bitmap(window.Width, window.Height)) { window.DrawToBitmap(screenshot, new Rectangle(Point.Empty, window.Size)); screenshot.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "quick-note-formatting.png")); }
             Check(window.FlushAndClose(), "The formatting note closes after saving");
+        }
+    }
+    static ToolStripMenuItem NavigationOption(QuickNoteWindow window) {
+        Call(window, "ShowSaveMenu");
+        var menus = (System.ComponentModel.Container)Field(window, "transientMenus");
+        foreach (System.ComponentModel.Component component in menus.Components) {
+            var menu = component as ContextMenuStrip;
+            if (menu == null || !menu.Visible) continue;
+            foreach (ToolStripItem item in menu.Items) {
+                if (item.Text == "鼠标移出自动收起导航栏") return (ToolStripMenuItem)item;
+            }
+        }
+        throw new Exception("Navigation option must be reachable from the bottom-right menu");
+    }
+    static void CheckNavigationReentry(string vault, string root) {
+        var store = new QuickNoteStore(vault, "navigation-reentry", Path.Combine(root, "navigation-reentry-recovery"));
+        var seed = store.Load(DateTime.Today); store.Save(seed, "首次移回便签应立即显示上下导航栏\n保留阅读位置");
+        using (var window = new QuickNoteWindow(store, Path.Combine(root, "navigation-reentry-state"))) {
+            window.Toggle(); Settled(window);
+            var editor = (QuickNoteInputBox)Field(window, "editor");
+            var top = (Control)Field(window, "top"); var bottom = (Control)Field(window, "formatBar");
+            var option = NavigationOption(window);
+            option.PerformClick(); ((ContextMenuStrip)option.Owner).Close(); Pump(30);
+            option = NavigationOption(window);
+            option.PerformClick(); ((ContextMenuStrip)option.Owner).Close(); Pump(30);
+            Check(option.Checked, "Re-entry regression begins after enabling auto-hide from the actual menu");
+            editor.Select(1, 3); Point scroll = QuickNoteScrollBar.Position(editor);
+            Rectangle geometry = editor.RectangleToScreen(editor.ClientRectangle);
+            Call(window, "UpdateChromeForPointer", new Point(-10000, -10000));
+            // Windows sends the client cursor message before the first move.
+            // Re-entry must not need a second move or another MouseEnter.
+            NativeMessage(editor.Handle, 0x20, editor.Handle, new IntPtr((0x200 << 16) | 10));
+            Check(!top.Visible && !bottom.Visible, "Non-client cursor checks do not reveal navigation");
+            NativeMessage(editor.Handle, 0x20, editor.Handle, new IntPtr((0x200 << 16) | 1));
+            Check(top.Visible && bottom.Visible && window.Region == null,
+                "First client cursor hit after re-enabling immediately restores navigation before MouseMove");
+            int regionChanges = 0, layouts = 0;
+            window.RegionChanged += delegate { regionChanges++; };
+            editor.Layout += delegate { layouts++; };
+            for (int repeat = 0; repeat < 30; repeat++) {
+                NativeMessage(editor.Handle, 0x20, editor.Handle, new IntPtr((0x200 << 16) | 1));
+                NativeMessage(editor.Handle, 0x200, IntPtr.Zero, new IntPtr((3 << 16) | 3));
+            }
+            Check(regionChanges == 0 && layouts == 0, "Repeated cursor/move messages do not reclip or relayout already-visible navigation");
+            foreach (string field in new[] { "editor", "body", "viewport", "scroll" }) {
+                var control = (Control)Field(window, field);
+                // Warm native mouse tracking, then change the window region as
+                // leaving does. Do not manufacture another managed MouseEnter.
+                NativeMessage(control.Handle, 0x200, IntPtr.Zero, new IntPtr((2 << 16) | 2));
+                Call(window, "UpdateChromeForPointer", new Point(-10000, -10000));
+                Check(!top.Visible && !bottom.Visible, "Pointer leave hides navigation before first return: " + field);
+                NativeMessage(control.Handle, 0x200, IntPtr.Zero, new IntPtr((3 << 16) | 3));
+                Check(top.Visible && bottom.Visible && window.Region == null,
+                    "First native pointer move restores both bars without a fresh MouseEnter: " + field);
+                Check(editor.RectangleToScreen(editor.ClientRectangle) == geometry && editor.SelectionStart == 1 && editor.SelectionLength == 3 && QuickNoteScrollBar.Position(editor) == scroll,
+                    "First return preserves text geometry, selection and scroll: " + field);
+            }
+            Check(window.ReadMarkdown() == seed.Text, "First-return handling leaves note content unchanged");
+            var rail = (Form)Field(window, "tabs");
+            Call(window, "HideTabs"); Pump(220);
+            rail.Location = new Point(rail.Left - 1, rail.Top);
+            // Reproduce the nested leave/deactivation seen while the first
+            // owned rail is positioned and acquires another monitor's DPI.
+            EventHandler nestedLeave = delegate { Call(window, "UpdateChromeForPointer", new Point(-10000, -10000)); };
+            rail.LocationChanged += nestedLeave;
+            Call(window, "UpdateChromeForPointer", new Point(-10000, -10000));
+            int changesBefore = regionChanges;
+            NativeMessage(editor.Handle, 0x20, editor.Handle, new IntPtr((0x200 << 16) | 1));
+            rail.LocationChanged -= nestedLeave;
+            Check(top.Visible && bottom.Visible && window.Region == null,
+                "A nested leave during first rail positioning cannot undo the current pointer re-entry");
+            Check(regionChanges - changesBefore == 1, "Nested first-rail positioning reveals with one clip change, without hide/reveal flicker");
+            window.FlushAndClose();
+        }
+        Console.WriteLine("Navigation first-return checks passed: " + assertions + "; clipboard_access=0; global_input=0");
+    }
+    static void CheckNavigationPreference(string vault, string root) {
+        var store = new QuickNoteStore(vault, "navigation-preference", Path.Combine(root, "navigation-preference-recovery"));
+        var seed = store.Load(DateTime.Today);
+        store.Save(seed, string.Join("\n", new string[70]).Replace("\n", "中文阅读位置与格式\n"));
+        string stateRoot = Path.Combine(root, "navigation-preference-state");
+        Point outside = new Point(-10000, -10000);
+        using (var window = new QuickNoteWindow(store, stateRoot)) {
+            window.Toggle(); Settled(window);
+            var editor = (QuickNoteInputBox)Field(window, "editor");
+            var top = (Panel)Field(window, "top"); var bottom = (Panel)Field(window, "formatBar");
+            var option = NavigationOption(window);
+            Check(option.Checked && option.CheckOnClick, "Auto-hide defaults on and is a checkable menu option");
+            option.PerformClick(); ((ContextMenuStrip)option.Owner).Close(); Pump(30);
+            editor.Select(editor.TextLength - 8, 3); editor.ScrollToCaret();
+            Rectangle geometry = editor.RectangleToScreen(editor.ClientRectangle);
+            Point scroll = QuickNoteScrollBar.Position(editor); int start = editor.SelectionStart;
+            string markdown = window.ReadMarkdown();
+            for (int frame = 0; frame < 12; frame++) {
+                Call(window, "UpdateChromeForPointer", outside);
+                Check(top.Visible && bottom.Visible && window.Region == null, "Disabled auto-hide keeps both navigation bars visible outside the note");
+                Call(window, "UpdateChromeForPointer", editor.PointToScreen(new Point(5, 5)));
+            }
+            Check(editor.RectangleToScreen(editor.ClientRectangle) == geometry && QuickNoteScrollBar.Position(editor) == scroll && editor.SelectionStart == start && editor.SelectionLength == 3,
+                "Repeated pointer transitions preserve editor geometry, scroll and selection");
+            Check(window.ReadMarkdown() == markdown, "Changing navigation preference never edits note content");
+            window.Toggle(); Settled(window); window.Toggle(); Settled(window);
+            Call(window, "UpdateChromeForPointer", outside);
+            Check(top.Visible && bottom.Visible, "Hide and reopen preserves always-visible navigation");
+            Check(window.FlushAndClose(), "Preference closes through the normal save flow");
+        }
+        using (var window = new QuickNoteWindow(store, stateRoot)) {
+            window.Toggle(); Settled(window);
+            var option = NavigationOption(window);
+            Check(!option.Checked, "A new window restores the saved disabled auto-hide preference");
+            option.PerformClick(); ((ContextMenuStrip)option.Owner).Close(); Pump(30);
+            Call(window, "UpdateChromeForPointer", outside);
+            Check(!((Panel)Field(window, "top")).Visible && !((Panel)Field(window, "formatBar")).Visible && window.Region != null,
+                "Re-enabling auto-hide conceals both bars on pointer leave");
+            Call((Control)Field(window, "editor"), "OnMouseEnter", EventArgs.Empty);
+            Check(((Panel)Field(window, "top")).Visible && ((Panel)Field(window, "formatBar")).Visible,
+                "Pointer re-entry reveals both bars after re-enabling");
+            Check(window.FlushAndClose(), "Enabled preference saves normally");
+        }
+        // Old navigation files do not have the new field; preserve their old behavior.
+        string path = Directory.GetFiles(stateRoot, "quick-note-files-*.json")[0];
+        var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+        var oldState = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
+        oldState.Remove("AutoHideNavigation"); File.WriteAllText(path, serializer.Serialize(oldState));
+        using (var window = new QuickNoteWindow(store, stateRoot)) {
+            window.Toggle(); Settled(window);
+            var option = NavigationOption(window);
+            Check(option.Checked, "Existing navigation files without the preference retain default auto-hide");
+            using (var shot = new Bitmap(option.Owner.Width, option.Owner.Height)) {
+                option.Owner.DrawToBitmap(shot, new Rectangle(Point.Empty, shot.Size));
+                shot.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "navigation-preference-menu.png"));
+            }
+            ((ContextMenuStrip)option.Owner).Close(); Pump(30); window.FlushAndClose();
+        }
+        Console.WriteLine("Navigation preference passed: " + assertions + "; clipboard_access=0; global_input=0");
+    }
+    static void CheckEmptyNoteReopen(string vault, string root) {
+        var store = new QuickNoteStore(vault, "empty-reopen", Path.Combine(root, "empty-reopen-recovery"));
+        using (var window = new QuickNoteWindow(store, Path.Combine(root, "empty-reopen-state"))) {
+            window.Toggle(); Settled(window);
+            for (int kind = 0; kind < 2; kind++) {
+                if (kind == 1) { Call(window, "NewNote"); Settled(window); }
+                string path = windowNotePath(window);
+                for (int reopen = 0; reopen < 2; reopen++) {
+                    window.Toggle(); Settled(window); Check(!window.Visible, "Empty note hides without creating a file");
+                    window.Toggle(); Settled(window);
+                    Check(window.Visible && !(bool)Field(window, "statusError") && window.LastLoadError == null,
+                        "An unpersisted current note reopens without being mistaken for an externally deleted file");
+                    Check(windowNotePath(window) == path && window.ReadMarkdown() == "" && !File.Exists(path),
+                        "Reopen retains the empty note identity without a placeholder file");
+                    Check(!((RichTextBox)Field(window, "editor")).ReadOnly, "Reopened empty note remains editable");
+                }
+            }
+            Append(window, "保存后仍需保护外部删除"); Autosaved(window);
+            string savedPath = windowNotePath(window);
+            File.Delete(savedPath);
+            window.Toggle(); Settled(window); window.Toggle(); Settled(window);
+            Check((bool)Field(window, "statusError") && !File.Exists(savedPath), "A genuinely deleted saved note is still reported, never recreated");
+            Check(window.ReadMarkdown() == "保存后仍需保护外部删除", "Deleted saved note retains its visible content");
         }
     }
     static void CheckNavigation(string vault, string root) {
@@ -1125,6 +1341,15 @@ internal static class TestQuickNoteEditor {
         try {
             string vault = Path.Combine(root, "vault"), recovery = Path.Combine(root, "recovery");
             Directory.CreateDirectory(vault);
+            var store = new QuickNoteStore(vault, "速记", recovery);
+            // Keep each isolated process within the runner's existing deadline.
+            // The default entry still executes both groups for manual use.
+            if (Array.IndexOf(arguments, "--attachments-only") < 0) {
+            CheckNavigationReentry(vault, root);
+            if (Array.IndexOf(arguments, "--navigation-reentry-only") >= 0) return 0;
+            CheckNavigationPreference(vault, root);
+            if (Array.IndexOf(arguments, "--navigation-preference-only") >= 0) return 0;
+            if (Array.IndexOf(arguments, "--tabs-first-open-only") >= 0) { CheckTabAttachment(vault, root); Console.WriteLine("First-open rail tests passed: " + assertions); return 0; }
             if (Array.IndexOf(arguments, "--screen-only") >= 0) { CheckScreenChrome(vault, root); Console.WriteLine("Screen tests passed: " + assertions); return 0; }
             if (Array.IndexOf(arguments, "--hover-only") >= 0) { CheckHoverStabilityAndScroll(vault, root); Console.WriteLine("Hover tests passed: " + assertions); return 0; }
             if (Array.IndexOf(arguments, "--motion-only") >= 0) { CheckPointerMotion(vault, root); Console.WriteLine("Motion tests passed: " + assertions); return 0; }
@@ -1134,6 +1359,8 @@ internal static class TestQuickNoteEditor {
             if (Array.IndexOf(arguments, "--refine-audit-only") >= 0) { CheckRefinementAudit(vault, root); return 0; }
             if (Array.IndexOf(arguments, "--refine-only") >= 0) { CheckRefinements(vault, root); return 0; }
             if (Array.IndexOf(arguments, "--navigation-only") >= 0) { CheckNavigation(vault, root); return 0; }
+            CheckEmptyNoteReopen(vault, root);
+            if (Array.IndexOf(arguments, "--empty-reopen-only") >= 0) { Console.WriteLine("Empty reopen tests passed: " + assertions); return 0; }
             CheckFormatting(vault, root);
             if (Array.IndexOf(arguments, "--format-only") >= 0) { Console.WriteLine("Formatting tests passed: " + assertions + " assertions; clipboard_access=0; global_input=0"); return 0; }
             CheckNavigation(vault, root);
@@ -1141,14 +1368,15 @@ internal static class TestQuickNoteEditor {
             CheckRefinementAudit(vault, root);
             CheckInteractionUpgrade(vault, root);
             CheckTabDeletion(vault, root);
-            var store = new QuickNoteStore(vault, "速记", recovery);
             CheckMenuClose(vault, root);
             CheckShortcutRouting();
             CheckDeferredImageComposition(vault, root);
             CheckFailedImportRecovery(vault, root);
             CheckSyntheticNewlines(vault, root);
             CheckWindowGeometry(store, root);
-            CheckScreenChrome(vault, root); CheckPointerMotion(vault, root); CheckHoverStabilityAndScroll(vault, root);
+            CheckTabAttachment(vault, root); CheckScreenChrome(vault, root); CheckPointerMotion(vault, root); CheckHoverStabilityAndScroll(vault, root);
+            if (Array.IndexOf(arguments, "--core-only") >= 0) { Console.WriteLine("Core editor tests passed: " + assertions); return 0; }
+            }
             float[] imageDpis = new float[] { 96, 144, 192 };
             var originals = new byte[imageDpis.Length][];
             var encodedImages = new byte[imageDpis.Length][];
@@ -1196,6 +1424,13 @@ internal static class TestQuickNoteEditor {
                 var imagePaste = new DataObject();
                 var pasteBitmap = new Bitmap(8, 4);
                 using (var graphics = Graphics.FromImage(pasteBitmap)) graphics.Clear(Color.RoyalBlue);
+                // PNG DPI metadata changes with the monitor context. Compare
+                // the reference for this bitmap, not one created before a DPI
+                // transition earlier in the fixture.
+                using (var pasteFixture = new MemoryStream()) {
+                    pasteBitmap.Save(pasteFixture, ImageFormat.Png);
+                    imagePath = store.StoreImage(pasteFixture.ToArray());
+                }
                 imagePaste.SetData(DataFormats.Bitmap, pasteBitmap);
                 window.PasteData(imagePaste);
                 Settled(window);

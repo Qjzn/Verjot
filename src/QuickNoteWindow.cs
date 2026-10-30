@@ -45,7 +45,9 @@ internal sealed class QuickNoteInputBox : NativeNoteInputBox {
     }
     protected override void WndProc(ref Message message) {
         int code = message.Msg;
-        if (code == 0x200 && PointerMoved != null) PointerMoved();
+        // The first client cursor hit can precede MouseMove/MouseEnter after
+        // a menu and region change. Reveal on that hit, not a second visit.
+        if ((code == 0x200 || code == 0x20 && (message.LParam.ToInt64() & 0xffff) == 1) && PointerMoved != null) PointerMoved();
         if ((code == 0x100 || code == 0x102 || code == 0x10d || code == 0x300 || code == 0x301 || code == 0x302) && BeforeInput != null) BeforeInput();
         if ((code == 0x201 || code == 0x200 || code == 0x202 || code == 0x203 || code == 0x204 || code == 0x215 || code == 0x100 && message.WParam.ToInt32() == 27) && ImagePointer != null) {
             long packed = message.LParam.ToInt64();
@@ -219,11 +221,15 @@ internal sealed class QuickNoteTabs : Form {
     protected override CreateParams CreateParams { get { var p = base.CreateParams; p.ExStyle |= 0x08000080; return p; } }
     int Row { get { return Math.Max(30, 36 * DeviceDpi / 96); } }
     internal void SetFiles(string[] names, string selected) {
+        // A newly shown owned window may have just acquired its monitor DPI,
+        // even when the file list itself has not changed.
+        int height = (names.Length + 1) * Row;
+        if (Height != height) Height = height;
         bool changed = current != selected || files.Length != names.Length;
         for (int i = 0; !changed && i < names.Length; i++) changed = files[i] != names[i];
         if (!changed) return;
         files = names; current = selected; hovered = -1; emphasis = new float[files.Length + 1]; tip.Hide(this);
-        Height = (files.Length + 1) * Row; Invalidate();
+        Invalidate();
     }
     void Animate() { lastTick = Environment.TickCount; if (!animation.Enabled) animation.Start(); }
     internal void Reveal() { if (targetReveal == 1) return; targetReveal = 1; Animate(); }
@@ -383,6 +389,7 @@ internal sealed class QuickNoteRecentScrollBar : Control {
 internal sealed class QuickNoteRecentPicker : UserControl {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, string text);
     internal readonly TextBox Search = new TextBox { BorderStyle = BorderStyle.None, AccessibleName = "查找便签文件名" };
+    internal readonly QuickNoteHeaderButton ClearSearch = new QuickNoteHeaderButton { ActionIcon = "close", AccessibleName = "清空搜索", Visible = false };
     internal readonly QuickNoteRecentList Results = new QuickNoteRecentList { BorderStyle = BorderStyle.None, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, AccessibleName = "最近便签，方向键选择，回车打开" };
     internal readonly QuickNoteRecentScrollBar ListScroll = new QuickNoteRecentScrollBar();
     readonly QuickNoteChromePanel searchFrame = new QuickNoteChromePanel();
@@ -412,8 +419,11 @@ internal sealed class QuickNoteRecentPicker : UserControl {
         heading.SetBounds(pad, pad, Math.Max(1, Width - pad * 2 - 44 * unit / 96), header);
         count.SetBounds(heading.Right, pad, 44 * unit / 96, header);
         searchFrame.SetBounds(pad, heading.Bottom + gap, Math.Max(1, Width - pad * 2), searchHeight);
-        Search.SetBounds(pad, (searchHeight - Search.PreferredHeight) / 2, Math.Max(1, searchFrame.Width - pad * 2), Search.PreferredHeight);
-        searchFrame.BackColor = BackColor; searchFrame.Controls.Add(Search);
+        int clearSize = 24 * unit / 96;
+        ClearSearch.SetBounds(searchFrame.Width - clearSize - 3 * unit / 96, (searchHeight - clearSize) / 2, clearSize, clearSize);
+        Search.SetBounds(pad, (searchHeight - Search.PreferredHeight) / 2, Math.Max(1, ClearSearch.Left - pad - 4 * unit / 96), Search.PreferredHeight);
+        searchFrame.BackColor = BackColor; searchFrame.Controls.Add(Search); searchFrame.Controls.Add(ClearSearch);
+        ClearSearch.Click += delegate { Search.Clear(); Search.Focus(); };
         searchFrame.Paint += delegate(object sender, PaintEventArgs e) {
             Rectangle r = new Rectangle(0, 0, searchFrame.Width - 1, searchFrame.Height - 1); int radius = 6 * unit / 96;
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -465,7 +475,10 @@ internal sealed class QuickNoteRecentPicker : UserControl {
         foreach (string file in files) if (file.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) Results.Items.Add(file);
         int selected = Results.Items.IndexOf(current); Results.SelectedIndex = Results.Items.Count == 0 ? -1 : Math.Max(0, selected);
         Results.EndUpdate(); empty.Visible = Results.Items.Count == 0; Results.Visible = !empty.Visible;
-        count.Text = Results.Items.Count.ToString(CultureInfo.InvariantCulture); ListScroll.Invalidate();
+        ClearSearch.Visible = Search.Text.Length != 0;
+        empty.Text = files.Length == 0 ? "还没有便签" : "没有匹配的便签";
+        count.Text = Results.Items.Count.ToString(CultureInfo.InvariantCulture) + (query.Length == 0 ? "" : "/" + files.Length.ToString(CultureInfo.InvariantCulture));
+        ListScroll.Invalidate();
     }
 }
 
@@ -476,15 +489,36 @@ internal sealed class QuickNoteHoverFeedback : IDisposable {
     internal float Value;
     float target;
     int previous;
-    internal QuickNoteHoverFeedback(Action invalidate) {
+    readonly Button button;
+    bool mousePressed, keyboardPressed;
+    internal bool Pressed { get { return button.Enabled && (mousePressed || keyboardPressed); } }
+    internal QuickNoteHoverFeedback(Button owner) {
+        button = owner;
+        button.MouseEnter += delegate { Set(true); };
+        button.MouseLeave += delegate { mousePressed = false; Set(false); button.Invalidate(); };
+        button.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left && button.Enabled) { mousePressed = true; button.Invalidate(); } };
+        button.MouseMove += delegate(object sender, MouseEventArgs e) {
+            if (!button.Capture || (e.Button & MouseButtons.Left) == 0) return;
+            bool next = button.ClientRectangle.Contains(e.Location);
+            if (mousePressed != next) { mousePressed = next; button.Invalidate(); }
+        };
+        button.MouseUp += delegate { mousePressed = false; button.Invalidate(); };
+        button.MouseCaptureChanged += delegate { if (!button.Capture) { mousePressed = false; button.Invalidate(); } };
+        button.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyData == Keys.Space) { keyboardPressed = true; button.Invalidate(); } };
+        button.KeyUp += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Space) { keyboardPressed = false; button.Invalidate(); } };
+        button.LostFocus += delegate { keyboardPressed = false; button.Invalidate(); };
+        button.EnabledChanged += delegate { Reset(); };
+        button.VisibleChanged += delegate { if (!button.Visible) Reset(); };
         timer.Tick += delegate {
             int now = Environment.TickCount;
             Value += (target - Value) * (1 - (float)Math.Exp(-Math.Max(1, unchecked(now - previous)) / 26.0)); previous = now;
             if (Math.Abs(Value - target) < .015f) { Value = target; timer.Stop(); }
-            invalidate();
+            button.Invalidate();
         };
     }
+    void Reset() { mousePressed = keyboardPressed = false; Value = target = 0; timer.Stop(); button.Invalidate(); }
     internal void Set(bool hovered) {
+        if (!button.Enabled) { Reset(); return; }
         float next = hovered ? 1 : 0;
         if (target == next) return;
         target = next; previous = Environment.TickCount; timer.Start();
@@ -498,19 +532,18 @@ internal sealed class QuickNoteHeaderButton : Button {
     public bool Pinned;
     readonly QuickNoteHoverFeedback hover;
     public QuickNoteHeaderButton() {
-        hover = new QuickNoteHoverFeedback(Invalidate);
+        hover = new QuickNoteHoverFeedback(this);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
         BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Accent;
-        TabStop = true; Size = new Size(32, 30);
-        MouseEnter += delegate { hover.Set(true); };
-        MouseLeave += delegate { hover.Set(false); };
+        TabStop = true; Size = new Size(32, 30); Cursor = Cursors.Hand;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
     }
     protected override void OnPaint(PaintEventArgs e) {
-        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, VerbitUi.Hover, hover.Value, DeviceDpi);
+        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, hover.Pressed ? VerbitUi.Pressed : VerbitUi.Hover, Enabled ? (hover.Pressed ? 1 : hover.Value) : 0, DeviceDpi);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, cx = Width / 2f, cy = Height / 2f;
-        using (var pen = new Pen(IsPin && Pinned ? Color.FromArgb(40, 104, 168) : ForeColor, 1.6f * scale)) {
+        Color ink = !Enabled ? SystemColors.GrayText : SystemInformation.HighContrast && (hover.Pressed || hover.Value > .5f) ? SystemColors.HighlightText : IsPin && Pinned ? VerbitUi.Accent : ForeColor;
+        using (var pen = new Pen(ink, 1.6f * scale)) {
             pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
             if (IsPin) {
                 e.Graphics.DrawLine(pen, cx - 4 * scale, cy - 6 * scale, cx + 4 * scale, cy - 6 * scale);
@@ -529,7 +562,7 @@ internal sealed class QuickNoteHeaderButton : Button {
                 if (ActionIcon == "new") e.Graphics.DrawLine(pen, cx, cy - 5 * scale, cx, cy + 5 * scale);
             }
         }
-        if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4));
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4));
     }
     protected override void Dispose(bool disposing) { if (disposing) hover.Dispose(); base.Dispose(disposing); }
 }
@@ -550,18 +583,18 @@ internal sealed class QuickNoteFormatButton : Button {
     string glyphFormat;
     readonly QuickNoteHoverFeedback hover;
     internal QuickNoteFormatButton() {
-        hover = new QuickNoteHoverFeedback(Invalidate);
+        hover = new QuickNoteHoverFeedback(this);
         FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TabStop = true;
         Size = new Size(34, 30); Margin = new Padding(0, 0, 2, 0);
-        BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Ink;
+        BackColor = VerbitUi.Surface; ForeColor = VerbitUi.Ink; Cursor = Cursors.Hand;
         SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-        MouseEnter += delegate { hover.Set(true); }; MouseLeave += delegate { hover.Set(false); };
     }
     protected override void OnPaint(PaintEventArgs e) {
-        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, VerbitUi.Hover, Active ? 1 : hover.Value, DeviceDpi);
+        VerbitUi.ToolBackground(e.Graphics, ClientRectangle, BackColor, hover.Pressed ? VerbitUi.Pressed : VerbitUi.Hover, Enabled ? (hover.Pressed || Active ? 1 : hover.Value) : 0, DeviceDpi);
         e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float scale = DeviceDpi / 96f, x = Width / 2f, y = Height / 2f;
-        using (var pen = new Pen(Enabled ? ForeColor : SystemColors.GrayText, 1.4f * scale)) {
+        Color ink = !Enabled ? SystemColors.GrayText : SystemInformation.HighContrast && (hover.Pressed || Active || hover.Value > .5f) ? SystemColors.HighlightText : ForeColor;
+        using (var pen = new Pen(ink, 1.4f * scale)) {
             if (Format == "bullet") {
                 for (int row = -1; row <= 1; row++) {
                     float yy = y + row * 5 * scale;
@@ -584,10 +617,10 @@ internal sealed class QuickNoteFormatButton : Button {
                     if (glyphFont != null) glyphFont.Dispose();
                     glyphFont = new Font("Segoe UI", 14f * DeviceDpi / 96f, style, GraphicsUnit.Pixel); glyphDpi = DeviceDpi; glyphFormat = Format;
                 }
-                TextRenderer.DrawText(e.Graphics, label, glyphFont, ClientRectangle, Enabled ? ForeColor : SystemColors.GrayText, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(e.Graphics, label, glyphFont, ClientRectangle, ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
-        if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
     }
     protected override void Dispose(bool disposing) { if (disposing) { hover.Dispose(); if (glyphFont != null) { glyphFont.Dispose(); glyphFont = null; } } base.Dispose(disposing); }
 }
@@ -620,7 +653,7 @@ internal sealed class QuickNoteWindow : Form {
     string deleteRequested;
     bool createRequested, restoreLast, navigationRestored, previewBusy, previewVisible, previewOnHover = true;
     int previewEpoch;
-    bool chromeVisible = true, statusShown, statusError;
+    bool chromeVisible = true, autoHideNavigation = true, statusShown, statusError;
     bool tabsHaveSpace = true;
     bool movingWindow;
     Rectangle imageDragStart, imageDragOutline;
@@ -629,7 +662,7 @@ internal sealed class QuickNoteWindow : Form {
     internal Action<string> OpenImageFile = delegate(string path) { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); };
     internal Func<string, bool> ConfirmDelete = null;
     sealed class NoteView { public int Start, Length, X, Y; }
-    sealed class NavigationState { public string Last; public bool Preview = true; public Dictionary<string, NoteView> Views; }
+    sealed class NavigationState { public string Last; public bool Preview = true, AutoHideNavigation = true; public Dictionary<string, NoteView> Views; }
     readonly LinkLabel status;
     readonly QuickNoteHeaderButton pin;
     readonly Panel formatBar;
@@ -954,7 +987,12 @@ internal sealed class QuickNoteWindow : Form {
                 else {
                     if (reload) archive = store.ArchiveRecovery(document, text);
                     result = reload ? store.LoadFile(Path.GetFileName(document.Path)) : create ? store.NewNote() : file == null ? store.Load(date) : store.LoadFile(file);
-                    if (!reload && !create && file != null && result.Revision == "missing" && !result.HasRecovery) {
+                    // Empty notes deliberately have no file. Reopening that
+                    // same virtual note is valid; a saved note deleted outside
+                    // verbit must still take the protected failure path.
+                    bool currentEmpty = document != null && document.Revision == "missing" &&
+                        String.Equals(document.Path, result.Path, StringComparison.OrdinalIgnoreCase);
+                    if (!reload && !create && file != null && result.Revision == "missing" && !result.HasRecovery && !currentEmpty) {
                         if (fallback) result = store.Load(date);
                         else throw new FileNotFoundException("此便签已被移动或删除，当前内容保持不变。", file);
                     }
@@ -1043,6 +1081,9 @@ internal sealed class QuickNoteWindow : Form {
     }
     void ShowSaveMenu() {
         var menu = CreateTransientMenu();
+        var navigationOption = new ToolStripMenuItem("鼠标移出自动收起导航栏") { Checked = autoHideNavigation, CheckOnClick = true };
+        navigationOption.Click += delegate { autoHideNavigation = navigationOption.Checked; UpdateChromeForPointer(Cursor.Position); SaveWindowState(); };
+        menu.Items.Add(navigationOption);
         var hoverOption = new ToolStripMenuItem("悬停标签预览内容") { Checked = previewOnHover, CheckOnClick = true };
         hoverOption.Click += delegate { previewOnHover = hoverOption.Checked; if (!previewOnHover) CancelPreview(); SaveWindowState(); };
         menu.Items.Add(hoverOption);
@@ -1365,7 +1406,7 @@ internal sealed class QuickNoteWindow : Form {
             Directory.CreateDirectory(stateRoot);
             string value = Bounds.X + "," + Bounds.Y + "," + Bounds.Width + "," + Bounds.Height + "," + (TopMost ? "1" : "0");
             if (Visible && WindowState == FormWindowState.Normal) File.WriteAllText(Path.Combine(stateRoot, "quick-note-window.txt"), value, new UTF8Encoding(false));
-            var state = new NavigationState { Last = lastSavedFile, Preview = previewOnHover, Views = views };
+            var state = new NavigationState { Last = lastSavedFile, Preview = previewOnHover, AutoHideNavigation = autoHideNavigation, Views = views };
             string target = NavigationPath, temporary = target + ".tmp";
             File.WriteAllText(temporary, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(state), new UTF8Encoding(false));
             if (File.Exists(target)) File.Replace(temporary, target, null); else File.Move(temporary, target);
@@ -1426,7 +1467,7 @@ internal sealed class QuickNoteWindow : Form {
                 if (new FileInfo(path).Length <= 65536) {
                     var state = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<NavigationState>(File.ReadAllText(path));
                     if (state != null) {
-                        previewOnHover = state.Preview; last = state.Last; lastSavedFile = last;
+                        previewOnHover = state.Preview; autoHideNavigation = state.AutoHideNavigation; last = state.Last; lastSavedFile = last;
                         if (state.Views != null) foreach (var entry in state.Views) {
                             if (views.Count == 50) break;
                             if (entry.Value != null && entry.Key == Path.GetFileName(entry.Key)) views[entry.Key] = entry.Value;
@@ -1507,7 +1548,7 @@ internal sealed class QuickNoteWindow : Form {
         UpdateChromeClip();
     }
     void UpdateChromeForPointer(Point screen) {
-        bool held = statusError || imageDragCp >= 0 || editor.Capture;
+        bool held = !autoHideNavigation || statusError || imageDragCp >= 0 || editor.Capture;
         foreach (System.ComponentModel.Component component in transientMenus.Components) {
             var menu = component as ContextMenuStrip; if (menu != null && menu.Visible) held = true;
         }
@@ -1621,8 +1662,11 @@ internal sealed class QuickNoteWindow : Form {
     }
     void RevealForPointer() {
         if (!Visible || movingWindow || WindowState != FormWindowState.Normal) return;
-        leaveTimer.Stop(); SetChromeVisible(true);
+        leaveTimer.Stop();
         if (tabs == null || tabsHaveSpace && (!tabs.Visible || !tabs.IsRevealed)) ShowTabs();
+        // First rail positioning/DPI changes may synchronously deactivate
+        // the owner. Commit this pointer entry after that nested transition.
+        SetChromeVisible(true);
     }
     void ShowTabs() {
         leaveTimer.Stop();
@@ -1634,7 +1678,13 @@ internal sealed class QuickNoteWindow : Form {
             tabs.FileMenu = ShowTabMenu;
             tabs.More = ShowRecentMenu; tabs.LeaveRail = ScheduleLeave;
         }
-        UpdateTabs(); if (!PositionTabs()) return; if (!tabs.Visible) tabs.Show(this);
+        UpdateTabs(); if (!PositionTabs()) return;
+        if (!tabs.Visible) {
+            tabs.Show(this);
+            // Show creates the native handle and finishes its first DPI
+            // scaling. Reapply physical metrics before revealing any tabs.
+            UpdateTabs(); if (!PositionTabs()) return;
+        }
         tabs.Reveal();
     }
     void ObserveHover(Control control) {
@@ -1645,6 +1695,12 @@ internal sealed class QuickNoteWindow : Form {
                 if (control == editor || control == viewport || control == body || control == scroll || tabs != null && tabs.Visible) ShowTabs();
             };
             control.MouseLeave += delegate { ScheduleLeave(); };
+            if (control == body || control == viewport || control == scroll) {
+                // Region/menu changes can leave WinForms' MouseEnter tracking
+                // armed. Recover on the first move over padding or the scroll
+                // area as well as RichEdit, without polling or relayout.
+                control.MouseMove += delegate { if (!chromeVisible) RevealForPointer(); };
+            }
             if (control is Button) control.Enter += delegate { SetChromeVisible(true); };
         }
         foreach (Control child in control.Controls) ObserveHover(child);

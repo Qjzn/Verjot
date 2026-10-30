@@ -74,6 +74,45 @@ internal static class TestVerbitMenus {
             }
         }
     }
+    static void Event(Control control, string name, EventArgs args) {
+        typeof(Control).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(control, new object[] { args });
+    }
+    static void CheckButtonStates(Form owner, string folder) {
+        using (var header = new QuickNoteHeaderButton { ActionIcon = "new", Location = new Point(20, 350) })
+        using (var format = new QuickNoteFormatButton { Format = "bold", Location = new Point(60, 350) }) {
+            owner.Controls.Add(header); owner.Controls.Add(format); Pump();
+            foreach (Button button in new Button[] { header, format }) {
+                var feedback = (QuickNoteHoverFeedback)button.GetType().GetField("hover", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(button);
+                var timer = (System.Windows.Forms.Timer)typeof(QuickNoteHoverFeedback).GetField("timer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(feedback);
+                Size size = button.Size; Point location = button.Location;
+                Event(button, "OnMouseEnter", EventArgs.Empty);
+                for (int i = 0; i < 10; i++) Pump();
+                Check(feedback.Value == 1 && !timer.Enabled, "Hover settles and stops its timer");
+                Event(button, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, 10, 10, 0));
+                Check(feedback.Pressed, "Mouse down has immediate pressed feedback");
+                using (var bitmap = new Bitmap(button.Width, button.Height)) {
+                    button.DrawToBitmap(bitmap, button.ClientRectangle);
+                    Check(bitmap.GetPixel(button.Width / 2, 5) == VerbitUi.Pressed, "Pressed uses the shared color without moving the icon");
+                    bitmap.Save(Path.Combine(folder, button.GetType().Name + "-pressed.png"));
+                }
+                Event(button, "OnMouseLeave", EventArgs.Empty);
+                Check(!feedback.Pressed, "Dragging outside clears pressed feedback");
+                Event(button, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, -1, -1, 0));
+                Event(button, "OnKeyDown", new KeyEventArgs(Keys.Space)); Check(feedback.Pressed, "Space gives keyboard press feedback");
+                Event(button, "OnKeyUp", new KeyEventArgs(Keys.Space)); Check(!feedback.Pressed, "Space release restores the state");
+                Event(button, "OnKeyDown", new KeyEventArgs(Keys.Space)); Event(button, "OnLostFocus", EventArgs.Empty);
+                Check(!feedback.Pressed, "Losing focus cannot leave a stuck pressed state");
+                Event(button, "OnMouseEnter", EventArgs.Empty); button.Enabled = false;
+                Check(!feedback.Pressed && feedback.Value == 0 && !timer.Enabled, "Disabling cancels the transition and pressed state");
+                int clicks = 0; button.Click += delegate { clicks++; }; button.PerformClick();
+                Check(clicks == 0, "Disabled icons do not invoke actions");
+                button.Enabled = true; Event(button, "OnMouseEnter", EventArgs.Empty); button.Hide();
+                Check(feedback.Value == 0 && !timer.Enabled, "Hiding chrome stops its button animation immediately");
+                button.Show(); Check(button.Size == size && button.Location == location, "Feedback never changes button geometry");
+                Event(button, "OnMouseLeave", EventArgs.Empty);
+            }
+        }
+    }
     [STAThread] static int Main(string[] args) {
         try {
             Application.EnableVisualStyles();
@@ -81,6 +120,7 @@ internal static class TestVerbitMenus {
             CheckPartialPainting();
             using (var owner = new Form { Text = "verbit synthetic menu fixture", Size = new Size(800, 600) }) {
                 owner.Show(); Pump();
+                CheckButtonStates(owner, folder);
                 foreach (int dpi in new[] { 96, 120, 144, 192, 240, 288 }) using (var menu = new VerbitMenu()) {
                     menu.Items.Add(new ToolStripMenuItem("verbit已就绪") { Enabled = false });
                     var note = new ToolStripMenuItem("速记便签 · Ctrl+Alt+J"); menu.Items.Add(note);
@@ -180,11 +220,15 @@ internal static class TestVerbitMenus {
                     CheckPresentedRows(picker, Path.Combine(folder, "presented-thumb-" + owner.DeviceDpi + ".png"));
                     CaptureHosted(hosted, Path.Combine(folder, "recent-picker-overflow-" + owner.DeviceDpi + ".png"));
                     picker.Search.Text = "演示"; Pump();
+                    Check(picker.ClearSearch.Visible && picker.Search.Right < picker.ClearSearch.Left, "Search clear action never overlaps native text");
+                    Check(picker.ClearSearch.AccessibleName == "清空搜索", "Icon-only search action has a keyboard-readable name");
+                    CaptureHosted(hosted, Path.Combine(folder, "recent-search-clear-" + owner.DeviceDpi + ".png"));
                     Check(picker.Results.Items.Count == 1 && picker.Results.TopIndex == 0 && picker.ListScroll.ThumbBounds.IsEmpty, "Filtering clears stale scroll range and hides an unnecessary thumb");
                     CheckPresentedRows(picker, Path.Combine(folder, "presented-filter-" + owner.DeviceDpi + ".png"));
                     picker.Search.Text = "没有此名称"; Pump();
                     Check(picker.Results.Items.Count == 0 && picker.ListScroll.ThumbBounds.IsEmpty, "Empty search results never retain an old scrollbar");
-                    picker.Search.Text = ""; Pump();
+                    picker.ClearSearch.PerformClick(); Pump();
+                    Check(picker.Search.Text == "" && !picker.ClearSearch.Visible && picker.Search.Focused, "Clear restores all files and returns focus for typing");
                     Check(picker.Results.Items.Count == noteNames.Length, "Clearing search restores all filenames");
                     CheckPresentedRows(picker, Path.Combine(folder, "presented-filter-clear-" + owner.DeviceDpi + ".png"));
                     hosted.Close(); hosted.Show(owner, new Point(8, 8)); Pump();

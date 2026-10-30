@@ -1,6 +1,6 @@
 # verbit 第一版范围
 
-> beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
+> 当前 beta.38：新用户默认仅录音，无推荐模型下载；速记、原生 MP3 导出与可选 API 均无需 Python 或模型。API 提交完整 MP3，身份信息仅来自服务返回；旧模型与配置文件保留，但桌面端不探测或自动连接，历史 Python 流程仅供研究。会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 
 
 verbit 面向需要保存中文会议录音与转录的 Windows 用户。新人由 AI 完成安装和配置，日常通过快捷键、浮窗与托盘完成记录；成品可以保存到普通文件夹，也可以进入 Obsidian 笔记库。

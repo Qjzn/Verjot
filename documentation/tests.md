@@ -1,4 +1,8 @@
-﻿# 验证映射
+# 验证映射
+
+beta.38 发布回归将编辑器拆成 `--core-only` 与 `--attachments-only`，浮窗形变拆成锚点、原生截图、交互复核和体验四组，由 `src/Test.ps1 -NativeOnly` 逐进程执行。所有原检查保留，默认直接运行测试 EXE 仍执行整组；不增加 180 秒单进程时限，也不降低画面、输入或图片校验条件。
+
+当前候选补充：TestQuickNoteEditor.CheckEmptyNoteReopen 先复现再验证未落盘便签重开与真实外部删除保护，已纳入默认编辑回归。最终检查的失败、通过和跳过分别记录在[开源检查](open-source-readiness.md#beta36-最终检查候选)；首次输入性能超标不因定向复验通过而抹去。干净 Windows 按维护者要求跳过，旧表中的已准备入口不代表本轮实测。
 
 > beta.11 首期调整：新用户默认仅录音，无推荐本地模型下载；速记、原生 MP3 导出与可选第三方 API 均无需 Python 或模型。新 API 提交完整 MP3，身份信息仅来自供应方；已有 local 模式及下文历史 Python 流程保留兼容，不属于新用户推荐路径。新会议按 `verbit年月日时分/同名.mp3` 保存，API 成功后生成同名 Markdown。实际配置见[安装说明](install-windows.md)。
 

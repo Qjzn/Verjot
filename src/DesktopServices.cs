@@ -19,6 +19,7 @@ internal static class VerbitUi {
     internal static Color Muted { get { return SystemInformation.HighContrast ? SystemColors.GrayText : Color.FromArgb(85, 101, 123); } }
     internal static Color Accent { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(40, 104, 168); } }
     internal static Color Hover { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(238, 245, 253); } }
+    internal static Color Pressed { get { return SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(221, 234, 249); } }
     internal static Color Border { get { return SystemInformation.HighContrast ? SystemColors.WindowFrame : Color.FromArgb(218, 226, 235); } }
     internal static void StyleButton(Button button, bool primary) {
         button.FlatStyle = FlatStyle.Flat; button.FlatAppearance.BorderSize = 1;

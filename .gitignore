@@ -74,6 +74,7 @@
 !/assets/screenshots/recording.png
 !/assets/screenshots/quick-note.png
 !/assets/screenshots/settings.png
+!/assets/screenshots/settings-api.png
 
 # Personal configuration, captured audio, models, caches, logs, validation
 # screenshots and build products remain local even when placed in subfolders.
